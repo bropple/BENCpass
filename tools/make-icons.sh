@@ -32,3 +32,11 @@ echo "bencpass.ico"
 # free to drift.
 cp "$src" "$root/server/static/bencpass.svg"
 echo "server/static/bencpass.svg"
+
+# The extension needs the PNGs inside its own root, since a manifest cannot
+# reference a path outside it.
+mkdir -p "$root/src/ext/icons"
+for size in 16 32 48 64 128; do
+  cp "$out/bencpass-$size.png" "$root/src/ext/icons/$size.png"
+done
+echo "src/ext/icons/{16,32,48,64,128}.png"

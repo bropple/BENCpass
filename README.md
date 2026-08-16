@@ -11,10 +11,11 @@ The server stores ciphertext and holds no key. It cannot read a record, and
 because it cannot read one, it cannot merge either — all merging happens on the
 clients.
 
-> **Not finished.** The crypto core, the vault, the manager UI and the sync
-> server work and are tested. **The browser extension itself does not exist
-> yet** — there is no `manifest.json`, no autofill, no toolbar popup. This is
-> not yet something to keep your passwords in.
+> **Not finished.** Everything below the line works and is tested, and the
+> extension now loads and fills. Still missing: the native biometric host,
+> import from Firefox, and the recovery kit. Until a recovery kit exists,
+> forgetting the master password loses the vault with no way back — so keep
+> Firefox's own password manager populated in parallel for now.
 
 | | |
 |---|---|
@@ -23,7 +24,9 @@ clients.
 | ✅ Causal merge with conflict preservation | `src/core/merge.js` |
 | ✅ Manager UI | `src/ui/` |
 | ✅ Sync server + client | `server/`, `src/core/sync.js` |
-| ⬜ Extension: manifest, background, popup, autofill | — |
+| ✅ Extension: manifest, background, content script, popup, overlay | `src/ext/` |
+| ✅ Origin matching against the Public Suffix List | `src/core/match.js` |
+| ✅ Form-field classification, logins and addresses | `src/core/fields.js` |
 | ⬜ Native host: Touch ID / Windows Hello | — |
 | ⬜ Import from Firefox, recovery kit | — |
 
@@ -41,8 +44,12 @@ test/         Node tests, including integration tests against the real server
 ## Running things
 
 ```sh
-npm install && npm test     # 75 tests; the sync ones build and run the Go server
+npm install && npm test     # 118 tests; the sync ones build and run the Go server
 cd server && go test ./...  # 15 tests
+
+tools/run-extension.sh      # load into a scratch Zen profile, open the test page
+npx web-ext lint --source-dir=src --self-hosted
+npx web-ext build --source-dir=src --artifacts-dir=dist/ext
 
 tools/preview.sh            # the manager UI, with a throwaway seeded vault
 tools/preview.sh shot       # screenshots of every state, into screenshots/

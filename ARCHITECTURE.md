@@ -353,6 +353,49 @@ isn't a surprise later.
 `content_security_policy`. Fonts must be bundled as local woff2 — extension CSP
 forbids a CDN, so VT323 and Share Tech Mono ship inside the `.xpi`.
 
+### The trust boundary, and what a review found in it
+
+The content script shares a process and a DOM with whatever the page is. It is
+the least trusted component, and the invariant is:
+
+> **The content script never receives a password it did not already have.**
+
+It is told what entries *exist* for its frame — titles and usernames, enough to
+draw a menu. A secret crosses to it as the single value being filled, after the
+user has picked an entry, and after the background has re-derived the frame's
+origin from `sender` rather than believing the frame's account of itself.
+
+A security review of the first cut found five gaps worth recording, because
+four of them were the same mistake:
+
+| | |
+|---|---|
+| `SEARCH` had no caller check | an empty query returns the whole vault index |
+| `STATE` had no caller check | leaks the active tab's host — a live browsing feed |
+| `UNLOCK` had no caller check | a master-password verification oracle |
+| addresses skipped every check | a home address to any third-party frame |
+| the session id sat in the iframe `src` | page-readable; see below |
+
+The first four were per-handler guards that were simply forgotten on six of
+eleven handlers. The fix is **one allow-list at the single message entry point**
+naming the three types a content script may send, rather than a check inside
+each handler that the next handler can omit.
+
+Worth stating precisely: in Firefox MV2 a page cannot call
+`browser.runtime.sendMessage` at all — content scripts run in an isolated world
+— so those four need a compromised content script rather than merely a hostile
+page. They are still fixed, because the guards were plainly intended and this is
+a password manager.
+
+The fifth was reachable from ordinary page script. The session id was in the
+iframe's `src`, and that element lives in the page's own DOM, so the page could
+read both it and the extension's UUID. `overlay.html` is web-accessible, so the
+page could then open **its own privileged copy** against that session — which
+satisfies every "is this an extension page" check — and clickjack a fill out of
+it. The id is now handed over by `postMessage` to the frame's cross-origin
+`contentWindow`, which the page cannot listen to, and `web_accessible_resources`
+is narrowed to `overlay.html` alone.
+
 ### Autofill — the largest and least glamorous part
 
 Two rules that are not negotiable:

@@ -1,0 +1,19 @@
+/* The menu that appears against a field. Its own document, so page CSS cannot
+   reach it — which is the reason it is an iframe at all. */
+:root {
+  --accent: #3d7dbf; --bg: #0c1420; --panel: #141d2a;
+  --border: #1e2c3d; --text: #c3d9ee; --dim: #7d93a8;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+             font: 13px/1.4 ui-monospace, Consolas, monospace; overflow-y: auto; }
+.head { padding: 6px 10px; color: var(--dim); letter-spacing: 1px;
+        border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+button.row { display: block; width: 100%; text-align: left; background: none;
+             border: 0; border-bottom: 1px solid var(--border); padding: 7px 10px;
+             color: inherit; font: inherit; cursor: pointer; }
+button.row:hover, button.row:focus { background: var(--panel); outline: none; }
+.title { display: block; }
+.sub { display: block; color: var(--dim); font-size: 12px; }
+.gen { color: var(--accent); }
+.empty { padding: 12px 10px; color: var(--dim); }

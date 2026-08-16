@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BENCpass form shapes</title>
+<style>
+  body { background:#0c1420; color:#c3d9ee; font:14px/1.6 ui-monospace,Consolas,monospace;
+         max-width:52rem; margin:2rem auto; padding:0 1.5rem; }
+  h1 { font-size:1.4rem; letter-spacing:2px; font-weight:normal; }
+  section { border:1px solid #1e2c3d; border-radius:3px; padding:14px 16px; margin:18px 0;
+            background:#141d2a; }
+  h2 { font-size:1rem; margin:0 0 4px; letter-spacing:1px; }
+  p.why { color:#7d93a8; margin:0 0 12px; font-size:13px; }
+  label { display:block; margin:8px 0 2px; color:#7d93a8; font-size:12px; letter-spacing:1px; }
+  input { width:100%; padding:6px 8px; background:#0c1420; color:inherit;
+          border:1px solid #1e2c3d; border-radius:2px; }
+  button { margin-top:10px; padding:5px 12px; background:#3d7dbf; color:#05101c;
+           border:1px solid #254d75; border-radius:3px; cursor:pointer; font:inherit; }
+  .expect { color:#78b946; font-size:13px; margin-top:10px; }
+  code { color:#e8b23d; }
+</style>
+</head>
+<body>
+
+<h1>BENCPASS &mdash; form shapes</h1>
+<p class="why">
+  Each of these is a shape that has broken a password manager somewhere. Serve
+  with <code>tools/preview.sh</code> and open over http://127.0.0.1, which counts
+  as a private host so filling is allowed without a certificate.
+</p>
+
+<section>
+  <h2>1. Well-behaved</h2>
+  <p class="why">Sets autocomplete correctly. The easy case.</p>
+  <form>
+    <label for="a1">Username</label>
+    <input id="a1" name="username" autocomplete="username">
+    <label for="a2">Password</label>
+    <input id="a2" name="password" type="password" autocomplete="current-password">
+    <button>Sign in</button>
+  </form>
+  <p class="expect">Expect: anchor on both fields; menu offers matching entries.</p>
+</section>
+
+<section>
+  <h2>2. No autocomplete, meaningless names</h2>
+  <p class="why">ASP.NET-style ids. Only position and the labels give it away.</p>
+  <form>
+    <label for="b1">Email address</label>
+    <input id="b1" name="ctl00$ContentPlaceHolder$tb1">
+    <label for="b2">Password</label>
+    <input id="b2" name="ctl00$ContentPlaceHolder$tb2" type="password">
+    <button>Log in</button>
+  </form>
+  <p class="expect">Expect: username resolves to the field before the password.</p>
+</section>
+
+<section>
+  <h2>3. Search box above the login</h2>
+  <p class="why">The classic misfire &mdash; a manager fills the search box.</p>
+  <form>
+    <label for="c0">Search</label>
+    <input id="c0" name="q" placeholder="Search the site">
+    <label for="c1">User</label>
+    <input id="c1" name="login_email" type="email">
+    <label for="c2">Password</label>
+    <input id="c2" name="pw" type="password">
+    <button>Go</button>
+  </form>
+  <p class="expect">Expect: the search box is never filled and gets no anchor.</p>
+</section>
+
+<section>
+  <h2>4. Sign-up, two password boxes</h2>
+  <p class="why">Nothing marks which is which. Must not receive an existing password.</p>
+  <form>
+    <label for="d1">Email</label>
+    <input id="d1" name="email" type="email">
+    <label for="d2">Choose a password</label>
+    <input id="d2" name="password" type="password">
+    <label for="d3">Confirm</label>
+    <input id="d3" name="password_confirm" type="password">
+    <button>Create account</button>
+  </form>
+  <p class="expect">Expect: read as a sign-up &mdash; the menu offers Generate.</p>
+</section>
+
+<section>
+  <h2>5. Two-step: username now, password next</h2>
+  <p class="why">The Microsoft/Google shape.</p>
+  <form>
+    <label for="e1">Email, phone or Skype</label>
+    <input id="e1" name="loginfmt" type="email">
+    <button>Next</button>
+  </form>
+  <p class="expect">Expect: recognised as a username step; the username fills alone.</p>
+</section>
+
+<section>
+  <h2>6. Framework-controlled input</h2>
+  <p class="why">
+    Refuses a plain <code>el.value =</code> assignment and reverts it, the way a
+    React controlled input does. Only the native setter plus a real input event
+    sticks.
+  </p>
+  <form>
+    <label for="f1">Username</label>
+    <input id="f1" name="username" autocomplete="username">
+    <label for="f2">Password</label>
+    <input id="f2" name="password" type="password" autocomplete="current-password">
+    <button>Sign in</button>
+  </form>
+  <p class="expect">Expect: values survive. If they blank out, the setter path regressed.</p>
+</section>
+
+<section>
+  <h2>7. Form added after load</h2>
+  <p class="why">An SPA rendering its login late. The observer has to notice.</p>
+  <button id="late">Render the login form</button>
+  <div id="late-slot"></div>
+  <p class="expect">Expect: an anchor appears without reloading.</p>
+</section>
+
+<section>
+  <h2>8. Shipping address</h2>
+  <p class="why">Half marked with autocomplete, half not.</p>
+  <form>
+    <label for="g1">Full name</label>
+    <input id="g1" autocomplete="shipping name">
+    <label for="g2">Address</label>
+    <input id="g2" autocomplete="shipping address-line1">
+    <label for="g3">Apt, suite</label>
+    <input id="g3" name="address2">
+    <label for="g4">City</label>
+    <input id="g4" name="city">
+    <label for="g5">Postcode</label>
+    <input id="g5" name="zip">
+    <label for="g6">Discount code</label>
+    <input id="g6" name="promo_code">
+    <button>Continue</button>
+  </form>
+  <p class="expect">Expect: address fields map; the discount box is left alone.</p>
+</section>
+
+<section>
+  <h2>9. Hidden honeypot</h2>
+  <p class="why">
+    An off-screen password field of the kind used to harvest autofill. Nothing
+    should ever be written here, because nothing fills without a click.
+  </p>
+  <form>
+    <input name="user_hp" style="position:absolute;left:-9999px" autocomplete="username">
+    <input name="pass_hp" type="password" style="position:absolute;left:-9999px"
+           autocomplete="current-password">
+    <p>This form has no visible fields.</p>
+  </form>
+  <p class="expect">Expect: no anchor, and the fields stay empty.</p>
+</section>
+
+<script src="testpage.js"></script>
+</body>
+</html>

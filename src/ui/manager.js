@@ -11,7 +11,49 @@ import { generate, entropyBits } from '../core/generate.js';
 
 const $ = (id) => document.getElementById(id);
 
-const store = pickStorage();
+/**
+ * Where the vault lives.
+ *
+ * Inside the extension there must be exactly one — the background page's. A
+ * second instance here would have its own key and its own lock, so unlocking
+ * the manager would leave autofill still locked, and saving in one would not be
+ * visible to the other until a reload. Outside the extension (the preview
+ * harness, a plain file) the page owns a local one.
+ */
+let vaultHost = null;
+
+async function makeVaultHost() {
+  const bg = await globalThis.browser?.runtime?.getBackgroundPage?.().catch(() => null);
+  if (bg?.bencpass) {
+    return {
+      shared: true,
+      get vault() {
+        return bg.bencpass.vault;
+      },
+      setVault: (v) => bg.bencpass.setVault(v),
+      persist: () => bg.bencpass.persistVault(),
+      sync: () => bg.bencpass.sync(),
+      lock: () => bg.bencpass.lock(),
+    };
+  }
+
+  const store = pickStorage();
+  let local = null;
+  const raw = await store.read();
+  if (raw) local = Vault.load(raw);
+  return {
+    shared: false,
+    get vault() {
+      return local;
+    },
+    setVault: (v) => {
+      local = v;
+    },
+    persist: () => store.write(local.toJSON()),
+    sync: async () => ({ ok: false, reason: 'not-configured' }),
+    lock: () => local?.lock(),
+  };
+}
 
 const state = {
   vault: null,
@@ -49,13 +91,20 @@ setInterval(() => {
 // ---- boot ------------------------------------------------------------------
 
 async function boot() {
-  const persisted = await store.read();
-  if (persisted) {
-    state.vault = Vault.load(persisted);
-    setGate('unlock');
-  } else {
+  vaultHost = await makeVaultHost();
+  state.vault = vaultHost.vault;
+
+  if (!state.vault) {
     setGate('setup');
+    return;
   }
+  // The background may already be unlocked from the popup, in which case the
+  // gate would be asking for a password that is not needed.
+  if (!state.vault.locked) {
+    enterApp();
+    return;
+  }
+  setGate('unlock');
 }
 
 function setGate(mode) {
@@ -93,6 +142,7 @@ $('gate-form').addEventListener('submit', async (e) => {
       if (pw !== $('gate-pw2').value) throw new Error('The two entries do not match.');
       if (pw.length < 8) throw new Error('Use at least 8 characters.');
       state.vault = await Vault.create({ password: pw });
+      vaultHost.setVault(state.vault);
       await persist();
     } else {
       await state.vault.unlock(pw);
@@ -125,7 +175,7 @@ function enterApp() {
 }
 
 function lock(why = '') {
-  state.vault?.lock();
+  vaultHost?.lock();
   state.selected = null;
   state.editing = null;
   clearTimeout(revealTimer);
@@ -155,7 +205,7 @@ for (const ev of ['keydown', 'pointerdown']) {
 
 // ---- persistence -----------------------------------------------------------
 
-const persist = () => store.write(state.vault.toJSON());
+const persist = () => vaultHost.persist();
 
 // ---- rendering -------------------------------------------------------------
 

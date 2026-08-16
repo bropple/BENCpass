@@ -8,14 +8,18 @@
  * at 2-4px. Letter-spacing is a heading and label trait only.
  */
 
+/* Inside the extension root, not assets/ — a manifest cannot reference a path
+   outside it, and a font that silently fails to load is invisible until someone
+   notices the headings look wrong. tools/sync-ui-assets.sh keeps the copies in
+   step. */
 @font-face {
   font-family: 'VT323';
-  src: url('../../assets/fonts/vt323.woff2') format('woff2');
+  src: url('fonts/vt323.woff2') format('woff2');
   font-display: block; /* swap would flash the fallback on the wordmark */
 }
 @font-face {
   font-family: 'Share Tech Mono';
-  src: url('../../assets/fonts/share-tech-mono.woff2') format('woff2');
+  src: url('fonts/share-tech-mono.woff2') format('woff2');
   font-display: block;
 }
 

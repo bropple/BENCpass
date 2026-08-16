@@ -12,5 +12,8 @@
   "dependencies": {
     "hash-wasm": "^4.12.0"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "web-ext": "^10.6.0"
+  }
 }

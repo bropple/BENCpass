@@ -1,0 +1,55 @@
+/* Same palette as the manager; system monospace rather than the bundled fonts,
+   because a 320px popup opens and closes constantly and a webfont fetch on each
+   is visible as a flash of the fallback. */
+:root {
+  --accent: #3d7dbf; --accent-edge: #254d75; --bg: #080d14; --bg-2: #0c1420;
+  --panel: #141d2a; --border: #1e2c3d; --text: #c3d9ee; --dim: #7d93a8;
+  --good: #78b946; --warn: #e8b23d; --bad: #d84a3a;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; width: 320px; background: var(--bg); color: var(--text);
+             font: 13px/1.5 ui-monospace, Consolas, monospace; }
+.spacer { flex: 1; }
+.label { display: block; color: var(--dim); letter-spacing: 1px; font-size: 11px;
+         text-transform: uppercase; margin-bottom: 4px; }
+input[type=password], input[type=search] {
+  width: 100%; background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 2px; padding: 6px 8px; color: inherit; font: inherit; }
+input:focus { outline: none; border-color: var(--accent); }
+.btn { background: var(--panel); color: inherit; border: 1px solid var(--border);
+       border-radius: 3px; padding: 5px 10px; font: inherit; cursor: pointer;
+       letter-spacing: 1px; }
+.btn:hover { border-color: var(--accent-edge); }
+.btn-primary { background: var(--accent); border-color: var(--accent-edge); color: #05101c; }
+.btn-sm { padding: 2px 7px; font-size: 12px; }
+
+#locked { padding: 20px 16px; text-align: center; }
+.gon { width: 56px; height: 56px; }
+#locked form { text-align: left; margin-top: 12px; }
+#locked .btn { width: 100%; margin-top: 8px; }
+.error { color: var(--bad); margin: 8px 0 0; }
+.note { color: var(--dim); margin-top: 12px; }
+
+.bar { display: flex; align-items: center; gap: 6px; padding: 7px 10px;
+       background: var(--bg-2); border-bottom: 1px solid var(--border); }
+.host { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.capture { background: var(--panel); border-bottom: 1px solid var(--border); padding: 10px; }
+.capture-text { margin: 0 0 8px; }
+.capture-actions { display: flex; gap: 6px; }
+
+.search { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
+.row { display: block; width: 100%; text-align: left; background: none; border: 0;
+       border-bottom: 1px solid var(--border); padding: 7px 10px; color: inherit;
+       font: inherit; cursor: pointer; }
+.row:hover, .row:focus { background: var(--panel); outline: none; }
+.row .t { display: block; }
+.row .s { display: block; color: var(--dim); font-size: 12px; }
+.empty { color: var(--dim); padding: 14px 10px; margin: 0; }
+
+.foot { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+        background: var(--bg-2); border-top: 1px solid var(--border);
+        color: var(--dim); font-size: 12px; }
+.link { background: none; border: 0; color: var(--accent); font: inherit;
+        cursor: pointer; padding: 0; }

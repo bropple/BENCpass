@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BENCpass</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+<div id="locked" hidden>
+  <svg class="gon" viewBox="0 0 200 200" aria-hidden="true">
+    <path d="M 100,16 L 179.89,74.04 L 149.37,167.96 L 50.63,167.96 L 20.11,74.04 Z"
+          fill="#3d7dbf" stroke="#254d75" stroke-width="3"/>
+    <rect x="53.8" y="95.8" width="92.4" height="28.56" fill="#9a9d94"/>
+    <rect id="visor" x="70.6" y="103.36" width="58.8" height="13.44" fill="#d84a3a"/>
+  </svg>
+  <form id="unlock-form">
+    <label class="label" for="pw">Master password</label>
+    <input type="password" id="pw" autocomplete="current-password" required>
+    <p class="error" id="unlock-error" hidden></p>
+    <button class="btn btn-primary" type="submit" id="unlock-btn">Unlock</button>
+  </form>
+  <p class="note" id="no-vault" hidden>No vault on this machine yet.</p>
+</div>
+
+<div id="unlocked" hidden>
+  <header class="bar">
+    <span class="host" id="host"></span>
+    <span class="spacer"></span>
+    <button class="btn btn-sm" id="sync-btn" title="Sync now">Sync</button>
+    <button class="btn btn-sm" id="lock-btn">Lock</button>
+  </header>
+
+  <section class="capture" id="capture" hidden>
+    <p class="capture-text" id="capture-text"></p>
+    <div class="capture-actions">
+      <button class="btn btn-primary btn-sm" id="save-btn">Save</button>
+      <button class="btn btn-sm" id="discard-btn">Not now</button>
+    </div>
+  </section>
+
+  <input type="search" id="search" class="search" placeholder="Search" autocomplete="off">
+  <div id="list"></div>
+  <p class="empty" id="empty" hidden>Nothing for this site.</p>
+
+  <footer class="foot">
+    <button class="link" id="manage-btn">Open manager</button>
+    <span class="spacer"></span>
+    <span id="status"></span>
+  </footer>
+</div>
+
+<script type="module" src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+{
+  "manifest_version": 2,
+  "name": "BENCpass",
+  "version": "0.1.0",
+  "description": "Self-hosted, end-to-end encrypted password manager.",
+  "author": "BENCO Holdings",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bencpass@ropple.net",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "icons": {
+    "16": "ext/icons/16.png",
+    "32": "ext/icons/32.png",
+    "48": "ext/icons/48.png",
+    "64": "ext/icons/64.png",
+    "128": "ext/icons/128.png"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "nativeMessaging",
+    "<all_urls>"
+  ],
+  "background": {
+    "page": "ext/background.html",
+    "persistent": true
+  },
+  "browser_action": {
+    "default_popup": "ext/popup.html",
+    "default_title": "BENCpass",
+    "default_icon": {
+      "16": "ext/icons/16.png",
+      "32": "ext/icons/32.png"
+    }
+  },
+  "sidebar_action": {
+    "default_panel": "ui/manager.html",
+    "default_title": "BENCpass",
+    "default_icon": {
+      "16": "ext/icons/16.png",
+      "32": "ext/icons/32.png"
+    }
+  },
+  "options_ui": {
+    "page": "ui/manager.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "all_frames": true,
+      "js": [
+        "ext/content.js"
+      ],
+      "run_at": "document_idle",
+      "match_about_blank": false
+    }
+  ],
+  "web_accessible_resources": [
+    "ext/overlay.html"
+  ],
+  "content_security_policy": "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src *; frame-src 'self'",
+  "commands": {
+    "fill": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L"
+      },
+      "description": "Fill a login on this page"
+    }
+  }
+}
