@@ -1,0 +1,79 @@
+#!/bin/sh
+# Serve the repo root and open the manager against a throwaway seeded vault.
+#
+# A server is required rather than convenient: Firefox refuses to load ES
+# modules from file://, because a file:// document has an opaque origin and the
+# module fetch is then subject to CORS.
+#
+#   tools/preview.sh              serve, print the URLs
+#   tools/preview.sh shot         serve and write screenshots to .preview/
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+port=${PORT:-8731}
+gen="$root/src/ui/.preview.html"
+
+# The preview page is the real manager.html with its script swapped, so the
+# markup cannot drift between what is previewed and what ships. The held script
+# is added only for screenshots; see tools/serve.mjs for why.
+build_page() {
+  sed 's|src="manager.js"|src="../../tools/preview.js"|' \
+    "$root/src/ui/manager.html" > "$gen"
+  if [ -n "${1:-}" ]; then
+    sed -i "s|</body>|<script defer src=\"/__hold?ms=$1\"></script></body>|" "$gen"
+  fi
+}
+
+node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
+server=$!
+cleanup() { kill $server 2>/dev/null || true; rm -f "$gen"; }
+trap cleanup EXIT
+sleep 0.5
+
+base="http://127.0.0.1:$port/src/ui/.preview.html"
+
+if [ "${1:-}" = "shot" ]; then
+  build_page 3000
+  browser=${BROWSER_BIN:-$(command -v zen-browser || command -v firefox)}
+  out="$root/screenshots"
+  rm -f "$out"/*.png
+  mkdir -p "$out"
+  profile=$(mktemp -d)
+  cleanup() { kill $server 2>/dev/null || true; rm -f "$gen"; rm -rf "$profile"; }
+
+  shot() {
+    "$browser" --headless --profile "$profile" --window-size="${3:-1280,820}" \
+      --screenshot "$out/$1.png" "$base$2" >/dev/null 2>&1
+    echo "  screenshots/$1.png"
+  }
+
+  echo "screenshots:"
+  # Gate states, at the size the gate is actually used at.
+  shot 01-setup      '?fresh'                        900,700
+  shot 02-locked     ''                              900,700
+  shot 03-wrong      '?wrong'                        900,700
+  # The vault, empty and then populated.
+  shot 04-empty      '?empty&open'
+  shot 05-list       '?open&select=0&reveal'
+  shot 06-stale      '?open&select=2&reveal'
+  shot 07-reused     '?open&select=1&reveal'
+  shot 08-imported   '?open&select=3'
+  # Editing, generating, searching.
+  shot 09-edit       '?open&select=0&edit'
+  shot 10-edit-shown '?open&select=0&edit&show'
+  shot 11-new        '?open&new'
+  shot 12-generated  '?open&new&gen'
+  shot 13-search     '?open&search=example&select=0'
+  shot 14-no-match   '?open&search=nothing+matches+this'
+  exit 0
+fi
+
+build_page
+echo "BENCpass preview:"
+echo "  $base                 locked"
+echo "  $base?open            unlocked"
+echo "  $base?open&select     an entry selected"
+echo
+echo "Master password for the seeded vault: preview-only-not-a-real-vault"
+echo "Ctrl-C to stop."
+wait $server

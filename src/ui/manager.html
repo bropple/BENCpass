@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BENCpass</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- The gate covers everything until the vault is open. There is no route
+     around it: the app pane holds no plaintext until manager.js puts it there. -->
+<div id="gate" class="gate">
+  <div class="gate-panel">
+    <svg class="gon" id="gon" viewBox="0 0 200 200" aria-hidden="true">
+      <path d="M 100,16 L 179.89,74.04 L 149.37,167.96 L 50.63,167.96 L 20.11,74.04 Z"
+            fill="var(--accent)" stroke="var(--accent-edge)" stroke-width="2"/>
+      <rect x="53.8" y="95.8" width="92.4" height="28.56" fill="#9a9d94"/>
+      <!-- The visor stripe is the lock indicator: red locked, green open. -->
+      <rect id="visor" x="70.6" y="103.36" width="58.8" height="13.44" fill="var(--bad)"/>
+    </svg>
+
+    <h1 class="wordmark">BENCPASS</h1>
+
+    <form id="gate-form" autocomplete="off">
+      <p class="gate-hint" id="gate-hint">Locked.</p>
+
+      <label class="field">
+        <span class="label">Master password</span>
+        <input type="password" id="gate-pw" autocomplete="current-password" required>
+      </label>
+
+      <label class="field" id="gate-confirm-field" hidden>
+        <span class="label">Confirm</span>
+        <input type="password" id="gate-pw2" autocomplete="new-password">
+      </label>
+
+      <p class="gate-error" id="gate-error" role="alert" hidden></p>
+
+      <button type="submit" class="btn btn-primary" id="gate-go">Unlock</button>
+    </form>
+
+    <p class="gate-note" id="gate-note"></p>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------------ -->
+
+<div id="app" class="app" hidden>
+  <header class="bar">
+    <svg class="gon gon-sm" viewBox="0 0 200 200" aria-hidden="true">
+      <path d="M 100,16 L 179.89,74.04 L 149.37,167.96 L 50.63,167.96 L 20.11,74.04 Z"
+            fill="var(--accent)" stroke="var(--accent-edge)" stroke-width="3"/>
+      <rect x="53.8" y="95.8" width="92.4" height="28.56" fill="#9a9d94"/>
+      <rect x="70.6" y="103.36" width="58.8" height="13.44" fill="var(--good)"/>
+    </svg>
+    <span class="bar-mark">BENCPASS</span>
+
+    <input type="search" id="search" class="search" placeholder="Search" autocomplete="off">
+
+    <span class="bar-spacer"></span>
+    <span class="bar-status" id="status" aria-live="polite"></span>
+    <button class="btn" id="new-btn">New</button>
+    <button class="btn" id="lock-btn">Lock</button>
+  </header>
+
+  <main class="split">
+    <nav class="list-pane">
+      <ol class="list" id="list"></ol>
+      <p class="empty" id="list-empty" hidden>No entries.</p>
+    </nav>
+
+    <section class="detail-pane" id="detail">
+      <p class="empty" id="detail-empty">Nothing selected.</p>
+
+      <article class="detail" id="detail-view" hidden>
+        <h2 class="detail-title" id="d-title"></h2>
+
+        <div class="row">
+          <span class="label">Username</span>
+          <span class="value" id="d-username"></span>
+          <button class="btn btn-sm" data-copy="username">Copy</button>
+        </div>
+
+        <div class="row">
+          <span class="label">Password</span>
+          <span class="value mono secret" id="d-password"></span>
+          <button class="btn btn-sm" id="reveal-btn">Reveal</button>
+          <button class="btn btn-sm" data-copy="password">Copy</button>
+        </div>
+
+        <div class="row" id="d-urls-row">
+          <span class="label">URLs</span>
+          <span class="value" id="d-urls"></span>
+        </div>
+
+        <div class="row" id="d-notes-row">
+          <span class="label">Notes</span>
+          <span class="value wrap" id="d-notes"></span>
+        </div>
+
+        <hr class="rule">
+
+        <dl class="meta" id="d-meta"></dl>
+
+        <div class="detail-actions">
+          <button class="btn" id="edit-btn">Edit</button>
+          <button class="btn btn-danger" id="delete-btn">Delete</button>
+        </div>
+      </article>
+
+      <!-- ---- edit form ---- -->
+      <form class="detail edit" id="edit-form" hidden autocomplete="off">
+        <h2 class="detail-title" id="edit-heading">New entry</h2>
+
+        <label class="field">
+          <span class="label">Title</span>
+          <input type="text" id="e-title" required>
+        </label>
+
+        <label class="field">
+          <span class="label">Username</span>
+          <input type="text" id="e-username" autocomplete="off">
+        </label>
+
+        <div class="field">
+          <label class="label" for="e-password">Password</label>
+          <div class="input-row">
+            <!-- Masked by default like the viewer. Generating unmasks it, since
+                 the point of generating is to see what you got. -->
+            <input type="password" id="e-password" class="mono" autocomplete="off">
+            <button type="button" class="btn btn-sm" id="e-reveal-btn">Show</button>
+          </div>
+        </div>
+
+        <div class="gen">
+          <div class="gen-controls">
+            <label class="chk"><input type="checkbox" id="g-lower" checked> a-z</label>
+            <label class="chk"><input type="checkbox" id="g-upper" checked> A-Z</label>
+            <label class="chk"><input type="checkbox" id="g-digits" checked> 0-9</label>
+            <label class="chk"><input type="checkbox" id="g-symbols" checked> !#$</label>
+            <label class="chk"><input type="checkbox" id="g-ambig"> no Il1O0</label>
+            <label class="len">
+              <input type="range" id="g-length" min="8" max="64" value="20">
+              <output id="g-length-out">20</output>
+            </label>
+            <button type="button" class="btn btn-sm" id="gen-btn">Generate</button>
+          </div>
+          <p class="gen-entropy" id="g-entropy"></p>
+        </div>
+
+        <label class="field">
+          <span class="label">URLs</span>
+          <input type="text" id="e-urls" placeholder="one per line, or comma separated">
+        </label>
+
+        <label class="field">
+          <span class="label">Notes</span>
+          <textarea id="e-notes" rows="4"></textarea>
+        </label>
+
+        <div class="detail-actions">
+          <button type="submit" class="btn btn-primary">Save</button>
+          <button type="button" class="btn" id="cancel-btn">Cancel</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span id="foot-count"></span>
+    <span class="bar-spacer"></span>
+    <span id="foot-lock"></span>
+  </footer>
+</div>
+
+<script type="module" src="manager.js"></script>
+</body>
+</html>

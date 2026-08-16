@@ -1,0 +1,42 @@
+# Paste this into TrueNAS SCALE: Apps -> Discover Apps -> (⋮) -> Install via YAML.
+#
+# Change exactly two things, both marked CHANGE ME. Everything else is fine
+# as-is.
+#
+# Why an image from a registry rather than `build:` — the 24.10 Custom App
+# screen takes a name and a Compose file and nothing else, and its documentation
+# does not cover build directives. A published image is the path that certainly
+# works on Electric Eel. See server/README.md.
+
+name: bencpass
+
+services:
+  bencpass:
+    # CHANGE ME (1): your GHCR path, from the release workflow.
+    # It must be a *public* package, or TrueNAS cannot pull it anonymously.
+    image: ghcr.io/OWNER/bencpass-server:latest
+
+    restart: unless-stopped
+
+    # The dataset below must be owned by this uid:gid. 568 is `apps` on SCALE.
+    # If the first run dies with a permission error on /data, this is why.
+    user: "568:568"
+
+    ports:
+      # host:container. Leave this on the LAN — do not forward it at the router.
+      # Tailscale reaches it from outside; see README.
+      - "8788:8788"
+
+    volumes:
+      # CHANGE ME (2): a real dataset on your pool.
+      # A dataset, not a directory inside the container — ZFS snapshots of this
+      # path are a better backstop than the server's own snapshot rotation, and
+      # a periodic snapshot task costs nothing to configure.
+      - /mnt/tank/apps/bencpass:/data
+
+    # The image is `scratch` with one static binary in it, so there is nothing
+    # for these to break and no reason not to set them.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true

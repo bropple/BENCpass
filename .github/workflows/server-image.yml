@@ -1,0 +1,88 @@
+# Publish the server image to GHCR.
+#
+# TrueNAS's Custom App screen installs from a registry, so the image has to be
+# somewhere public before it can be pasted into the web UI. GHCR is free and
+# pulls anonymously once the package is made public — which is a one-time click
+# in the repository's Packages settings after the first push, and is easy to
+# forget: a private package fails on the NAS as an unhelpful pull error.
+
+name: server image
+
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/server-image.yml'
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/bencpass-server
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          # The server has no dependencies, so there is no go.sum to key a cache
+          # on and setup-go's default lookup fails the step looking for one.
+          cache: false
+      # Gate the publish on the tests, so a broken image never reaches the NAS.
+      - run: gofmt -l . | tee /dev/stderr | (! read)
+        working-directory: server
+      - run: go vet ./...
+        working-directory: server
+      - run: go test ./...
+        working-directory: server
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # No QEMU step: the Dockerfile pins its build stage to $BUILDPLATFORM and
+      # lets Go cross-compile, so arm64 is built by the native compiler rather
+      # than under emulation. Adding QEMU here would only make it slower.
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: server
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('main-{0}', github.sha) }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: what to paste into TrueNAS
+        run: |
+          echo "::notice::image: ${{ env.IMAGE }}:latest"
+          echo "Make the package PUBLIC once, or TrueNAS cannot pull it:"
+          echo "  https://github.com/${{ github.repository_owner }}?tab=packages"

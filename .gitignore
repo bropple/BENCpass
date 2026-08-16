@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.log
+
+# macOS leaves these all over a shared folder
+.DS_Store
+._*
+
+# preview harness output
+screenshots/
+src/ui/.preview.html
+
+# BENCO style guides, shared across apps rather than owned by this one
+style/
+
+# build output
+dist/
+
+# stray go build output
+server/server
+server/data/

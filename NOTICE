@@ -1,0 +1,35 @@
+BENCpass
+Copyright (c) 2026 BENCO Holdings
+
+This product bundles third-party components. Their licences are reproduced
+alongside them and must travel with any build that embeds them.
+
+--------------------------------------------------------------------------------
+hash-wasm (Argon2id)
+--------------------------------------------------------------------------------
+Vendored at src/vendor/argon2.js, generated from the npm package by
+tools/vendor.sh. MIT licence, reproduced at src/vendor/LICENSE-hash-wasm.txt.
+Upstream: https://github.com/Daninet/hash-wasm
+
+--------------------------------------------------------------------------------
+VT323
+--------------------------------------------------------------------------------
+assets/fonts/vt323.woff2 — SIL Open Font License 1.1.
+Designed by Peter Hull. Retrieved from Google Fonts.
+
+--------------------------------------------------------------------------------
+Share Tech Mono
+--------------------------------------------------------------------------------
+assets/fonts/share-tech-mono.woff2 — SIL Open Font License 1.1.
+Designed by Ralph Levien. Retrieved from Google Fonts.
+
+--------------------------------------------------------------------------------
+Terminus (TTF)
+--------------------------------------------------------------------------------
+assets/fonts/TerminusTTF.ttf — SIL Open Font License 1.1, at
+assets/fonts/OFL.txt.
+
+Bundled unmodified, deliberately. The OFL reserves the names "Terminus Font"
+and "Terminus (TTF)" against modified versions; shipping the file exactly as
+released keeps that question from arising. Do not subset it and do not
+regenerate it. See assets/fonts/README.md.

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- BENCpass application mark: P. Gon on the app's own near-black.
+       The roster artwork is used unmodified and simply placed — see
+       benco-design-style-guide.md §2 for the fill/edge pairing. The visor
+       stripe is canonical green here rather than alert red, because on an
+       application icon it reads as the resting state, not as an alarm. -->
+  <rect width="512" height="512" fill="#0c1420"/>
+  <g transform="translate(56,56) scale(2.0)">
+    <path d="M 100.00,16.00 L 179.89,74.04 L 149.37,167.96 L 50.63,167.96 L 20.11,74.04 Z"
+          fill="#3d7dbf" stroke="#254d75" stroke-width="2"/>
+    <rect x="53.80" y="95.80" width="92.40" height="28.56" fill="#9a9d94"/>
+    <rect x="70.60" y="103.36" width="58.80" height="13.44" fill="#78b946"/>
+  </g>
+</svg>

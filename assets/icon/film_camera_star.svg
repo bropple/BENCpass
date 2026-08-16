@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <!-- Background -->
+  <rect width="500" height="500" fill="#b1b5b8"/>
+
+  <defs>
+    <!-- Common Outlines -->
+    <style>
+      .outline { stroke: #000000; stroke-width: 10; stroke-linecap: round; stroke-linejoin: round; }
+      .thin-outline { stroke: #000000; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <!-- FILM STRIP -->
+  <g transform="translate(245, 260) rotate(-38)">
+    <!-- Outer dark backing -->
+    <rect x="-250" y="-42" width="500" height="84" rx="6" fill="#0d0e10"/>
+    
+    <!-- Film Frames -->
+    <g fill="#e4e7eb">
+      <rect x="-235" y="-30" width="58" height="60" rx="3"/>
+      <rect x="-165" y="-30" width="58" height="60" rx="3"/>
+      <rect x="-95"  y="-30" width="58" height="60" rx="3"/>
+      <rect x="-25"  y="-30" width="58" height="60" rx="3"/>
+      <rect x="45"   y="-30" width="58" height="60" rx="3"/>
+      <rect x="115"  y="-30" width="58" height="60" rx="3"/>
+      <rect x="185"  y="-30" width="58" height="60" rx="3"/>
+    </g>
+
+    <!-- Top Sprocket Holes -->
+    <g fill="#ffffff">
+      <rect x="-240" y="-38" width="8" height="5" rx="1"/>
+      <rect x="-220" y="-38" width="8" height="5" rx="1"/>
+      <rect x="-200" y="-38" width="8" height="5" rx="1"/>
+      <rect x="-180" y="-38" width="8" height="5" rx="1"/>
+      <rect x="-160" y="-38" width="8" height="5" rx="1"/>
+      <rect x="-140" y="-38" width="8" height="5" rx="1"/>
+      <rect x="-120" y="-38" width="8" height="5" rx="1"/>
+      <rect x="-100" y="-38" width="8" height="5" rx="1"/>
+      <rect x="-80"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="-60"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="-40"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="-20"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="0"    y="-38" width="8" height="5" rx="1"/>
+      <rect x="20"   y="-38" width="8" height="5" rx="1"/>
+      <rect x="40"   y="-38" width="8" height="5" rx="1"/>
+      <rect x="60"   y="-38" width="8" height="5" rx="1"/>
+      <rect x="80"   y="-38" width="8" height="5" rx="1"/>
+      <rect x="100"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="120"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="140"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="160"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="180"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="200"  y="-38" width="8" height="5" rx="1"/>
+      <rect x="220"  y="-38" width="8" height="5" rx="1"/>
+      
+      <!-- Bottom Sprocket Holes -->
+      <rect x="-240" y="33" width="8" height="5" rx="1"/>
+      <rect x="-220" y="33" width="8" height="5" rx="1"/>
+      <rect x="-200" y="33" width="8" height="5" rx="1"/>
+      <rect x="-180" y="33" width="8" height="5" rx="1"/>
+      <rect x="-160" y="33" width="8" height="5" rx="1"/>
+      <rect x="-140" y="33" width="8" height="5" rx="1"/>
+      <rect x="-120" y="33" width="8" height="5" rx="1"/>
+      <rect x="-100" y="33" width="8" height="5" rx="1"/>
+      <rect x="-80"  y="33" width="8" height="5" rx="1"/>
+      <rect x="-60"  y="33" width="8" height="5" rx="1"/>
+      <rect x="-40"  y="33" width="8" height="5" rx="1"/>
+      <rect x="-20"  y="33" width="8" height="5" rx="1"/>
+      <rect x="0"    y="33" width="8" height="5" rx="1"/>
+      <rect x="20"   y="33" width="8" height="5" rx="1"/>
+      <rect x="40"   y="33" width="8" height="5" rx="1"/>
+      <rect x="60"   y="33" width="8" height="5" rx="1"/>
+      <rect x="80"   y="33" width="8" height="5" rx="1"/>
+      <rect x="100"  y="33" width="8" height="5" rx="1"/>
+      <rect x="120"  y="33" width="8" height="5" rx="1"/>
+      <rect x="140"  y="33" width="8" height="5" rx="1"/>
+      <rect x="160"  y="33" width="8" height="5" rx="1"/>
+      <rect x="180"  y="33" width="8" height="5" rx="1"/>
+      <rect x="200"  y="33" width="8" height="5" rx="1"/>
+      <rect x="220"  y="33" width="8" height="5" rx="1"/>
+    </g>
+  </g>
+
+  <!-- CAMERA / PROJECTOR -->
+  <!-- Small Reel (Top Left) -->
+  <g id="small-reel">
+    <circle cx="130" cy="125" r="58" fill="#f5b316" class="outline"/>
+    <circle cx="130" cy="125" r="10" fill="#000000"/>
+    <circle cx="130" cy="88"  r="12" fill="#000000"/>
+    <circle cx="165" cy="113" r="12" fill="#000000"/>
+    <circle cx="152" cy="151" r="12" fill="#000000"/>
+    <circle cx="108" cy="151" r="12" fill="#000000"/>
+    <circle cx="95"  cy="113" r="12" fill="#000000"/>
+  </g>
+
+  <!-- Large Reel (Top Middle) -->
+  <g id="large-reel">
+    <circle cx="260" cy="100" r="75" fill="#ffc726" class="outline"/>
+    <circle cx="260" cy="100" r="12" fill="#000000"/>
+    <circle cx="260" cy="50"  r="16" fill="#000000"/>
+    <circle cx="308" cy="85"  r="16" fill="#000000"/>
+    <circle cx="290" cy="140" r="16" fill="#000000"/>
+    <circle cx="230" cy="140" r="16" fill="#000000"/>
+    <circle cx="212" cy="85"  r="16" fill="#000000"/>
+  </g>
+
+  <!-- Left Eyepiece / Extension -->
+  <path d="M 70 215 L 125 215 L 125 255 L 70 255 Z" fill="#cf9513" class="outline"/>
+  <path d="M 70 210 L 80 210 L 80 260 L 70 260 Z" fill="#f5b316" class="outline"/>
+
+  <!-- Right Main Lens Cone -->
+  <path d="M 280 210 L 340 200 L 370 190 L 370 280 L 340 270 L 280 260 Z" fill="#f5b316" class="outline"/>
+  <rect x="365" y="180" width="16" height="110" rx="4" fill="#ffc726" class="outline"/>
+
+  <!-- Main Camera Body -->
+  <rect x="120" y="180" width="200" height="110" rx="6" fill="#ca860b" class="outline"/>
+  <rect x="130" y="190" width="180" height="90" rx="3" fill="#f5b316" class="thin-outline"/>
+
+  <!-- Dial Knob -->
+  <circle cx="160" cy="250" r="14" fill="#a0a7b0" class="thin-outline"/>
+  <circle cx="160" cy="250" r="6" fill="#50555c"/>
+
+  <!-- ROBOT STAR FELLOW (Foreground) -->
+  <g id="robot-star" transform="translate(240, 240)">
+    <!-- 5-Pointed Yellow Star -->
+    <path d="M 0 -110 
+             L 28 -30 
+             L 110 -25 
+             L 45 30 
+             L 68 110 
+             L 0 62 
+             L -68 110 
+             L -45 30 
+             L -110 -25 
+             L -28 -30 Z" 
+          fill="#fdd835" class="outline"/>
+
+    <!-- Star Shading / Detail -->
+    <path d="M 0 -110 L 0 62 L 68 110 L 45 30 L 110 -25 L 28 -30 Z" fill="#fbc02d" opacity="0.3"/>
+
+    <!-- Visor Frame -->
+    <rect x="-65" y="-18" width="130" height="36" fill="#90a4ae" class="outline"/>
+    <rect x="-61" y="-14" width="122" height="28" fill="#b0bec5"/>
+
+    <!-- Red Screen / Eye -->
+    <rect x="-42" y="-9" width="84" height="18" fill="#e53935" class="thin-outline"/>
+  </g>
+</svg>
