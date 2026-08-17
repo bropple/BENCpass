@@ -12,6 +12,7 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 port=${PORT:-8731}
 gen="$root/src/ui/.preview.html"
+toast_gen="$root/src/ext/.toast-preview.html"
 
 # The preview page is the real manager.html with its script swapped, so the
 # markup cannot drift between what is previewed and what ships. The held script
@@ -24,23 +25,38 @@ build_page() {
   fi
 }
 
+# The save prompt, the same way: the real markup and stylesheet with only the
+# script swapped, so a screenshot is of the thing that ships.
+build_toast() {
+  sed 's|src="toast.js"|src="../../tools/toast-preview.js"|' \
+    "$root/src/ext/toast.html" > "$toast_gen"
+  # The toast draws itself from a message posted after its module has run, so
+  # the load event fires before there is anything on screen and a screenshot
+  # taken then catches the placeholder. Same hold as the manager uses.
+  if [ -n "${1:-}" ]; then
+    printf '<script defer src="/__hold?ms=%s"></script>\n' "$1" >> "$toast_gen"
+  fi
+}
+
 node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
 server=$!
-cleanup() { kill $server 2>/dev/null || true; rm -f "$gen"; }
+cleanup() { kill $server 2>/dev/null || true; rm -f "$gen" "$toast_gen"; }
 trap cleanup EXIT
 sleep 0.5
 
 base="http://127.0.0.1:$port/src/ui/.preview.html"
+toast_base="http://127.0.0.1:$port/src/ext/.toast-preview.html"
 
 if [ "${1:-}" = "shot" ]; then
   build_page 3000
+  build_toast 3000
   . "$root/tools/find-browser.sh"
   browser=$BROWSER_BIN
   out="$root/screenshots"
   rm -f "$out"/*.png
   mkdir -p "$out"
   profile=$(mktemp -d)
-  cleanup() { kill $server 2>/dev/null || true; rm -f "$gen"; rm -rf "$profile"; }
+  cleanup() { kill $server 2>/dev/null || true; rm -f "$gen" "$toast_gen"; rm -rf "$profile"; }
 
   shot() {
     "$browser" --headless --profile "$profile" --window-size="${3:-1280,820}" \
@@ -74,14 +90,26 @@ if [ "${1:-}" = "shot" ]; then
   shot 16-addresses  '?open&section=address&select=0'
   shot 17-address-edit '?open&section=address&select=1&edit'      1280,1100
   shot 18-address-more '?open&section=address&select=1&edit&more' 1280,1400
+
+  # The save prompt, at the size the content script frames it at.
+  toast() {
+    "$browser" --headless --profile "$profile" --window-size="$3" \
+      --screenshot "$out/$1.png" "$toast_base$2" >/dev/null 2>&1
+    echo "  screenshots/$1.png"
+  }
+  toast 19-toast-save    '?kind=login'          330,104
+  toast 20-toast-update  '?kind=login&update'   330,104
+  toast 21-toast-address '?kind=address'        330,148
   exit 0
 fi
 
 build_page
+build_toast
 echo "BENCpass preview:"
 echo "  $base                 locked"
 echo "  $base?open            unlocked"
 echo "  $base?open&select     an entry selected"
+echo "  $toast_base?kind=address   the save prompt"
 echo
 echo "Master password for the seeded vault: preview-only-not-a-real-vault"
 echo "Ctrl-C to stop."

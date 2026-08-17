@@ -9,6 +9,7 @@ dist/
 # preview harness output
 screenshots/
 src/ui/.preview.html
+src/ext/.toast-preview.html
 
 # BENCO style guides, shared across apps rather than owned by this one
 style/

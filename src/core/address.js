@@ -525,6 +525,34 @@ export function normalizeCaptured(raw, limit = 256) {
 }
 
 /**
+ * Is this address already on file, allowing for the ways a form changes one on
+ * the way through?
+ *
+ * Not a plain comparison, because what comes back off a page is not always
+ * what went onto it. A phone number goes into a short box without its country
+ * code and comes back that way; a country goes into a text box as a name and
+ * comes back as a name. Both are the same address. Comparing strings alone
+ * offered to save an address that had just been filled from the vault.
+ */
+export function matchesStored(record, incoming) {
+  const entries = Object.entries(incoming ?? {});
+  if (!entries.length) return false;
+
+  return entries.every(([token, value]) => {
+    const stored = String(record?.[token] ?? '').trim();
+    if (stored === value) return true;
+    if (!stored) return false;
+
+    if (token === 'tel') {
+      const parts = telParts(stored);
+      return parts['tel-national'] === value;
+    }
+    if (token === 'country') return countryCode(stored) === countryCode(value);
+    return false;
+  });
+}
+
+/**
  * Is this enough to be worth calling an address?
  *
  * Two structural fields. A lone email box on a newsletter form is not an

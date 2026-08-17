@@ -22,6 +22,7 @@
     FILL_TARGET: 'fill-target',
     DISMISS: 'dismiss',
     LOCKSTATE: 'lockstate',
+    NOTICE: 'notice',
   };
 
   const MARK = 'data-bencpass';
@@ -35,6 +36,7 @@
   // them from the document.
   const ANCHOR_SEL = `[${MARK}="anchor"]`;
   const OVERLAY_ID = 'bencpass-overlay-frame';
+  const TOAST_ID = 'bencpass-toast-frame';
 
   /** Anything this extension put in the page. */
   const isOurs = (node) =>
@@ -536,6 +538,12 @@
    */
   function fillAddress(values, alts) {
     const address = activeGroup?.address ?? groups.flatMap((g) => g.address);
+    // What actually lands in the boxes, which is not always what came out of
+    // the record: a phone number may lose its country code to fit, a country
+    // may go in as a name. Recorded here so that submitting the form untouched
+    // is recognised as such, rather than offered back as a new address.
+    const written = {};
+
     for (const { index, token } of address) {
       const el = at(index);
       if (!el) continue;
@@ -543,9 +551,15 @@
       if (!value) continue; // nothing stored for it, or nothing derivable
 
       const candidates = [value, ...(alts?.[token] ?? [])];
-      if (el.tagName === 'SELECT') selectOption(el, candidates);
-      else setValue(el, textValue(el, token, candidates, values));
+      if (el.tagName === 'SELECT') {
+        if (selectOption(el, candidates)) written[token] = el.value;
+      } else {
+        const chosen = textValue(el, token, candidates, values);
+        setValue(el, chosen);
+        written[token] = chosen;
+      }
     }
+    lastFilledAddress = Object.keys(written).length ? written : null;
   }
 
   /**
@@ -577,13 +591,63 @@
     return candidates[0];
   }
 
+  // ---- the save prompt -----------------------------------------------------
+  //
+  // The badge on the toolbar icon is no use to someone who is not already
+  // looking for it, and the operating system's own notification never arrived
+  // once — swallowed by a notification daemon, a focus setting or a permission,
+  // with no way to find out which from in here. So the prompt is drawn by the
+  // extension, in the corner of the page, where nothing else can suppress it.
+  //
+  // An iframe on the extension's origin, like the menu: the page can cover it
+  // but cannot read it or click it. The notice id goes to it by postMessage
+  // after load, never in the URL.
+
+  function showToast(noticeId, kind) {
+    hideToast();
+
+    const frame = document.createElement('iframe');
+    frame.id = TOAST_ID;
+    frame.setAttribute(MARK, 'toast');
+    frame.src = browser.runtime.getURL('ext/toast.html');
+    // An address needs room for the name box; a login does not.
+    const height = kind === 'address' ? 148 : 104;
+    frame.style.cssText =
+      `all: initial; position: fixed; right: 16px; bottom: 16px; width: 330px;` +
+      `height: ${height}px; z-index: 2147483647; border: 1px solid #1e2c3d;` +
+      'border-radius: 3px; box-shadow: 0 6px 22px rgba(0,0,0,0.55);' +
+      'background: #0c1420; color-scheme: dark;';
+
+    const extensionOrigin = new URL(browser.runtime.getURL('')).origin;
+    frame.addEventListener(
+      'load',
+      () => {
+        frame.contentWindow?.postMessage({ bencpass: 'notice', noticeId }, extensionOrigin);
+      },
+      { once: true },
+    );
+
+    document.body.appendChild(frame);
+  }
+
+  const hideToast = () => document.getElementById(TOAST_ID)?.remove();
+
+  // The toast asks to be closed rather than closing itself, because it cannot:
+  // it is framed by this document and has no reach into it.
+  window.addEventListener('message', (event) => {
+    const frame = document.getElementById(TOAST_ID);
+    if (!frame || event.source !== frame.contentWindow) return;
+    if (event.data?.bencpass === 'toast-close') hideToast();
+  });
+
   // ---- capture -------------------------------------------------------------
 
   const lastSubmitted = { username: '', password: '', address: null };
 
-  // The last thing BENCpass itself wrote into this page's login fields. Kept so
-  // that submitting it unchanged can be told apart from typing something new.
+  // The last thing BENCpass itself wrote into this page's fields. Kept so that
+  // submitting it unchanged can be told apart from typing something new.
   const lastFilled = { username: '', password: '' };
+  let lastFilledAddress = null; // token -> the string actually written
 
   function remember() {
     const login = activeGroup?.login ?? groups[0]?.login ?? {};
@@ -627,7 +691,17 @@
         .catch(() => {});
     }
 
-    if (lastSubmitted.address) {
+    // The same rule for addresses: an address picked from the menu and sent
+    // back untouched has nothing in it to learn. Equality both ways, so that
+    // adding one field the record did not have — an apartment number, say —
+    // still counts as a change worth offering to keep.
+    const sameAsFilled =
+      lastFilledAddress &&
+      lastSubmitted.address &&
+      Object.keys(lastSubmitted.address).length === Object.keys(lastFilledAddress).length &&
+      Object.entries(lastFilledAddress).every(([t, v]) => lastSubmitted.address[t] === v);
+
+    if (lastSubmitted.address && !sameAsFilled) {
       browser.runtime
         .sendMessage({ type: MSG.CAPTURE, kind: 'address', address: lastSubmitted.address })
         .catch(() => {});
@@ -673,9 +747,16 @@
       if (el) setValue(el, msg.values?.password ?? '');
       return Promise.resolve({ ok: Boolean(el) });
     }
+    if (msg?.type === MSG.NOTICE) {
+      if (msg.noticeId) showToast(String(msg.noticeId), msg.kind);
+      else hideToast();
+      return Promise.resolve({ ok: true });
+    }
     if (msg?.type === MSG.LOCKSTATE) {
       locked = Boolean(msg.locked);
       closeMenu();
+      // A locked vault cannot save anything, so an offer to save is now a lie.
+      if (locked) hideToast();
       placeAnchors();
       return Promise.resolve({ ok: true });
     }

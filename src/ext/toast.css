@@ -1,0 +1,44 @@
+/* The save prompt. Its own document inside an iframe, for the same reason the
+   menu is: page CSS cannot reach in and page script cannot read it or fake a
+   click on it.
+
+   Drawn by the extension rather than handed to the operating system. The OS
+   notification this replaces never appeared once — a notification daemon, a
+   focus-assist setting or a permission somewhere swallowed it silently, and
+   there is no way to find out which from inside a browser. A badge on the
+   toolbar icon is the fallback and stays, but it is only any use to someone
+   already expecting it. */
+:root {
+  --accent: #3d7dbf; --bg: #0c1420; --panel: #141d2a;
+  --border: #1e2c3d; --text: #c3d9ee; --dim: #7d93a8;
+}
+* { box-sizing: border-box; }
+/* The name row carries a display rule and is hidden for a login, and an author
+   rule beats the UA stylesheet's. Without this the prompt asks what to call a
+   password. */
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+             font: 13px/1.4 ui-monospace, Consolas, monospace; overflow: hidden; }
+
+.toast { display: flex; gap: 9px; height: 100%; padding: 10px; }
+.gon { flex: none; margin-top: 1px; }
+.body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.text { margin: 0 0 8px; }
+/* The host and username can be long and are not worth wrapping over three
+   lines; the point of the sentence survives being cut short. */
+.text b { font-weight: normal; color: #fff; }
+
+.name { display: block; margin: 0 0 8px; }
+.name span { display: block; color: var(--dim); font-size: 11px;
+             text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+.name input { width: 100%; background: var(--panel); color: inherit; font: inherit;
+              border: 1px solid var(--border); border-radius: 2px; padding: 4px 6px; }
+.name input:focus { outline: none; border-color: var(--accent); }
+
+.actions { margin-top: auto; display: flex; gap: 6px; }
+.btn { background: none; border: 1px solid var(--border); border-radius: 2px;
+       color: inherit; font: inherit; padding: 3px 10px; cursor: pointer; }
+.btn:hover, .btn:focus { border-color: var(--accent); outline: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #06101c; }
+.btn.primary:hover, .btn.primary:focus { filter: brightness(1.12); }

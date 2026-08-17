@@ -17,6 +17,7 @@ import {
   countryOptions,
   isAddressish,
   joinName,
+  matchesStored,
   normalizeCaptured,
   splitName,
   telParts,
@@ -338,6 +339,32 @@ test('captured values are bounded', () => {
     64,
   );
   assert.equal(out['address-line1'].length, 64);
+});
+
+// ---- recognising one we already have --------------------------------------
+
+test('an address filled from the record and sent straight back is recognised', () => {
+  assert.ok(matchesStored(HOME, { 'address-line1': '1 Pentagon Way', 'postal-code': '90210' }));
+});
+
+test('a phone number that lost its country code to fit is still the same number', () => {
+  // The fill drops `+1` for a box too short to hold it, so this is what comes
+  // back off the page. Compared as strings it looks like a new address.
+  assert.ok(matchesStored(HOME, { 'postal-code': '90210', tel: '(415) 555-0132' }));
+});
+
+test('a country that went in as a name and came back as one is still the same', () => {
+  assert.ok(matchesStored(HOME, { 'postal-code': '90210', country: 'United States' }));
+  assert.ok(matchesStored(HOME, { 'postal-code': '90210', country: 'USA' }));
+});
+
+test('a genuinely different address is not mistaken for the stored one', () => {
+  assert.ok(!matchesStored(HOME, { 'address-line1': '2 Pentagon Way', 'postal-code': '90210' }));
+  assert.ok(!matchesStored(HOME, { 'postal-code': '90210', tel: '(415) 555-9999' }));
+  assert.ok(!matchesStored(HOME, { 'postal-code': '90210', country: 'Germany' }));
+  // A field the record has nothing for is new information.
+  assert.ok(!matchesStored(HOME, { 'postal-code': '90210', 'address-line3': 'Care of Bob' }));
+  assert.ok(!matchesStored(HOME, {}));
 });
 
 // ---- is it an address at all ----------------------------------------------

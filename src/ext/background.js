@@ -15,6 +15,7 @@ import {
   valuesForTokens,
   normalizeCaptured,
   isAddressish,
+  matchesStored,
   addressSummary,
 } from '../core/address.js';
 import { generate } from '../core/generate.js';
@@ -53,9 +54,12 @@ async function boot() {
   }
   paintBadge();
 
-  // Firefox opens the sidebar by itself when an extension with a sidebar_action
-  // is installed, which on every reload means a panel nobody asked for sitting
-  // in front of the page. Closing needs no user gesture, unlike opening.
+  // Firefox opens the sidebar by itself when an extension carrying a
+  // sidebar_action is installed — `open_at_install` defaults to true, and
+  // `web-ext run` reinstalls on every launch, so it appeared every single time.
+  // The manifest now says false, which is the actual fix; this stays for the
+  // other case, a session restored with our sidebar last open. Closing needs no
+  // user gesture, unlike opening.
   browser.sidebarAction?.close?.().catch?.(() => {});
 }
 
@@ -80,6 +84,12 @@ function bumpAutolock() {
 function lock() {
   vault?.lock();
   sessions.clear();
+  // A pending capture holds a password in the clear, waiting for someone to
+  // agree to keep it. Locking is that person saying they have finished, so it
+  // goes with everything else — the alternative is a plaintext password living
+  // on past the lock in a Map. The toast goes too, since a locked vault cannot
+  // save anything and an offer that cannot be accepted is just a lie.
+  pendingCaptures.clear();
   clearTimeout(autolockTimer);
   autolockAt = 0;
   paintBadge();
@@ -234,10 +244,12 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleSearch(msg, sender);
     case MSG.SYNC:
       return handleSync();
+    case MSG.NOTICE_STATE:
+      return handleNoticeState(msg, sender);
     case MSG.SAVE:
       return handleSave(msg, sender);
     case MSG.DISCARD:
-      return handleDiscard();
+      return handleDiscard(msg, sender);
     case MSG.CLOSE:
       return handleClose(msg, sender);
     case MSG.OPEN_MANAGER:
@@ -564,12 +576,52 @@ async function handleClose(msg, sender) {
  * Only ever reached by the user pressing Save in the popup. A capture sits in
  * memory until then and is discarded when the tab closes.
  */
+/**
+ * Which pending capture a message is talking about, and whether it may.
+ *
+ * The popup and the manager are trusted to mean the tab in front of them: they
+ * are extension pages a page cannot reach. The toast is different — it is
+ * web-accessible, so a hostile page can frame its own copy, and that copy would
+ * satisfy every "is this an extension page" check made here. It therefore has
+ * to quote the unguessable id issued with the offer, which reaches the real
+ * toast by a postMessage the page cannot listen to.
+ */
+async function pendingFor(msg, sender) {
+  // A framed extension page has a tab; the popup and the sidebar do not.
+  const tabId =
+    sender?.tab?.id ?? (await browser.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+  if (tabId === undefined) return { tabId: undefined, pending: null };
+
+  const pending = pendingCaptures.get(tabId) ?? null;
+  if (!pending) return { tabId, pending: null };
+
+  const fromToast = sender?.url === browser.runtime.getURL('ext/toast.html');
+  if (fromToast && asString(msg?.noticeId, 64) !== pending.noticeId) {
+    return { tabId, pending: null };
+  }
+  return { tabId, pending };
+}
+
+/** What the toast in this tab should print. Never a secret — see toast.js. */
+async function handleNoticeState(msg, sender) {
+  const { pending } = await pendingFor(msg, sender);
+  if (!pending) return {};
+  return {
+    kind: pending.kind ?? 'login',
+    host: pending.host,
+    username: pending.username ?? '',
+    update: Boolean(pending.existingId),
+    summary: pending.kind === 'address' ? addressSummary(pending.address) : '',
+    suggestedName: pending.suggestedName ?? '',
+  };
+}
+
 async function handleSave(msg, sender) {
   if (!isExtensionPage(sender)) return { ok: false };
   if (!vault || vault.locked) return { ok: false, reason: 'locked' };
 
-  const tab = (await browser.tabs.query({ active: true, currentWindow: true }))[0];
-  const pending = tab ? pendingCaptures.get(tab.id) : null;
+  const { tabId, pending } = await pendingFor(msg, sender);
+  const tab = tabId === undefined ? null : { id: tabId };
   if (!pending) return { ok: false, reason: 'nothing-pending' };
 
   let merged = false;
@@ -612,16 +664,17 @@ async function handleSave(msg, sender) {
 
   await persistVault();
   pendingCaptures.delete(tab.id);
-  clearCaptureNotice();
+  clearCaptureNotice(tab.id);
   paintBadge();
   bumpAutolock();
   return { ok: true, merged };
 }
 
-async function handleDiscard() {
-  const tab = (await browser.tabs.query({ active: true, currentWindow: true }))[0];
-  if (tab) pendingCaptures.delete(tab.id);
-  clearCaptureNotice();
+async function handleDiscard(msg, sender) {
+  const { tabId, pending } = await pendingFor(msg, sender);
+  if (tabId === undefined || !pending) return { ok: true };
+  pendingCaptures.delete(tabId);
+  clearCaptureNotice(tabId);
   paintBadge();
   return { ok: true };
 }
@@ -686,7 +739,7 @@ async function handleCapture(msg, sender) {
     // leftover offer looks identical to a fresh one, which is how "it asks to
     // update a password I did not change" happens.
     pendingCaptures.delete(origin.tabId);
-    clearCaptureNotice();
+    clearCaptureNotice(origin.tabId);
     paintBadge();
     return { ok: false };
   }
@@ -697,9 +750,10 @@ async function handleCapture(msg, sender) {
     username,
     password,
     existingId: existing?.id ?? null,
+    noticeId: newSessionId(),
   });
   paintBadge();
-  announceCapture(origin.frameHost, username, Boolean(existing));
+  announceCapture(origin.tabId, 'login');
   return { ok: true };
 }
 
@@ -726,13 +780,12 @@ function captureAddress(msg, origin) {
   // address, however many boxes it happened to have.
   if (!isAddressish(incoming)) return { ok: false };
 
-  // Already stored, if every field we saw matches one on file.
-  const known = addressesFor(vault.list()).some((r) =>
-    Object.entries(incoming).every(([k, v]) => (r[k] ?? '') === v),
-  );
+  // Already stored, allowing for the ways a form rewrites a value on the way
+  // through — see matchesStored.
+  const known = addressesFor(vault.list()).some((r) => matchesStored(r, incoming));
   if (known) {
     pendingCaptures.delete(origin.tabId);
-    clearCaptureNotice();
+    clearCaptureNotice(origin.tabId);
     paintBadge();
     return { ok: false };
   }
@@ -747,9 +800,10 @@ function captureAddress(msg, origin) {
     // shop it was first typed into is what made a vault full of addresses
     // called after shops.
     suggestedName: suggestAddressName(incoming),
+    noticeId: newSessionId(),
   });
   paintBadge();
-  announceAddress();
+  announceCapture(origin.tabId, 'address');
   return { ok: true };
 }
 
@@ -764,68 +818,62 @@ function captureAddress(msg, origin) {
 const suggestAddressName = (a) =>
   asString(a['address-level2'] || a['address-line1'] || '', 60).trim();
 
-function announceAddress() {
-  if (!browser.notifications?.create) return;
-  try {
-    browser.notifications
-      .create(CAPTURE_NOTICE, {
-        type: 'basic',
-        iconUrl: browser.runtime.getURL('ext/icons/64.png'),
-        title: 'BENCpass — keep this address?',
-        // No site named, deliberately. The address is not being filed under the
-        // shop; it is being added to your addresses, under a name you give it.
-        message: 'Open BENCpass to name it and keep it.',
-      })
-      .catch(() => {});
-  } catch {
-    /* reported by the login path already */
-  }
-}
-
 const CAPTURE_NOTICE = 'bencpass-capture';
 
 /**
  * Say out loud that there is something to save.
  *
- * A badge on the toolbar icon is the conventional signal and it is far too
- * quiet — in Zen the chrome can be hidden entirely, and the offer then exists
- * only somewhere the person is not looking. No password goes in the text.
+ * A toast drawn into the page, because the two quieter signals both failed. The
+ * badge on the toolbar icon is no use to someone not already looking for it,
+ * and in Zen the chrome can be hidden entirely; the operating system's
+ * notification never appeared once across weeks of use, swallowed by a
+ * notification daemon or a focus setting, with no way to tell which from in
+ * here. An iframe on our own origin is the one surface nothing else can
+ * suppress.
+ *
+ * The badge stays as a fallback for the tab that has no content script — a
+ * PDF viewer, a `view-source:` page — and the OS notification is tried last,
+ * costing nothing when it works and nothing when it does not.
  */
-function announceCapture(host, username, isUpdate) {
-  const who = username || 'this login';
-
-  if (!browser.notifications?.create) {
-    console.warn('BENCpass: browser.notifications is unavailable; badge only');
+async function announceCapture(tabId, kind) {
+  try {
+    await browser.tabs.sendMessage(tabId, {
+      type: MSG.NOTICE,
+      noticeId: pendingCaptures.get(tabId)?.noticeId,
+      kind,
+    });
     return;
+  } catch {
+    /* no content script in that tab; fall through to the OS notification */
   }
+  osNotification(kind);
+}
 
-  // try/catch as well as .catch(): if the API is missing or the arguments are
-  // rejected, create() throws synchronously and a promise catch never sees it —
-  // which is how this managed to fail without saying anything at all.
+/** Last resort, and known to be unreliable. Never the only signal. */
+function osNotification(kind) {
+  if (!browser.notifications?.create) return;
+  // try/catch as well as .catch(): create() can throw synchronously, which a
+  // promise catch never sees — which is how this managed to fail in silence.
   try {
     browser.notifications
       .create(CAPTURE_NOTICE, {
-      type: 'basic',
-      iconUrl: browser.runtime.getURL('ext/icons/64.png'),
-      title: isUpdate ? 'BENCpass — update password?' : 'BENCpass — save login?',
-        message: isUpdate
-          ? `The password for ${who} on ${host} has changed. Open BENCpass to update it.`
-          : `Save ${who} for ${host}? Open BENCpass to keep it.`,
+        type: 'basic',
+        iconUrl: browser.runtime.getURL('ext/icons/64.png'),
+        title: kind === 'address' ? 'BENCpass — keep this address?' : 'BENCpass — save login?',
+        message: 'Open BENCpass to keep it.',
       })
-      .then(() => console.info('BENCpass: save notification shown'))
-      .catch((err) => {
-        // Windows can refuse these outright — the OS notification setting for
-        // the browser, or Focus Assist — and the refusal is silent, which is
-        // indistinguishable from the code never having run.
-        console.warn('BENCpass: notification refused', err?.message ?? err);
-      });
-  } catch (err) {
-    console.warn('BENCpass: notification threw', err?.message ?? err);
+      .catch(() => {});
+  } catch {
+    /* nothing further to try */
   }
 }
 
-const clearCaptureNotice = () =>
-  browser.notifications.clear(CAPTURE_NOTICE).catch(() => {});
+/** Take the offer off screen, wherever it is showing. */
+function clearCaptureNotice(tabId) {
+  browser.notifications?.clear?.(CAPTURE_NOTICE)?.catch?.(() => {});
+  if (tabId === undefined) return;
+  browser.tabs.sendMessage(tabId, { type: MSG.NOTICE, noticeId: null }).catch(() => {});
+}
 
 browser.notifications.onClicked.addListener(async () => {
   try {

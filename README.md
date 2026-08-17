@@ -45,7 +45,7 @@ test/         Node tests, including integration tests against the real server
 ## Running things
 
 ```sh
-npm install && npm test     # 159 tests; the sync ones build and run the Go server
+npm install && npm test     # 169 tests; the sync ones build and run the Go server
 cd server && go test ./...  # 15 tests
 
 tools/selftest.sh           # drive the extension in a real browser, unattended

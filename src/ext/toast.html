@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>BENCpass</title>
+<link rel="stylesheet" href="toast.css">
+<div class="toast">
+  <img class="gon" src="icons/32.png" alt="" width="24" height="24">
+  <div class="body">
+    <p class="text" id="text">…</p>
+    <label class="name" id="name-row" hidden>
+      <span>Name</span>
+      <input type="text" id="name" placeholder="Home" autocomplete="off" maxlength="60">
+    </label>
+    <div class="actions">
+      <button class="btn primary" id="save">Save</button>
+      <button class="btn" id="dismiss">Not now</button>
+    </div>
+  </div>
+</div>
+<script type="module" src="toast.js"></script>

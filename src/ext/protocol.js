@@ -33,9 +33,11 @@ export const MSG = Object.freeze({
   FILL_TARGET: 'fill-target', // "put this in the element the menu was opened on"
   DISMISS: 'dismiss',
   LOCKSTATE: 'lockstate', // "the vault locked or unlocked; redraw"
+  NOTICE: 'notice', // "something is waiting to be saved; show the toast"
 
-  // popup -> background
+  // popup/toast -> background
   STATE: 'state',
+  NOTICE_STATE: 'notice-state', // "what should the toast in this tab say?"
   SAVE: 'save', // "keep the credentials I just submitted"
   DISCARD: 'discard',
   UNLOCK: 'unlock',
