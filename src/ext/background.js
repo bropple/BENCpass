@@ -25,6 +25,7 @@ let vault = null;
 let settings = { endpoint: '', deviceId: '', deviceKey: '', autolockMs: AUTOLOCK_MS, allowInsecure: false };
 let syncState = loadSyncState(null);
 let autolockTimer = null;
+let autolockAt = 0; // when the vault will shut, for anything that wants to show it
 
 /** Menus currently on screen, keyed by an unguessable id. */
 const sessions = new Map();
@@ -54,14 +55,21 @@ async function persistSettings() {
 
 function bumpAutolock() {
   clearTimeout(autolockTimer);
+  autolockAt = 0;
   if (!vault || vault.locked) return;
-  autolockTimer = setTimeout(() => lock(), settings.autolockMs ?? AUTOLOCK_MS);
+
+  // `||` rather than `??`: a stored 0 must not be taken literally and lock the
+  // vault on the next tick.
+  const after = settings.autolockMs || AUTOLOCK_MS;
+  autolockAt = Date.now() + after;
+  autolockTimer = setTimeout(() => lock(), after);
 }
 
 function lock() {
   vault?.lock();
   sessions.clear();
   clearTimeout(autolockTimer);
+  autolockAt = 0;
   paintBadge();
   broadcastLockState();
 }
@@ -474,6 +482,15 @@ const unlockReturns = new Map();
 
 async function handleUnlocked(sender) {
   if (!isExtensionPage(sender)) return { ok: false };
+
+  // A manager page unlocks the vault by calling into it directly rather than
+  // through handleUnlock, so none of the things that normally follow an unlock
+  // had happened: the timer had not started, the toolbar icon was still the
+  // locked one, and every anchor already drawn on a page was still red.
+  bumpAutolock();
+  paintBadge();
+  broadcastLockState();
+
   const managerTab = sender.tab?.id;
   if (managerTab === undefined || !unlockReturns.has(managerTab)) return { ok: true };
 
@@ -752,6 +769,15 @@ window.bencpass = {
     vault = v;
     bumpAutolock();
   },
+  // Auto-lock lives here and only here. Every manager page — the tab, the
+  // sidebar, and any other copy open at the time — shares this one vault, so a
+  // timer per page meant the earliest of them decided for all of them. A page
+  // sitting on the gate had never started its clock, so the moment the vault
+  // opened anywhere it read as overdue and shut it again within the second.
+  get autolockAt() {
+    return autolockAt;
+  },
+  bump: bumpAutolock,
   get settings() {
     return settings;
   },

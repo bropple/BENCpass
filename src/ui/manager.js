@@ -43,6 +43,10 @@ async function makeVaultHost() {
       get vault() {
         return bg.bencpass.vault;
       },
+      get autolockAt() {
+        return bg.bencpass.autolockAt;
+      },
+      bump: () => bg.bencpass.bump(),
       setVault: (v) => bg.bencpass.setVault(v),
       persist: () => bg.bencpass.persistVault(),
       sync: () => bg.bencpass.sync(),
@@ -58,6 +62,12 @@ async function makeVaultHost() {
     shared: false,
     get vault() {
       return local;
+    },
+    get autolockAt() {
+      return localAutolockAt;
+    },
+    bump: () => {
+      localAutolockAt = Date.now() + AUTOLOCK_MS;
     },
     setVault: (v) => {
       local = v;
@@ -86,18 +96,29 @@ const CLIPBOARD_MS = 30 * 1000;
 // on a screen someone has walked away from.
 const REVEAL_MS = 30 * 1000;
 
-let autolockAt = 0;
+let localAutolockAt = 0; // only used when this page owns the vault
 let clipboardTimer = null;
 let revealTimer = null;
 
-function bumpAutolock() {
-  autolockAt = Date.now() + AUTOLOCK_MS;
-}
+const bumpAutolock = () => vaultHost?.bump();
 
+// Displays the countdown; only locks when this page is the vault's owner.
+//
+// Inside the extension the background owns both the vault and the timer, and
+// this page must not run one of its own — every manager page shares that one
+// vault, so the earliest timer among them decided for all of them, and a page
+// left sitting on the gate had never started its clock at all.
 setInterval(() => {
-  if (!state.vault || state.vault.locked) return;
-  const left = autolockAt - Date.now();
-  if (left <= 0) return lock('Auto-locked.');
+  if (!vaultHost || !state.vault || state.vault.locked) return;
+
+  const at = vaultHost.autolockAt;
+  if (!at) return;
+
+  const left = at - Date.now();
+  if (left <= 0) {
+    if (!vaultHost.shared) lock('Auto-locked.');
+    return;
+  }
   $('foot-lock').textContent = `auto-lock in ${Math.ceil(left / 60000)}m`;
 }, 1000);
 
