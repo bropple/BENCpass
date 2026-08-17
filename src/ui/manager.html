@@ -255,11 +255,25 @@
         <div class="setting-text">
           <span class="setting-name">Server</span>
           <span class="setting-note">
-            https, or plain http to a private address — a LAN name cannot hold a
-            certificate.
+            Tried first. https, or plain http to a private address — a LAN name
+            cannot hold a certificate.
           </span>
         </div>
         <input type="text" id="s-endpoint" class="setting-input wide"
+               placeholder="http://192.168.1.20:8788">
+      </label>
+
+      <label class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Also reachable at</span>
+          <span class="setting-note">
+            The <em>same</em> server by another route — a Tailscale name for when
+            you are not at home. Used only when the first cannot be reached at
+            all; a server that answers with a refusal is not retried here.
+            Two <em>different</em> servers would be two vaults taking turns.
+          </span>
+        </div>
+        <input type="text" id="s-fallback" class="setting-input wide"
                placeholder="https://bencpass.your-tailnet.ts.net">
       </label>
 

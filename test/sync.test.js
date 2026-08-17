@@ -308,3 +308,113 @@ test('pointing a vault at a server holding a different one says so', { ...skip }
     (err) => err.code === 'key-mismatch',
   );
 });
+
+// ---- one server, two addresses ---------------------------------------------
+//
+// A LAN address at home and a Tailscale name from anywhere. The distinction
+// that matters is between "nothing answered" and "the server said no": only the
+// first is a reason to try the other route.
+
+const stubFetch = (behaviour) => {
+  const seen = [];
+  const f = async (url, init) => {
+    seen.push(url);
+    const outcome = behaviour(url);
+    if (outcome instanceof Error) throw outcome;
+    return outcome;
+  };
+  f.seen = seen;
+  return f;
+};
+
+const okResponse = (body = {}) => ({
+  ok: true,
+  status: 200,
+  json: async () => body,
+});
+
+test('the second address is used when the first cannot be reached', async () => {
+  const fetch = stubFetch((url) =>
+    url.startsWith('http://lan') ? new TypeError('NetworkError') : okResponse({ changes: [] }),
+  );
+  const client = new SyncClient({
+    endpoints: ['http://lan:8788', 'https://tail.ts.net'],
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+  });
+
+  const { status } = await client.request('GET', '/v1/changes?since=0');
+  assert.equal(status, 200);
+  assert.equal(fetch.seen.length, 2);
+  assert.ok(fetch.seen[1].startsWith('https://tail.ts.net'));
+});
+
+test('the address that answered is remembered, so the dead one is not retried', async () => {
+  const fetch = stubFetch((url) =>
+    url.startsWith('http://lan') ? new TypeError('NetworkError') : okResponse({ changes: [] }),
+  );
+  const client = new SyncClient({
+    endpoints: ['http://lan:8788', 'https://tail.ts.net'],
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+  });
+
+  await client.request('GET', '/v1/changes?since=0');
+  await client.request('GET', '/v1/changes?since=0');
+
+  // Three requests, not four: the first call tried both, the second went
+  // straight to the one that worked.
+  assert.equal(fetch.seen.length, 3);
+  assert.equal(client.endpoint, 'https://tail.ts.net');
+});
+
+test('a refusal is not a reason to try the other address', async () => {
+  // The same server by another name will refuse in exactly the same way, so
+  // retrying only doubles the noise — and, on a 401, the log lines.
+  const fetch = stubFetch(() => ({ ok: false, status: 401, json: async () => ({}) }));
+  const client = new SyncClient({
+    endpoints: ['http://lan:8788', 'https://tail.ts.net'],
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+  });
+
+  const { status } = await client.request('GET', '/v1/changes?since=0');
+  assert.equal(status, 401);
+  assert.equal(fetch.seen.length, 1);
+});
+
+test('when no address answers, the error names every one that was tried', async () => {
+  const fetch = stubFetch(() => new TypeError('NetworkError'));
+  const client = new SyncClient({
+    endpoints: ['http://lan:8788', 'https://tail.ts.net'],
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+  });
+
+  await assert.rejects(() => client.request('GET', '/v1/changes?since=0'), (err) => {
+    assert.equal(err.code, 'unreachable');
+    assert.match(err.message, /lan:8788/);
+    assert.match(err.message, /tail\.ts\.net/);
+    return true;
+  });
+});
+
+test('one address still works, and a trailing slash is not a second server', async () => {
+  const fetch = stubFetch(() => okResponse({ changes: [] }));
+  const client = new SyncClient({
+    endpoint: 'https://tail.ts.net/',
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+  });
+  await client.request('GET', '/v1/changes?since=0');
+  assert.equal(fetch.seen[0], 'https://tail.ts.net/v1/changes?since=0');
+});
+
+test('a client with no address at all refuses to be built', () => {
+  assert.throws(() => new SyncClient({ endpoints: ['', null], deviceId: 'd', key: new Uint8Array(32) }));
+});

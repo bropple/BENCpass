@@ -49,27 +49,83 @@ async function hmacB64(keyBytes, message) {
 
 export class SyncClient {
   /**
-   * @param {string} endpoint  e.g. https://box.tailnet.ts.net:8788
-   * @param {string} deviceId  issued at enrolment
-   * @param {Uint8Array} key   the device's HMAC key
+   * @param {string}   endpoint   e.g. https://box.tailnet.ts.net:8788
+   * @param {string[]} endpoints  the same server by more than one route
+   * @param {string}   deviceId   issued at enrolment
+   * @param {Uint8Array} key      the device's HMAC key
+   *
+   * More than one address is for one server reached two ways — a LAN address
+   * at home and a Tailscale name from anywhere — and they must be the same
+   * server. Two different servers here would be two different vaults taking
+   * turns, and the merge would treat every switch as an enormous conflict.
    */
-  constructor({ endpoint, deviceId, key, fetch: f = globalThis.fetch }) {
-    this.endpoint = endpoint.replace(/\/$/, '');
+  constructor({ endpoint, endpoints, deviceId, key, fetch: f = globalThis.fetch }) {
+    const strip = (e) => String(e).replace(/\/+$/, '');
+    this.endpoints = (endpoints ?? [endpoint]).filter(Boolean).map(strip);
+    if (!this.endpoints.length) throw new SyncError('no endpoint configured', 'config');
     this.deviceId = deviceId;
     this.key = key;
     this.fetch = f;
+    // Which address answered last. Tried first next time, so the common case
+    // is one request to one address rather than a failure and a retry.
+    this.preferred = 0;
+  }
+
+  /** The address currently believed to work. */
+  get endpoint() {
+    return this.endpoints[this.preferred];
+  }
+
+  /**
+   * Try each address until one answers at the transport level.
+   *
+   * A refusal is not a reason to try elsewhere. If the server answers 401, the
+   * same server on its other address answers 401 too, and retrying only doubles
+   * the noise — so only a thrown fetch, meaning nothing was reachable, moves on
+   * to the next address.
+   */
+  async #reach(path, init) {
+    const order = [
+      ...this.endpoints.slice(this.preferred),
+      ...this.endpoints.slice(0, this.preferred),
+    ];
+    const failures = [];
+
+    for (const base of order) {
+      try {
+        const resp = await this.fetch(base + path, init);
+        this.preferred = this.endpoints.indexOf(base);
+        return resp;
+      } catch (err) {
+        failures.push(`${base}: ${err?.message ?? err}`);
+      }
+    }
+    throw new SyncError(`no route to the server — ${failures.join('; ')}`, 'unreachable');
   }
 
   /**
    * Redeem a one-time enrolment code. Unauthenticated by necessity — this is
    * where a device acquires the credential everything else is signed with.
    */
-  static async enrol({ endpoint, code, name, fetch: f = globalThis.fetch }) {
-    const resp = await f(`${endpoint.replace(/\/$/, '')}/v1/enrol`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, name }),
-    });
+  static async enrol({ endpoint, endpoints, code, name, fetch: f = globalThis.fetch }) {
+    // The same failover as any other request: a device enrolling from the sofa
+    // should not have to be told which of its two addresses is reachable today.
+    const bases = (endpoints ?? [endpoint]).filter(Boolean).map((e) => String(e).replace(/\/+$/, ''));
+    let resp = null;
+    const failures = [];
+    for (const base of bases) {
+      try {
+        resp = await f(`${base}/v1/enrol`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, name }),
+        });
+        break;
+      } catch (err) {
+        failures.push(`${base}: ${err?.message ?? err}`);
+      }
+    }
+    if (!resp) throw new SyncError(`no route to the server — ${failures.join('; ')}`, 'unreachable');
     if (!resp.ok) throw new SyncError('enrolment refused: unknown or expired code', 'enrol');
     const out = await resp.json();
     return { deviceId: out.deviceId, key: fromB64(out.key) };
@@ -82,7 +138,7 @@ export class SyncClient {
     const ts = String(Date.now());
     const sig = await hmacB64(this.key, canonical(method, path, ts, await sha256Hex(raw)));
 
-    const resp = await this.fetch(this.endpoint + path, {
+    const resp = await this.#reach(path, {
       method,
       headers: {
         'Content-Type': 'application/json',

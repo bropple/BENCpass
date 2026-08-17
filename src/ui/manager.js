@@ -789,11 +789,15 @@ async function loadSettings() {
 
   $('s-autolock').value = s.autolockMinutes;
   $('s-endpoint').value = s.endpoint;
+  $('s-fallback').value = s.fallbackEndpoint ?? '';
   $('s-insecure').checked = s.allowInsecure;
   $('s-enrol-note').textContent = s.enrolled
     ? `This machine is enrolled as ${s.deviceId}. Pasting a new code replaces it.`
     : 'Paste the code the server printed when it started.';
-  $('s-sync-note').textContent = s.endpoint ? ago(s.lastSync) : 'No server set.';
+  // Which address answered is worth saying: it is the difference between "the
+  // LAN is fine" and "the LAN is down and you have not noticed".
+  const via = s.lastSyncVia ? ` via ${s.lastSyncVia}` : '';
+  $('s-sync-note').textContent = s.endpoint ? ago(s.lastSync) + via : 'No server set.';
 
   const about = $('s-about');
   about.replaceChildren();
@@ -817,6 +821,7 @@ async function saveSetting(patch) {
     'bad-endpoint': 'That is not a URL.',
     'insecure-endpoint':
       'Plain http is only allowed to a private address. Use https, or a LAN or Tailscale name.',
+    unreachable: 'Neither address answered.',
     'bad-autolock': 'Between 1 minute and 24 hours.',
     'bad-enrolment': 'An enrolment code looks like `device-id:key`.',
   };
@@ -839,6 +844,9 @@ $('s-autolock').addEventListener('change', () =>
   saveSetting({ autolockMinutes: Number($('s-autolock').value) }),
 );
 $('s-endpoint').addEventListener('change', () => saveSetting({ endpoint: $('s-endpoint').value }));
+$('s-fallback').addEventListener('change', () =>
+  saveSetting({ fallbackEndpoint: $('s-fallback').value }),
+);
 $('s-insecure').addEventListener('change', () =>
   saveSetting({ allowInsecure: $('s-insecure').checked }),
 );
@@ -860,8 +868,12 @@ $('s-sync-btn').addEventListener('click', async () => {
     $('s-sync-note').textContent = `Synced.${conflicts}`;
     render();
   } else {
+    // The message carries which addresses were tried and what each said, which
+    // is the whole point of having two of them.
     $('s-sync-note').textContent =
-      reply?.reason === 'not-configured' ? 'No server set.' : `Failed: ${reply?.reason ?? 'error'}`;
+      reply?.reason === 'not-configured'
+        ? 'No server set.'
+        : `Failed: ${reply?.message ?? reply?.reason ?? 'error'}`;
   }
 });
 

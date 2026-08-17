@@ -139,7 +139,9 @@ globalThis.browser = {
       if (msg.type === 'bio-state') return BIO[q.get('bio')] ?? BIO.absent;
       if (msg.type === 'settings-get') {
         return {
-          endpoint: q.has('nosync') ? '' : 'https://bencpass.example.ts.net',
+          endpoint: q.has('nosync') ? '' : 'http://192.168.1.20:8788',
+          fallbackEndpoint: q.has('nosync') ? '' : 'https://bencpass.example.ts.net',
+          lastSyncVia: q.has('nosync') ? '' : 'http://192.168.1.20:8788',
           autolockMinutes: 15,
           allowInsecure: false,
           deviceId: q.has('nosync') ? '' : 'workshop-mac',

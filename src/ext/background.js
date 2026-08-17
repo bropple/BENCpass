@@ -40,7 +40,8 @@ const settingsStore = { key: 'bencpass.settings' };
 
 let vault = null;
 let settings = {
-  endpoint: '',
+  endpoint: '', // the address tried first, usually the LAN one
+  fallbackEndpoint: '', // the same server by another route, usually Tailscale
   deviceId: '',
   deviceKey: '',
   autolockMs: AUTOLOCK_MS,
@@ -51,6 +52,7 @@ let syncState = loadSyncState(null);
 let autolockTimer = null;
 let autolockAt = 0; // when the vault will shut, for anything that wants to show it
 let lastSyncAt = 0; // when a sync last succeeded, for the settings panel
+let lastSyncVia = ''; // which of the server's addresses answered
 
 /** Menus currently on screen, keyed by an unguessable id. */
 const sessions = new Map();
@@ -862,6 +864,8 @@ const MAX_AUTOLOCK_MS = 24 * 60 * 60 * 1000;
 async function handleSettingsGet() {
   return {
     endpoint: settings.endpoint,
+    fallbackEndpoint: settings.fallbackEndpoint,
+    lastSyncVia,
     autolockMinutes: Math.round((settings.autolockMs || AUTOLOCK_MS) / 60000),
     allowInsecure: Boolean(settings.allowInsecure),
     // Enough to say "this machine is enrolled with the server" and no more.
@@ -873,26 +877,39 @@ async function handleSettingsGet() {
   };
 }
 
+/**
+ * An address for the sync server, or a reason it will not do.
+ *
+ * The same rule the fill code applies to a page: plaintext is allowed to a
+ * private host, because a LAN address cannot hold a public certificate, and
+ * refused to anything else however convenient.
+ */
+function checkEndpoint(raw) {
+  const endpoint = asString(raw, 512).trim().replace(/\/+$/, '');
+  if (!endpoint) return { ok: true, endpoint: '' };
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return { ok: false, reason: 'bad-endpoint' };
+  }
+  if (url.protocol !== 'https:' && !isPrivateHost(url.hostname)) {
+    return { ok: false, reason: 'insecure-endpoint' };
+  }
+  return { ok: true, endpoint };
+}
+
 async function handleSettingsSet(msg) {
   const patch = {};
 
-  if (typeof msg.endpoint === 'string') {
-    const endpoint = asString(msg.endpoint, 512).trim().replace(/\/+$/, '');
-    if (endpoint) {
-      let url;
-      try {
-        url = new URL(endpoint);
-      } catch {
-        return { ok: false, reason: 'bad-endpoint' };
-      }
-      // The same rule the fill code applies to a page: plaintext is allowed to
-      // a private host, because a LAN address cannot get a public certificate,
-      // and refused to anything else however convenient.
-      if (url.protocol !== 'https:' && !isPrivateHost(url.hostname)) {
-        return { ok: false, reason: 'insecure-endpoint' };
-      }
-    }
-    patch.endpoint = endpoint;
+  for (const [field, key] of [
+    ['endpoint', 'endpoint'],
+    ['fallbackEndpoint', 'fallbackEndpoint'],
+  ]) {
+    if (typeof msg[field] !== 'string') continue;
+    const checked = checkEndpoint(msg[field]);
+    if (!checked.ok) return { ok: false, reason: checked.reason, field };
+    patch[key] = checked.endpoint;
   }
 
   if (msg.autolockMinutes !== undefined) {
@@ -1215,7 +1232,9 @@ async function handleSearch(msg, sender) {
 function client() {
   if (!settings.endpoint || !settings.deviceId || !settings.deviceKey) return null;
   return new SyncClient({
-    endpoint: settings.endpoint,
+    // Both routes to the one server, in the order to try them. The client
+    // remembers which answered, so the usual case is a single request.
+    endpoints: [settings.endpoint, settings.fallbackEndpoint],
     deviceId: settings.deviceId,
     key: Uint8Array.from(atob(settings.deviceKey), (c) => c.charCodeAt(0)),
   });
@@ -1227,6 +1246,7 @@ async function handleSync() {
   try {
     const result = await syncOnce(vault, c, syncState);
     lastSyncAt = Date.now();
+    lastSyncVia = c.endpoint;
     await persistVault();
     await persistSettings();
     return { ok: true, ...result, conflicts: result.conflicts.length };
