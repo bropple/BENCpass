@@ -222,6 +222,8 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleClose(msg, sender);
     case MSG.OPEN_MANAGER:
       return handleOpenManager(msg, sender);
+    case MSG.UNLOCKED:
+      return handleUnlocked(sender);
     default:
       return;
   }
@@ -449,24 +451,6 @@ async function chooseForActiveTab(recordId) {
 async function handleOpenManager(msg, sender) {
   if (!isExtensionPage(sender)) return { ok: false };
 
-  // The overlay cannot log anywhere useful, so it reports here instead.
-  console.info('BENCpass: sidebar from the overlay ->', asString(msg?.sidebar, 200));
-
-  if (msg?.needsTab === false) return { ok: true, via: 'sidebar' };
-
-  // One more attempt from this side before giving up on it. Opening a sidebar
-  // wants a user gesture and the background has none, so this usually refuses —
-  // but it costs nothing and Firefox has changed its mind about this before.
-  try {
-    if (browser.sidebarAction?.open) {
-      await browser.sidebarAction.open();
-      console.info('BENCpass: sidebar opened from the background');
-      return { ok: true, via: 'sidebar' };
-    }
-  } catch (err) {
-    console.info('BENCpass: sidebar refused from the background too —', err?.message ?? err);
-  }
-
   const url = browser.runtime.getURL('ui/manager.html');
 
   // Reuse a manager tab if one is already open, rather than stacking them up.
@@ -477,8 +461,29 @@ async function handleOpenManager(msg, sender) {
     return { ok: true };
   }
 
-  await browser.tabs.create({ url });
+  const tab = await browser.tabs.create({ url });
+  // Remember where this came from. Sending someone to another tab to type a
+  // password and leaving them there is most of why a sidebar was wanted in the
+  // first place; the tab closes itself once the vault opens.
+  if (sender.tab?.id !== undefined) unlockReturns.set(tab.id, sender.tab.id);
   return { ok: true, via: 'tab' };
+}
+
+/** Manager tabs opened purely to unlock, and the tab to return to after. */
+const unlockReturns = new Map();
+
+async function handleUnlocked(sender) {
+  if (!isExtensionPage(sender)) return { ok: false };
+  const managerTab = sender.tab?.id;
+  if (managerTab === undefined || !unlockReturns.has(managerTab)) return { ok: true };
+
+  const returnTo = unlockReturns.get(managerTab);
+  unlockReturns.delete(managerTab);
+
+  // Back to the page the person was actually on, then close the detour.
+  await browser.tabs.update(returnTo, { active: true }).catch(() => {});
+  await browser.tabs.remove(managerTab).catch(() => {});
+  return { ok: true, returned: true };
 }
 
 async function handleClose(msg, sender) {
@@ -727,6 +732,7 @@ function scheduleSync() {
 
 browser.tabs.onRemoved.addListener((tabId) => {
   pendingCaptures.delete(tabId);
+  unlockReturns.delete(tabId);
   paintBadge();
 });
 

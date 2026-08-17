@@ -187,6 +187,14 @@ $('gate-form').addEventListener('submit', async (e) => {
 });
 
 function enterApp() {
+  // Tell the background the vault is open. If this page was opened purely to
+  // unlock — from the menu on a login form — it closes itself and puts the
+  // person back where they were, rather than stranding them in a tab they did
+  // not ask for.
+  if (vaultHost?.shared) {
+    globalThis.browser?.runtime?.sendMessage({ type: 'unlocked' }).catch(() => {});
+  }
+
   $('visor').setAttribute('fill', 'var(--good)');
   $('gate').hidden = true;
   $('app').hidden = false;

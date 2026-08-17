@@ -21,6 +21,7 @@ export const MSG = Object.freeze({
   // overlay/popup -> background
   SESSION: 'session', // "what is in the menu for this session?"
   OPEN_MANAGER: 'open-manager', // "put the manager somewhere I can see it"
+  UNLOCKED: 'unlocked', // "the manager just unlocked the vault"
   CHOOSE: 'choose', // "the user picked this entry"
   GENERATE: 'generate', // "make a password for this field"
   CLOSE: 'close',

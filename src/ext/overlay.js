@@ -65,42 +65,25 @@ async function render() {
     list.append(
       row({
         title: 'Unlock BENCpass',
-        sub: 'Opens the manager in a tab',
+        sub: 'Opens the manager, and comes back here',
         className: 'gen',
         onPick: async () => {
-          // Two tiers, because the obvious calls here can fail without saying
-          // so. browserAction.openPopup() has no button to hang off when the
-          // chrome is hidden, which Zen's compact mode does by default; it
-          // resolves and shows nothing, so not even a catch can tell.
+          // A tab, and deliberately not the sidebar or the toolbar popup.
+          // Both were tried and both are closed to this document:
           //
-          // The sidebar is tried first because it keeps the page in view. If it
-          // refuses — opening it needs a user gesture, and a click inside a
-          // frame embedded in a page may not count as one — the background
-          // opens a tab, which needs no gesture and cannot quietly do nothing.
+          //   sidebarAction        not exposed to an extension page framed
+          //                        inside a web page — the API is simply absent
+          //   sidebarAction, from  "may only be called from a user input
+          //   the background       handler", and a message handler has none
+          //   browserAction        no button to anchor to when the chrome is
+          //   .openPopup()         hidden; resolves and shows nothing
+          //
+          // No context has both the API and a gesture, so the tab is not a
+          // fallback here, it is the answer. The background closes it again
+          // once the vault opens and returns to this page.
           //
           // Still not a password box in the page: see the note above.
-          //
-          // The outcome is reported to the background rather than logged here.
-          // This document is framed inside a web page, so its console output
-          // goes to that page's devtools, not to the extension's own inspector
-          // — which is where anyone debugging this will be looking, and why the
-          // last attempt appeared to fail in total silence.
-          let sidebar = 'unavailable';
-          try {
-            if (browser.sidebarAction?.open) {
-              await browser.sidebarAction.open();
-              sidebar = 'opened';
-            }
-          } catch (err) {
-            sidebar = `refused: ${err?.message ?? err}`;
-          }
-
-          await browser.runtime.sendMessage({
-            type: MSG.OPEN_MANAGER,
-            sidebar,
-            // Only fall through to a tab if the sidebar did not open.
-            needsTab: sidebar !== 'opened',
-          });
+          await browser.runtime.sendMessage({ type: MSG.OPEN_MANAGER });
         },
       }),
     );
