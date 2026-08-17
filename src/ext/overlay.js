@@ -78,38 +78,28 @@ async function render() {
           //   browserAction        no button to anchor to when the chrome is
           //   .openPopup()         hidden; resolves and shows nothing
           //
-          // No context has both the API and a gesture — from here. A keyboard
-          // command does have one, and Firefox reserves the command name
-          // `_execute_sidebar_action` for exactly this, opening the sidebar
-          // itself with no API call to refuse. That is in the manifest, bound
-          // to Alt+Shift+B, and is the way to get a sidebar rather than a tab.
+          // A tab, and not for want of trying anything nicer. Measured, not
+          // assumed:
           //
-          // This row cannot press it for you, so it opens the manager. The
-          // background closes that tab again once the vault opens and returns
-          // to this page.
+          //   sidebarAction, here          absent — the API is not exposed to
+          //                                an extension page framed in a web page
+          //   browserAction, here          absent, for the same reason
+          //   sidebarAction, background    "may only be called from a user
+          //                                input handler"
+          //
+          // So the page-to-chrome boundary is closed in both directions: this
+          // document has no chrome APIs, and the contexts that do have no
+          // gesture. No click originating in a page can open a sidebar or a
+          // popup, and that is a Firefox boundary rather than a missing trick.
+          //
+          // What does work is a keyboard command, because Firefox handles the
+          // keypress itself: `_execute_sidebar_action` is bound to Alt+Shift+B
+          // in the manifest. This row cannot press a key on anyone's behalf, so
+          // it opens the manager — and the background closes that tab again the
+          // moment the vault opens, returning to this page.
           //
           // Still not a password box in the page: see the note above.
-          // One thing not yet actually measured: whether this document even
-          // has browserAction. sidebarAction turned out to be absent here
-          // rather than merely refusing, and the two were never told apart for
-          // openPopup — it was assumed to be failing for want of a toolbar to
-          // anchor to. If the popup does open, it is the better landing: it
-          // unlocks in place and carries its own Sidebar button.
-          let popup = 'unavailable';
-          try {
-            if (browser.browserAction?.openPopup) {
-              await browser.browserAction.openPopup();
-              popup = 'opened';
-            }
-          } catch (err) {
-            popup = `refused: ${err?.message ?? err}`;
-          }
-
-          await browser.runtime.sendMessage({
-            type: MSG.OPEN_MANAGER,
-            popup,
-            needsTab: popup !== 'opened',
-          });
+          await browser.runtime.sendMessage({ type: MSG.OPEN_MANAGER });
         },
       }),
     );

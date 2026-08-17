@@ -396,6 +396,29 @@ it. The id is now handed over by `postMessage` to the frame's cross-origin
 `contentWindow`, which the page cannot listen to, and `web_accessible_resources`
 is narrowed to `overlay.html` alone.
 
+### What a page-embedded extension frame cannot do
+
+Measured against Firefox, not assumed, after three attempts to be cleverer:
+
+| from | result |
+|---|---|
+| `sidebarAction` in the overlay | **absent** — not exposed to an extension page framed in a web page |
+| `browserAction` in the overlay | **absent**, for the same reason |
+| `sidebarAction.open()` in the background | *"may only be called from a user input handler"* |
+| `browserAction.openPopup()` with hidden chrome | resolves and shows nothing |
+
+The boundary is closed in both directions: the document that receives the click
+has no chrome APIs, and the contexts that have them have no user gesture. **No
+click originating in a page can open a sidebar or a popup.**
+
+What does work is a keyboard command, because Firefox handles the keypress
+itself rather than handing it to an extension: `_execute_sidebar_action`, bound
+to `Alt+Shift+B`. That is why the sidebar has a shortcut and not a button.
+
+The in-page unlock row therefore opens the manager in a tab — and the background
+closes that tab and returns to the originating page as soon as the vault opens,
+so the detour does not have to be tidied up by hand.
+
 ### Autofill — the largest and least glamorous part
 
 Two rules that are not negotiable:

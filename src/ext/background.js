@@ -448,13 +448,8 @@ async function chooseForActiveTab(recordId) {
  * how both openPopup() and openOptionsPage() managed to fail silently from an
  * overlay frame.
  */
-async function handleOpenManager(msg, sender) {
+async function handleOpenManager(_msg, sender) {
   if (!isExtensionPage(sender)) return { ok: false };
-
-  // The overlay reports here because its own console output goes to the page's
-  // devtools, not the extension's inspector.
-  console.info('BENCpass: popup from the overlay ->', asString(msg?.popup, 200));
-  if (msg?.needsTab === false) return { ok: true, via: 'popup' };
 
   const url = browser.runtime.getURL('ui/manager.html');
 
