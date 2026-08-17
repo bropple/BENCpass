@@ -67,10 +67,23 @@ function lock() {
 
 // Locking when the screen locks or the machine sleeps is the case an idle timer
 // misses, and it is the one that matters on a laptop lid.
-browser.idle.setDetectionInterval(60);
-browser.idle.onStateChanged.addListener((state) => {
-  if (state === 'locked') lock();
-});
+//
+// Guarded, and not merely for tidiness: this used to run unguarded at module
+// top level, and `browser.idle` is undefined without the `idle` permission —
+// which was missing. The TypeError killed the whole background page before the
+// message listener below was ever registered, so the popup came up blank, no
+// field ever got an anchor, and the manager quietly fell back to a second
+// vault. One missing permission, and every symptom pointed somewhere else.
+//
+// Nothing optional runs unguarded at load time here any more.
+try {
+  browser.idle.setDetectionInterval(60);
+  browser.idle.onStateChanged.addListener((state) => {
+    if (state === 'locked') lock();
+  });
+} catch (err) {
+  console.warn('BENCpass: idle detection unavailable, falling back to the timer alone', err);
+}
 
 function paintBadge() {
   const pending = pendingCaptures.size > 0;

@@ -12,8 +12,20 @@ const send = (msg) => browser.runtime.sendMessage(msg);
 let state = null;
 
 async function refresh() {
-  state = await send({ type: MSG.STATE });
+  try {
+    state = await send({ type: MSG.STATE });
+  } catch (err) {
+    // Almost always the background page having failed to load. Both panels
+    // start hidden, so without this the popup is an empty rectangle that says
+    // nothing about what went wrong or where to look.
+    $('fatal').textContent =
+      'BENCpass background page is not responding. Open about:debugging -> This Firefox -> BENCpass -> Inspect to see why.';
+    $('fatal').hidden = false;
+    return;
+  }
+  if (!state) return;
 
+  $('fatal').hidden = true;
   $('locked').hidden = !state.locked;
   $('unlocked').hidden = state.locked;
   $('no-vault').hidden = state.hasVault;

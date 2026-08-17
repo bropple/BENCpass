@@ -29,6 +29,7 @@ input:focus { outline: none; border-color: var(--accent); }
 #locked form { text-align: left; margin-top: 12px; }
 #locked .btn { width: 100%; margin-top: 8px; }
 .error { color: var(--bad); margin: 8px 0 0; }
+.fatal { color: var(--bad); padding: 14px; margin: 0; }
 .note { color: var(--dim); margin-top: 12px; }
 
 .bar { display: flex; align-items: center; gap: 6px; padding: 7px 10px;

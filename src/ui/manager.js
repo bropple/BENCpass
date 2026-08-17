@@ -23,7 +23,20 @@ const $ = (id) => document.getElementById(id);
 let vaultHost = null;
 
 async function makeVaultHost() {
+  const inExtension = Boolean(globalThis.browser?.runtime?.id);
   const bg = await globalThis.browser?.runtime?.getBackgroundPage?.().catch(() => null);
+
+  // Inside the extension the background page is the only legitimate owner of a
+  // vault. Falling back to a local one here is not a graceful degradation, it
+  // is a second vault with its own key and its own lock — and it is what turned
+  // a dead background page into a page calmly offering to create a new vault.
+  if (inExtension && !bg?.bencpass) {
+    throw new Error(
+      'The BENCpass background page is not running, so the vault cannot be reached. ' +
+        'Open about:debugging -> This Firefox -> BENCpass -> Inspect to see why.',
+    );
+  }
+
   if (bg?.bencpass) {
     return {
       shared: true,
@@ -91,7 +104,15 @@ setInterval(() => {
 // ---- boot ------------------------------------------------------------------
 
 async function boot() {
-  vaultHost = await makeVaultHost();
+  try {
+    vaultHost = await makeVaultHost();
+  } catch (err) {
+    $('gate-hint').textContent = 'Not available.';
+    $('gate-error').textContent = err.message;
+    $('gate-error').hidden = false;
+    $('gate-form').hidden = true;
+    return;
+  }
   state.vault = vaultHost.vault;
 
   if (!state.vault) {

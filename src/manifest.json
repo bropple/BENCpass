@@ -25,6 +25,7 @@
   "permissions": [
     "storage",
     "tabs",
+    "idle",
     "nativeMessaging",
     "<all_urls>"
   ],
