@@ -22,3 +22,6 @@ server/data/
 
 # test browser profile, kept between runs
 .bencpass-profile/
+
+# self-test output
+/tmp/bencpass-selftest.json

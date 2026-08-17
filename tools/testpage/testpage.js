@@ -69,3 +69,11 @@ document.addEventListener('submit', (e) => {
   note.textContent = 'Submitted — BENCpass should now offer to save (badge on the toolbar icon).';
   e.target.append(note);
 });
+
+// Self-test mode, for driving the extension without a person. tools/selftest.sh
+if (location.search.includes('selftest')) {
+  const s = document.createElement('script');
+  s.src = 'selftest.js';
+  s.type = 'module';
+  document.body.append(s);
+}

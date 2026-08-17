@@ -11,7 +11,7 @@
 // accommodate the camera.
 
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 
 const root = process.argv[2] ?? process.cwd();
@@ -31,6 +31,17 @@ const TYPES = {
 
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+
+  // The self-test posts its findings here. A browser driven by web-ext cannot
+  // be screenshotted separately and cannot be clicked from outside, so the page
+  // reports its own results and this writes them where the shell can read them.
+  if (url.pathname === '/__result' && req.method === 'POST') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    await writeFile(process.env.RESULT_FILE ?? '/tmp/bencpass-selftest.json', body);
+    res.writeHead(204).end();
+    return;
+  }
 
   if (url.pathname === '/__hold') {
     const ms = Math.min(Number(url.searchParams.get('ms') ?? 1000), 30_000);

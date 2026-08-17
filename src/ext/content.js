@@ -66,9 +66,21 @@
     const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.display === 'none') return false;
     if (Number(style.opacity) === 0) return false;
-    // A 1x1 input parked off-screen is a honeypot, not a field a person fills.
     const r = el.getBoundingClientRect();
-    return r.width > 8 && r.height > 8;
+    if (r.width <= 8 || r.height <= 8) return false;
+
+    // Parked off-screen — `left: -9999px` and its cousins — is the standard way
+    // to hide a honeypot while keeping it technically rendered, and it defeats
+    // every check above: such a field still has client rects, a real size, full
+    // opacity and `display: block`. The self-test caught two anchors on exactly
+    // that.
+    //
+    // Only sideways and upward are rejected. Below the fold is where most of a
+    // long form legitimately lives.
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+    if (r.right <= 0 || r.bottom <= 0 || r.left >= viewportWidth) return false;
+
+    return true;
   }
 
   function labelFor(el) {
@@ -172,11 +184,16 @@
     // form left every login below the first one unmarked.
     const targets = new Map(); // element -> which menu it opens
     for (const g of groups) {
-      // Only when there is a current-password box to fill. In a sign-up group
-      // the username anchor offered the stored pool, and picking an entry wrote
-      // its password into the "choose a password" field — the exact thing the
-      // sign-up menu exists to prevent.
-      if (g.login.password !== null && g.login.password !== undefined) {
+      // A username box is anchored when there is a current password to go with
+      // it, or when this is the username half of a two-step sign-in — where
+      // filling the username alone is the whole point, and there is no password
+      // field for anything to land in.
+      //
+      // What is excluded is the sign-up group: its username anchor offered the
+      // stored pool, and picking an entry wrote that entry's password into the
+      // "choose a password" box.
+      const has = (i) => i !== null && i !== undefined;
+      if (has(g.login.password) || (g.usernameOnly && has(g.login.username))) {
         for (const i of [g.login.username, g.login.password]) {
           if (i === null || i === undefined) continue;
           const el = fields[i];

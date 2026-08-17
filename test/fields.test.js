@@ -300,3 +300,36 @@ test('a lone password box has no confirmation', () => {
   const r = classifyLoginFields(form({ name: 'user' }, { name: 'pw', type: 'password' }));
   assert.equal(r.confirmPassword, null);
 });
+
+test('a sign-up form is not also an address form', () => {
+  // Its email box is a username. Classifying it as an address field put an
+  // address anchor on the sign-up form, offering a delivery address where a
+  // password was being chosen.
+  const fields = [
+    { tag: 'input', type: 'email', name: 'email', index: 0, group: 1, visible: true },
+    { tag: 'input', type: 'password', name: 'password', index: 1, group: 1, visible: true },
+    { tag: 'input', type: 'password', name: 'confirm', index: 2, group: 1, visible: true },
+  ];
+  const [g] = classifyGroups(fields);
+  assert.deepEqual(g.address, []);
+  assert.equal(g.login.newPassword.name, 'password');
+});
+
+test('the username half of a two-step login is not an address form', () => {
+  const fields = [
+    { tag: 'input', type: 'email', name: 'loginfmt', index: 0, group: 1, visible: true },
+  ];
+  const [g] = classifyGroups(fields);
+  assert.equal(g.usernameOnly, true);
+  assert.deepEqual(g.address, []);
+});
+
+test('a real address form still classifies', () => {
+  const fields = [
+    { tag: 'input', type: 'text', name: 'street_address', index: 0, group: 1, visible: true },
+    { tag: 'input', type: 'text', name: 'city', index: 1, group: 1, visible: true },
+    { tag: 'input', type: 'email', name: 'email', index: 2, group: 1, visible: true },
+  ];
+  const [g] = classifyGroups(fields);
+  assert.deepEqual(g.address.map((a) => a.token), ['address-line1', 'address-level2', 'email']);
+});

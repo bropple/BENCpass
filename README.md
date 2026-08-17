@@ -47,6 +47,7 @@ test/         Node tests, including integration tests against the real server
 npm install && npm test     # 118 tests; the sync ones build and run the Go server
 cd server && go test ./...  # 15 tests
 
+tools/selftest.sh           # drive the extension in a real browser, unattended
 tools/run-extension.sh      # load into a test profile, open the form-shapes page
 tools/run-extension.sh fresh   # ...discarding the previous test vault
 tools\run-extension.ps1     # the same on Windows; -Fresh to discard
@@ -82,6 +83,18 @@ runs so the vault survives — recreating it every launch makes autofill
 essentially untestable. Updates are disabled inside it, because a second
 instance would otherwise stage an update to the shared installation and the
 browser you actually use would then demand a restart.
+
+### The self-test
+
+`tools/selftest.sh` starts a headless browser with the extension loaded and
+lets the test page drive it — page script and the content script share a DOM, so
+an event dispatched by one reaches the other's listeners. The page reports what
+it found back to the local server, and the script prints a pass/fail table.
+
+It covers what has actually regressed: which fields get an anchor, what those
+anchors look like, whether the menu opens and stays open, and that nothing is
+ever filled without a person choosing it. The vault stays locked throughout,
+since nothing can type a master password into the manager.
 
 ### `npm install` reports high-severity vulnerabilities
 

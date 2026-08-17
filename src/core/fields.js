@@ -208,12 +208,36 @@ export function classifyGroups(fields) {
     groups.get(key).push(f);
   }
 
-  return [...groups.entries()].map(([group, members]) => ({
-    group,
-    login: classifyLoginFields(members),
-    address: classifyAddressFields(members),
-    usernameOnly: isUsernameOnlyStep(members),
-  }));
+  return [...groups.entries()].map(([group, members]) => {
+    const login = classifyLoginFields(members);
+    const addressFields = classifyAddressFields(members);
+
+    // Street, city, region, postcode, company. Not email, phone or name — all
+    // three appear on sign-in and checkout alike and settle nothing.
+    const structural = addressFields.filter(
+      (a) => !['email', 'tel', 'name'].includes(a.token),
+    ).length;
+    const looksLikeAddress = structural >= 2;
+
+    // `isUsernameOnlyStep` alone is far too eager: any form with an email box
+    // and no password satisfies it, which includes essentially every checkout.
+    // Two structural address fields outrank it.
+    const usernameOnly = !looksLikeAddress && isUsernameOnlyStep(members);
+
+    // A group holding a password box, or one that is the username half of a
+    // two-step sign-in, is a credential form. Its email field is a username,
+    // not a contact detail for a delivery — which is what put an address anchor
+    // on the sign-up and two-step forms.
+    const isCredentialForm =
+      !looksLikeAddress && (members.some(isPasswordInput) || usernameOnly);
+
+    return {
+      group,
+      login,
+      address: isCredentialForm ? [] : addressFields,
+      usernameOnly,
+    };
+  });
 }
 
 /**
