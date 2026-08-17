@@ -79,13 +79,28 @@ async function render() {
           // opens a tab, which needs no gesture and cannot quietly do nothing.
           //
           // Still not a password box in the page: see the note above.
+          //
+          // The outcome is reported to the background rather than logged here.
+          // This document is framed inside a web page, so its console output
+          // goes to that page's devtools, not to the extension's own inspector
+          // — which is where anyone debugging this will be looking, and why the
+          // last attempt appeared to fail in total silence.
+          let sidebar = 'unavailable';
           try {
-            await browser.sidebarAction.open();
-            return;
+            if (browser.sidebarAction?.open) {
+              await browser.sidebarAction.open();
+              sidebar = 'opened';
+            }
           } catch (err) {
-            console.warn('BENCpass: sidebar refused, falling back to a tab', err);
+            sidebar = `refused: ${err?.message ?? err}`;
           }
-          await browser.runtime.sendMessage({ type: MSG.OPEN_MANAGER });
+
+          await browser.runtime.sendMessage({
+            type: MSG.OPEN_MANAGER,
+            sidebar,
+            // Only fall through to a tab if the sidebar did not open.
+            needsTab: sidebar !== 'opened',
+          });
         },
       }),
     );

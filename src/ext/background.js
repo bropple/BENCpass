@@ -221,7 +221,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     case MSG.CLOSE:
       return handleClose(msg, sender);
     case MSG.OPEN_MANAGER:
-      return handleOpenManager(sender);
+      return handleOpenManager(msg, sender);
     default:
       return;
   }
@@ -446,8 +446,27 @@ async function chooseForActiveTab(recordId) {
  * how both openPopup() and openOptionsPage() managed to fail silently from an
  * overlay frame.
  */
-async function handleOpenManager(sender) {
+async function handleOpenManager(msg, sender) {
   if (!isExtensionPage(sender)) return { ok: false };
+
+  // The overlay cannot log anywhere useful, so it reports here instead.
+  console.info('BENCpass: sidebar from the overlay ->', asString(msg?.sidebar, 200));
+
+  if (msg?.needsTab === false) return { ok: true, via: 'sidebar' };
+
+  // One more attempt from this side before giving up on it. Opening a sidebar
+  // wants a user gesture and the background has none, so this usually refuses —
+  // but it costs nothing and Firefox has changed its mind about this before.
+  try {
+    if (browser.sidebarAction?.open) {
+      await browser.sidebarAction.open();
+      console.info('BENCpass: sidebar opened from the background');
+      return { ok: true, via: 'sidebar' };
+    }
+  } catch (err) {
+    console.info('BENCpass: sidebar refused from the background too —', err?.message ?? err);
+  }
+
   const url = browser.runtime.getURL('ui/manager.html');
 
   // Reuse a manager tab if one is already open, rather than stacking them up.
@@ -459,7 +478,7 @@ async function handleOpenManager(sender) {
   }
 
   await browser.tabs.create({ url });
-  return { ok: true };
+  return { ok: true, via: 'tab' };
 }
 
 async function handleClose(msg, sender) {
