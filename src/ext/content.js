@@ -23,7 +23,20 @@
   };
 
   const MARK = 'data-bencpass';
+  const BOUND = 'data-bencpass-bound';
+
+  // Anchors are swept and rebuilt constantly; the overlay and the page's own
+  // fields must never be caught by that sweep. So the selector names the value
+  // rather than the attribute — a bare [data-bencpass] also matched the overlay
+  // iframe, which is why the menu deleted itself about a third of a second
+  // after opening, and would have matched the page's inputs too and removed
+  // them from the document.
+  const ANCHOR_SEL = `[${MARK}="anchor"]`;
   const OVERLAY_ID = 'bencpass-overlay-frame';
+
+  /** Anything this extension put in the page. */
+  const isOurs = (node) =>
+    Boolean(node && node.nodeType === 1 && node.closest(`[${MARK}], [${BOUND}]`));
 
   let fields = []; // live elements, index-aligned with the descriptors sent
   let roles = null; // what the background said they are
@@ -109,7 +122,7 @@
   // and waits would otherwise harvest a credential on load.
 
   function placeAnchors() {
-    document.querySelectorAll(`[${MARK}]`).forEach((el) => el.remove());
+    document.querySelectorAll(ANCHOR_SEL).forEach((el) => el.remove());
     if (!roles) return;
 
     const targets = new Set(
@@ -121,21 +134,69 @@
     for (const el of targets) attachAnchor(el);
   }
 
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  /**
+   * P. Gon, drawn rather than loaded.
+   *
+   * An <img> would need the icon in web_accessible_resources, which widens what
+   * a page can fingerprint the extension by. The shapes carry inline styles
+   * because the wrapper's `all: initial` resets `fill`, and fill inherits.
+   */
+  function gonMark() {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 200 200');
+    svg.setAttribute('width', '18');
+    svg.setAttribute('height', '18');
+
+    const body = document.createElementNS(SVG_NS, 'path');
+    body.setAttribute('d', 'M 100,16 L 179.89,74.04 L 149.37,167.96 L 50.63,167.96 L 20.11,74.04 Z');
+    body.setAttribute('style', 'fill:#3d7dbf;stroke:#254d75;stroke-width:8');
+
+    const visor = document.createElementNS(SVG_NS, 'rect');
+    visor.setAttribute('x', '53.8');
+    visor.setAttribute('y', '95.8');
+    visor.setAttribute('width', '92.4');
+    visor.setAttribute('height', '28.56');
+    visor.setAttribute('style', 'fill:#9a9d94');
+
+    const stripe = document.createElementNS(SVG_NS, 'rect');
+    stripe.setAttribute('x', '70.6');
+    stripe.setAttribute('y', '103.36');
+    stripe.setAttribute('width', '58.8');
+    stripe.setAttribute('height', '13.44');
+    stripe.setAttribute('style', 'fill:#78b946');
+
+    svg.append(body, visor, stripe);
+    return svg;
+  }
+
   function attachAnchor(el) {
     const dot = document.createElement('div');
     dot.setAttribute(MARK, 'anchor');
     // `all: initial` first, so the page's own stylesheet cannot restyle this
     // into something invisible or enormous.
     dot.style.cssText =
-      'all: initial; position: absolute; width: 16px; height: 16px; cursor: pointer;' +
-      'z-index: 2147483646; background: #3d7dbf; border: 1px solid #254d75;' +
-      'border-radius: 3px;';
+      'all: initial; position: absolute; width: 18px; height: 18px; cursor: pointer;' +
+      'z-index: 2147483646; line-height: 0;';
     dot.title = 'BENCpass';
+    dot.append(gonMark());
+
     dot.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
       openMenu(el);
     });
+
+    // Clicking the field opens the menu too, the way Firefox's own login
+    // autocomplete does — the anchor alone is a small target and not an obvious
+    // one. Still an explicit act by the user; nothing opens or fills on its own.
+    if (!el.hasAttribute(BOUND)) {
+      el.setAttribute(BOUND, '1');
+      el.addEventListener('click', () => {
+        if (!document.getElementById(OVERLAY_ID)) openMenu(el);
+      });
+    }
 
     document.body.appendChild(dot);
     position(dot, el);
@@ -143,8 +204,8 @@
 
   function position(node, el) {
     const r = el.getBoundingClientRect();
-    node.style.top = `${window.scrollY + r.top + (r.height - 16) / 2}px`;
-    node.style.left = `${window.scrollX + r.right - 22}px`;
+    node.style.top = `${window.scrollY + r.top + (r.height - 18) / 2}px`;
+    node.style.left = `${window.scrollX + r.right - 24}px`;
   }
 
   // ---- the menu ------------------------------------------------------------
@@ -177,9 +238,12 @@
     // contentWindow cannot be listened to, and the targetOrigin below means a
     // swapped document receives nothing.
     frame.src = browser.runtime.getURL('ext/overlay.html');
+    // Match the field's width the way a native autocomplete panel does, with a
+    // floor so a narrow box does not produce an unreadable menu.
+    const box = el.getBoundingClientRect();
     frame.style.cssText =
-      'all: initial; position: absolute; width: 280px; height: ' +
-      `${Math.min(260, 44 + reply.candidates.length * 46)}px;` +
+      `all: initial; position: absolute; width: ${Math.max(240, Math.round(box.width))}px;` +
+      `height: ${Math.min(260, 40 + reply.candidates.length * 46)}px;` +
       'z-index: 2147483647; border: 1px solid #1e2c3d; border-radius: 3px;' +
       'box-shadow: 0 4px 16px rgba(0,0,0,0.5); background: #0c1420; color-scheme: dark;';
 
@@ -196,15 +260,17 @@
     );
 
     document.body.appendChild(frame);
-    const r = el.getBoundingClientRect();
-    frame.style.top = `${window.scrollY + r.bottom + 4}px`;
-    frame.style.left = `${window.scrollX + Math.max(4, r.left)}px`;
+    frame.style.top = `${window.scrollY + box.bottom + 2}px`;
+    frame.style.left = `${window.scrollX + Math.max(4, box.left)}px`;
 
     setTimeout(() => document.addEventListener('mousedown', onOutside, true), 0);
   }
 
   function onOutside(e) {
-    if (e.target?.getAttribute?.(MARK)) return;
+    // A mousedown inside the iframe never reaches this document, so this only
+    // sees clicks on the page — but the anchor and the field the menu belongs
+    // to are ours, and clicking either must not dismiss it.
+    if (isOurs(e.target)) return;
     closeMenu();
   }
 
@@ -338,10 +404,17 @@
     // observer below.
   }
 
-  new MutationObserver(rescan).observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-  });
+  // Ignore the extension's own additions and removals. Without this, appending
+  // an anchor triggers a rescan, which removes and re-adds every anchor, which
+  // triggers another — a loop that also took the open menu with it each time.
+  new MutationObserver((records) => {
+    for (const record of records) {
+      const touched = [...record.addedNodes, ...record.removedNodes];
+      if (touched.length && touched.every(isOurs)) continue;
+      rescan();
+      return;
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener('scroll', () => placeAnchors(), { passive: true });
   window.addEventListener('resize', () => placeAnchors(), { passive: true });
 

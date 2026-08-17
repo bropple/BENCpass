@@ -97,10 +97,24 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('message', (event) => {
-  // Only from this extension's own origin, and only once. A copy of this page
-  // opened by anything else is handed no session and therefore draws nothing.
-  if (event.origin !== location.origin) return;
-  if (event.data?.bencpass !== 'session' || sessionId) return;
-  sessionId = String(event.data.sessionId ?? '').slice(0, 64);
+  // Checked by source, NOT by origin. The sender is the content script, which
+  // posts from the page's context — so event.origin is the page's origin, never
+  // this extension's. Comparing them dropped every message including the real
+  // one, and the menu came up empty.
+  //
+  // Not a weakening: the page can already post here, but the payload is an
+  // opaque 128-bit id that the background validates against a session it
+  // created. A guess fails; the value is never trusted on its face.
+  if (event.source !== window.parent) return;
+
+  const data = event.data;
+  if (!data || data.bencpass !== 'session') return;
+
+  const id = String(data.sessionId ?? '').slice(0, 64);
+  if (!id || id === sessionId) return;
+
+  // Deliberately not locked to the first message: a page that posted a junk id
+  // first would otherwise block the real one behind it.
+  sessionId = id;
   render();
 });
