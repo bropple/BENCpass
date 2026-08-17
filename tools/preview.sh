@@ -34,7 +34,8 @@ base="http://127.0.0.1:$port/src/ui/.preview.html"
 
 if [ "${1:-}" = "shot" ]; then
   build_page 3000
-  browser=${BROWSER_BIN:-$(command -v zen-browser || command -v firefox)}
+  . "$root/tools/find-browser.sh"
+  browser=$BROWSER_BIN
   out="$root/screenshots"
   rm -f "$out"/*.png
   mkdir -p "$out"

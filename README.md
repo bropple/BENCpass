@@ -114,6 +114,15 @@ are PNGs this repository generates.
 version to fix a denial of service in a code path that never runs, and break the
 tooling in exchange.
 
+**On macOS.** The shell scripts work as they are. Zen and Firefox live inside
+`.app` bundles rather than on `PATH`, so `tools/find-browser.sh` looks in
+`/Applications` and `~/Applications` as well; set `BROWSER_BIN` if it guesses
+wrong:
+
+```sh
+BROWSER_BIN='/Applications/Zen Browser.app/Contents/MacOS/zen' tools/run-extension.sh
+```
+
 **On Windows.** The extension itself is the same `.xpi` — it is browser
 JavaScript and contains no platform-specific code — and the Go server
 cross-compiles to a static `.exe`. Only the developer tooling differs, and only

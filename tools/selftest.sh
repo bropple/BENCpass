@@ -16,7 +16,8 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 port=${PORT:-8734}
 result=${RESULT_FILE:-/tmp/bencpass-selftest.json}
-browser=${BROWSER_BIN:-$(command -v zen-browser || command -v firefox)}
+. "$root/tools/find-browser.sh"
+browser=$BROWSER_BIN
 profile=$(mktemp -d)
 
 rm -f "$result"

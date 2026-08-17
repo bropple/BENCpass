@@ -1,9 +1,10 @@
 #!/bin/sh
-# Load BENCpass into a scratch Zen profile and open the form-shapes page.
+# Load BENCpass into a test profile and open the form-shapes page.
 #
-# A temporary profile, deliberately: the extension is installed unsigned and
-# temporarily, so nothing touches the browser you actually use and the vault
-# created here is thrown away with the profile.
+# A dedicated profile at .bencpass-profile/, kept between runs so the vault
+# survives — recreating it every launch makes autofill untestable. `fresh`
+# discards it. The extension is installed unsigned and temporarily either way,
+# so the browser you actually use is untouched.
 #
 # The test page is served over http://127.0.0.1, which counts as a private host
 # — so filling is allowed without a certificate, and the insecure-page refusal
@@ -13,9 +14,8 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 port=${PORT:-8731}
-browser=${BROWSER_BIN:-$(command -v zen-browser || command -v firefox)}
-
-[ -n "$browser" ] || { echo "no zen-browser or firefox on PATH" >&2; exit 1; }
+. "$root/tools/find-browser.sh"
+browser=$BROWSER_BIN
 
 node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
 server=$!
