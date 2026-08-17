@@ -63,13 +63,32 @@ so rather than passing quietly.
 **On Windows.** The extension itself is the same `.xpi` — it is browser
 JavaScript and contains no platform-specific code — and the Go server
 cross-compiles to a static `.exe`. Only the developer tooling differs, and only
-`run-extension` has a PowerShell counterpart so far; the rest of `tools/` is
-POSIX shell and wants Git Bash or WSL. Windows blocks unsigned scripts by
-default, so run it as:
+`run-extension` has a Windows counterpart so far; the rest of `tools/` is POSIX
+shell and wants Git Bash or WSL.
+
+Use the batch wrapper, which sidesteps the execution policy entirely:
 
 ```
-powershell -ExecutionPolicy Bypass -File tools\run-extension.ps1
+tools\run-extension.cmd
+tools\run-extension.cmd -Browser "C:\Path\To\zen.exe"
 ```
+
+A `.cmd` file is not governed by the execution policy, and the `-ExecutionPolicy
+Bypass` it passes applies only to the child process — nothing on the machine is
+reconfigured.
+
+If PowerShell still refuses, find out which scope is responsible before changing
+anything:
+
+```
+Get-ExecutionPolicy -List
+```
+
+| Scope showing a restrictive value | Fix |
+|---|---|
+| `CurrentUser` or `LocalMachine` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` — no admin needed |
+| `MachinePolicy` or `UserPolicy` | Group Policy. `-ExecutionPolicy` **cannot** override these; pipe the script through stdin instead, which the policy does not govern: `Get-Content -Raw tools\run-extension.ps1 \| powershell -NoProfile -Command -` |
+| Nothing restrictive, but it still complains | The file carries a mark-of-the-web from being downloaded rather than cloned: `Unblock-File tools\run-extension.ps1` |
 
 ## Reading
 
