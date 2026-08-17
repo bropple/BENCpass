@@ -121,24 +121,14 @@ func authenticate(_ reason: String) -> Result<LAContext, AuthFailure> {
     return outcome
 }
 
-// ---- the keychain -----------------------------------------------------------
+// ---- the keychain, and why the secret is not in it ---------------------------
 //
-// macOS has two, and which one will take a biometric access control from a
-// locally built command-line tool is not something that can be settled by
-// reading:
-//
-//   data protection   the iOS-style keychain, and where Apple's own Touch ID
-//                     sample puts such items. It wants the caller signed with a
-//                     keychain-access-groups entitlement backed by a real team
-//                     identifier, which an ad-hoc signature does not carry, and
-//                     refuses with errSecMissingEntitlement (-34018) when it
-//                     does not like the caller.
-//   file based        the older one. It has honoured SecAccessControl since
-//                     10.12.1, and may reject the newer flags with errSecParam.
-//
-// So both are tried, in that order, and the reply says which one worked. Trying
-// and reporting beats asserting: the failure this replaces was a refusal with
-// no account of itself, which is indistinguishable from a crash.
+// Kept only for the probe below, which is the record of why this design is
+// shaped the way it is. A keychain item carrying a biometric SecAccessControl
+// is refused with errSecMissingEntitlement (-34018) unless the binary is signed
+// with a keychain access group, and that entitlement is authorised by Apple:
+// an ad-hoc signature claiming it is killed on launch, and so is a trusted
+// self-signed one. All three measured on a runner rather than reasoned about.
 
 func query(_ id: String, dataProtection: Bool) -> [String: Any] {
     var q: [String: Any] = [
@@ -150,89 +140,179 @@ func query(_ id: String, dataProtection: Bool) -> [String: Any] {
     return q
 }
 
-/// Both keychains, most-preferred first.
+/// Both keychains, for the probe to ask each in turn.
 let KEYCHAINS: [(name: String, dataProtection: Bool)] = [
     ("data-protection", true),
     ("file", false),
 ]
 
+// ---- the enclave ------------------------------------------------------------
+//
+// The secret is not in the keychain. It cannot be: an item carrying a biometric
+// SecAccessControl is refused with errSecMissingEntitlement unless the binary is
+// signed with a keychain access group, and that entitlement is authorised by
+// Apple alone — measured, not assumed. An ad-hoc signature is killed on launch
+// for claiming it, and so is a trusted self-signed one. See the experiment in
+// .github/workflows/hosts.yml.
+//
+// So the shape is inverted. A key is generated *inside* the Secure Enclave whose
+// use is gated by a fingerprint, and the device secret is kept beside it as
+// ciphertext in an ordinary file. The file is worthless without the enclave, the
+// enclave will not act without the fingerprint, and the private key cannot be
+// extracted by anyone — it has never existed outside the hardware.
+//
+// The properties that mattered about the keychain approach all survive:
+//
+//   never leaves this Mac      the enclave key is not exportable and not backed up
+//   dies with the fingerprints .biometryCurrentSet invalidates the key when the
+//                              enrolled set changes
+//   useless if copied          the ciphertext decrypts nowhere else
+//
+// And one improves: the secret is never in any keychain, so no other program can
+// be prompted into handing it over.
+
+/// Where the sealed secret lives. The directory is created 0700, the file 0600.
+func sealedPath(_ id: String) -> URL {
+    let dir = FileManager.default
+        .homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/BENCpass", isDirectory: true)
+    try? FileManager.default.createDirectory(
+        at: dir,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+    )
+    // The id comes from the extension and is hex; refuse anything else rather
+    // than let it choose a path.
+    let safe = id.filter { $0.isHexDigit }
+    return dir.appendingPathComponent("\(safe).sealed")
+}
+
+func keyTag(_ id: String) -> Data {
+    Data("net.ropple.bencpass.key.\(id.filter { $0.isHexDigit })".utf8)
+}
+
+/// The enclave key for this secret, if it has one.
+func findKey(_ id: String, context: LAContext?) -> SecKey? {
+    var q: [String: Any] = [
+        kSecClass as String: kSecClassKey,
+        kSecAttrApplicationTag as String: keyTag(id),
+        kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+        kSecReturnRef as String: true,
+    ]
+    if let context { q[kSecUseAuthenticationContext as String] = context }
+
+    var item: CFTypeRef?
+    guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess else { return nil }
+    return (item as! SecKey?)
+}
+
+let ALGORITHM = SecKeyAlgorithm.eciesEncryptionCofactorX963SHA256AESGCM
+
 func store(id: String, secret: Data) -> [String: Any] {
     guard biometricsAvailable() else { return fail("unavailable") }
+
+    // Start clean: a second enrolment must not leave the previous key behind,
+    // able to decrypt a file that is about to be replaced.
+    _ = forget(id: id)
 
     var accessError: Unmanaged<CFError>?
     guard
         let access = SecAccessControlCreateWithFlags(
             nil,
-            // ThisDeviceOnly: never in a Keychain backup, never on another Mac.
+            // ThisDeviceOnly: never in a backup, never on another Mac.
             kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
-            .biometryCurrentSet,
+            [.privateKeyUsage, .biometryCurrentSet],
             &accessError
         )
     else {
-        return fail("error", "SecAccessControlCreateWithFlags failed")
+        return fail("error", "access control refused")
     }
 
-    var attempts: [String] = []
-    for keychain in KEYCHAINS {
-        // Replace rather than update: the access control is set at creation, so
-        // an update cannot be trusted to reapply it. Both keychains are cleared
-        // so a secret cannot survive in the one that is no longer being used.
-        for other in KEYCHAINS {
-            SecItemDelete(query(id, dataProtection: other.dataProtection) as CFDictionary)
-        }
+    let attributes: [String: Any] = [
+        kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+        kSecAttrKeySizeInBits as String: 256,
+        kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
+        kSecPrivateKeyAttrs as String: [
+            kSecAttrIsPermanent as String: true,
+            kSecAttrApplicationTag as String: keyTag(id),
+            kSecAttrAccessControl as String: access,
+        ],
+    ]
 
-        var add = query(id, dataProtection: keychain.dataProtection)
-        add[kSecValueData as String] = secret
-        add[kSecAttrAccessControl as String] = access
-        add[kSecAttrLabel as String] = "BENCpass device secret"
-
-        let status = SecItemAdd(add as CFDictionary, nil)
-        if status == errSecSuccess {
-            return ["ok": true, "keychain": keychain.name]
-        }
-        attempts.append("\(keychain.name): \(status)")
+    var error: Unmanaged<CFError>?
+    guard let priv = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
+        let e = error?.takeRetainedValue()
+        return fail("error", "enclave refused a key: \(String(describing: e))")
     }
-    return fail("error", "SecItemAdd failed — \(attempts.joined(separator: ", "))")
+    guard let pub = SecKeyCopyPublicKey(priv) else {
+        return fail("error", "no public key")
+    }
+
+    // Encrypting uses the public key, which the enclave hands out freely — so
+    // enrolment raises no prompt. Only reading it back costs a fingerprint.
+    guard
+        let sealed = SecKeyCreateEncryptedData(pub, ALGORITHM, secret as CFData, &error) as Data?
+    else {
+        let e = error?.takeRetainedValue()
+        return fail("error", "encryption failed: \(String(describing: e))")
+    }
+
+    do {
+        try sealed.write(to: sealedPath(id), options: [.atomic, .completeFileProtection])
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: sealedPath(id).path
+        )
+    } catch {
+        return fail("error", "could not write the sealed secret: \(error)")
+    }
+    return ["ok": true, "storage": "secure-enclave"]
 }
 
 func retrieve(id: String, prompt: String) -> [String: Any] {
+    guard let sealed = try? Data(contentsOf: sealedPath(id)) else {
+        return fail("not-found")
+    }
+
     switch authenticate(prompt) {
     case .failure(let reason):
         return fail(reason.rawValue)
     case .success(let context):
-        var attempts: [String] = []
-        // Whichever keychain accepted it at enrolment. Asked in the same order,
-        // so the usual case finds it first.
-        for keychain in KEYCHAINS {
-            var get = query(id, dataProtection: keychain.dataProtection)
-            get[kSecReturnData as String] = true
-            get[kSecMatchLimit as String] = kSecMatchLimitOne
-            // Already authenticated, so this does not prompt again.
-            get[kSecUseAuthenticationContext as String] = context
-
-            var item: CFTypeRef?
-            let status = SecItemCopyMatching(get as CFDictionary, &item)
-            if status == errSecSuccess, let data = item as? Data {
-                return ["ok": true, "secret": data.base64EncodedString()]
-            }
-            // Cancelling is the person's answer and applies to both keychains;
-            // there is nothing to be gained by asking the second one.
-            if status == errSecUserCanceled { return fail("cancelled") }
-            attempts.append("\(keychain.name): \(status)")
+        // Already authenticated, so the decryption below does not ask again.
+        guard let priv = findKey(id, context: context) else {
+            // The file is here and the key is not: the enrolled fingerprints
+            // changed, which destroys the key by design, or the key was removed.
+            // Either way this enrolment is over.
+            return fail("not-found", "the enclave key is gone")
         }
-        return fail("not-found", attempts.joined(separator: ", "))
+
+        var error: Unmanaged<CFError>?
+        guard
+            let secret = SecKeyCreateDecryptedData(priv, ALGORITHM, sealed as CFData, &error)
+                as Data?
+        else {
+            let e = error?.takeRetainedValue()
+            let text = String(describing: e)
+            // A refusal at this point is the person declining, not a fault.
+            if text.contains("-128") || text.lowercased().contains("cancel") {
+                return fail("cancelled")
+            }
+            return fail("error", "decryption failed: \(text)")
+        }
+        return ["ok": true, "secret": secret.base64EncodedString()]
     }
 }
 
 func forget(id: String) -> [String: Any] {
-    for keychain in KEYCHAINS {
-        let status = SecItemDelete(query(id, dataProtection: keychain.dataProtection) as CFDictionary)
-        // Deleting something that was never there is a success. The caller wants
-        // it gone, and it is gone.
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            return fail("error", "SecItemDelete (\(keychain.name)): \(status)")
-        }
-    }
+    SecItemDelete(
+        [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: keyTag(id),
+        ] as CFDictionary
+    )
+    try? FileManager.default.removeItem(at: sealedPath(id))
+    // Removing something that was never there is a success. The caller wants it
+    // gone, and it is gone.
     return ["ok": true]
 }
 
