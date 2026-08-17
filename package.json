@@ -15,5 +15,8 @@
   "private": true,
   "devDependencies": {
     "web-ext": "^10.6.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

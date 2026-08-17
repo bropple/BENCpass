@@ -66,7 +66,19 @@ cross-compiles to a static `.exe`. Only the developer tooling differs, and only
 `run-extension` has a Windows counterpart so far; the rest of `tools/` is POSIX
 shell and wants Git Bash or WSL.
 
-Use the batch wrapper, which sidesteps the execution policy entirely:
+Node 22 or later is required (`engines` in `package.json` enforces it). On a
+fresh Windows machine:
+
+```
+winget install OpenJS.NodeJS.LTS
+```
+
+The `.LTS` suffix matters — plain `OpenJS.NodeJS` tracks the Current line, which
+moves fast for no benefit here. **Open a new terminal afterwards**: winget
+updates PATH but the shell you ran it from will not see the change, which looks
+exactly like the install having failed.
+
+Then use the batch wrapper, which sidesteps the execution policy entirely:
 
 ```
 tools\run-extension.cmd
