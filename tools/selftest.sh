@@ -19,6 +19,7 @@ result=${RESULT_FILE:-/tmp/bencpass-selftest.json}
 . "$root/tools/find-browser.sh"
 browser=$BROWSER_BIN
 profile=$(mktemp -d)
+echo "browser: $browser"
 
 rm -f "$result"
 

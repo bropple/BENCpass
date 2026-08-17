@@ -10,6 +10,16 @@
 # — so filling is allowed without a certificate, and the insecure-page refusal
 # is not in the way of testing everything else. To exercise that refusal, point
 # a hosts entry at 127.0.0.1 and browse to it by name instead.
+#
+#   tools/run-extension.sh            run
+#   tools/run-extension.sh fresh      wipe the test profile first
+#   tools/run-extension.sh verbose    log what the browser prints
+#
+# `verbose` is the thing to reach for when web-ext ends in
+# `connect ECONNREFUSED 127.0.0.1:<port>`. That is web-ext giving up after 30
+# seconds of dialling the browser's debugger port: the browser started but
+# never opened it. Only the browser's own stderr says why, and web-ext logs it
+# at debug level, which --verbose turns on.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -17,11 +27,24 @@ port=${PORT:-8731}
 . "$root/tools/find-browser.sh"
 browser=$BROWSER_BIN
 
+fresh=
+verbose=
+for arg in "$@"; do
+  case $arg in
+    fresh) fresh=1 ;;
+    verbose) verbose=1 ;;
+    *) echo "unknown argument: $arg (expected 'fresh' or 'verbose')" >&2; exit 2 ;;
+  esac
+done
+
 node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
 server=$!
 trap 'kill $server 2>/dev/null || true' EXIT
 sleep 0.5
 
+# Which browser, always. Without this the only clue in a failed run is web-ext's
+# own output, which never names the binary it was handed.
+echo "browser:      $browser"
 echo "form shapes:  http://127.0.0.1:$port/tools/testpage/index.html"
 echo "manager:      about:addons -> BENCpass -> Preferences"
 echo
@@ -33,7 +56,7 @@ profile="$root/.bencpass-profile"
 # An `if`, not `[ ... ] && rm`: under `set -e` a failed test at the end of an
 # && list takes the whole script down with it, so a normal run would exit here
 # without starting anything.
-if [ "${1:-}" = "fresh" ]; then
+if [ -n "$fresh" ]; then
   rm -rf "$profile"
   echo "wiped $profile"
 fi
@@ -72,5 +95,9 @@ set -- --source-dir="$root/src" \
 for pref in $prefs; do
   set -- "$@" --pref "$pref"
 done
+
+if [ -n "$verbose" ]; then
+  set -- "$@" --verbose
+fi
 
 npx web-ext run "$@"

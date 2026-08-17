@@ -50,6 +50,7 @@ cd server && go test ./...  # 15 tests
 tools/selftest.sh           # drive the extension in a real browser, unattended
 tools/run-extension.sh      # load into a test profile, open the form-shapes page
 tools/run-extension.sh fresh   # ...discarding the previous test vault
+tools/run-extension.sh verbose # ...logging what the browser itself prints
 tools\run-extension.ps1     # the same on Windows; -Fresh to discard
 npx web-ext lint --source-dir=src --self-hosted
 npx web-ext build --source-dir=src --artifacts-dir=dist/ext
@@ -122,6 +123,20 @@ wrong:
 ```sh
 BROWSER_BIN='/Applications/Zen Browser.app/Contents/MacOS/zen' tools/run-extension.sh
 ```
+
+Every run now prints the binary it chose, on the `browser:` line, so a bad guess
+shows up before the browser does.
+
+If a run ends in `Error: connect ECONNREFUSED 127.0.0.1:<port>`, that is not the
+test server — it is `web-ext` giving up on the browser. It launches the browser
+with `-start-debugger-server <port>` and then dials that port for thirty
+seconds; the message means the browser started but never listened. Run
+`tools/run-extension.sh verbose` and read the `Firefox stderr:` lines, which say
+why. Two causes account for most of it: the browser refuses the debugger server
+outright, or the profile could not be opened and it exited. `tools/selftest.sh`
+is a useful second data point, since it uses a throwaway profile and headless
+mode — if that connects and `run-extension.sh` does not, the profile is the
+difference, and `tools/run-extension.sh fresh` clears it.
 
 **On Windows.** The extension itself is the same `.xpi` — it is browser
 JavaScript and contains no platform-specific code — and the Go server
