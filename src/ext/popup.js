@@ -188,3 +188,7 @@ $('sidebar-btn').addEventListener('click', async () => {
 });
 
 refresh();
+
+// Shown in the footer so "am I running the build I just installed?" has an
+// answer that does not involve reading files off disk.
+$('version').textContent = `v${browser.runtime.getManifest().version}`;
