@@ -260,7 +260,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     case MSG.BIO_ENROL:
       return handleBioEnrol(msg);
     case MSG.BIO_UNLOCK:
-      return handleBioUnlock();
+      return handleBioUnlock(sender);
     case MSG.BIO_FORGET:
       return handleBioForget();
     case MSG.SAVE:
@@ -408,7 +408,9 @@ async function handleSession(msg, sender) {
   const session = sessions.get(asString(msg.sessionId, 64));
   if (!session) return { candidates: [] };
   if (session.kind === 'locked' || !vault || vault.locked) {
-    return { kind: 'locked', candidates: [] };
+    // The menu needs to know whether a fingerprint is an option before it draws
+    // its rows, so it goes out with the answer rather than after it.
+    return { kind: 'locked', candidates: [], bio: await handleBioState() };
   }
   if (session.kind === 'signup') return { kind: 'signup', candidates: [] };
 
@@ -853,9 +855,30 @@ function biometricId() {
   return settings.biometricId;
 }
 
+/**
+ * What the host says, remembered for a minute.
+ *
+ * Every call starts a process. The popup asks on every open and every redraw,
+ * and a fingerprint reader does not appear and disappear between two of those.
+ */
+let capabilityCache = { at: 0, value: null };
+
+async function biometricCapabilities() {
+  if (capabilityCache.value && Date.now() - capabilityCache.at < 60_000) {
+    return capabilityCache.value;
+  }
+  const value = await native.capabilities();
+  capabilityCache = { at: Date.now(), value };
+  return value;
+}
+
+const forgetCapabilities = () => {
+  capabilityCache = { at: 0, value: null };
+};
+
 async function handleBioState() {
   const enrolled = Boolean(vault?.hasBiometric);
-  const hello = await native.capabilities();
+  const hello = await biometricCapabilities();
 
   return {
     // Is there a host, and can it do anything today? A Mac with Touch ID
@@ -881,7 +904,7 @@ async function handleBioState() {
 async function handleBioEnrol(msg) {
   if (!vault) return { ok: false, reason: 'no-vault' };
 
-  const hello = await native.capabilities();
+  const hello = await biometricCapabilities();
   if (!hello.ok || hello.biometrics === 'none') {
     return { ok: false, reason: hello.ok ? 'unavailable' : hello.reason };
   }
@@ -908,10 +931,11 @@ async function handleBioEnrol(msg) {
 
   await persistVault();
   await persistSettings();
+  forgetCapabilities();
   return { ok: true };
 }
 
-async function handleBioUnlock() {
+async function handleBioUnlock(sender) {
   if (!vault) return { ok: false, reason: 'no-vault' };
   if (!vault.locked) return { ok: true };
   if (!vault.hasBiometric) return { ok: false, reason: 'not-enrolled' };
@@ -934,6 +958,15 @@ async function handleBioUnlock() {
   bumpAutolock();
   paintBadge();
   broadcastLockState();
+
+  // Asked from the menu on a login field: put that menu back, against the same
+  // field, now with entries in it. Otherwise the fingerprint opens the vault
+  // and leaves the person staring at the field they started at, none the wiser.
+  if (sender?.tab?.id !== undefined) {
+    browser.tabs
+      .sendMessage(sender.tab.id, { type: MSG.DISMISS, open: true }, { frameId: sender.frameId ?? 0 })
+      .catch(() => {});
+  }
   return { ok: true };
 }
 
@@ -944,6 +977,7 @@ async function handleBioForget() {
   // Best effort: a secret whose wrapping is gone opens nothing, so failing to
   // remove it from the keystore leaves nothing exposed.
   await native.forget(biometricId());
+  forgetCapabilities();
   return { ok: true };
 }
 
@@ -1023,6 +1057,10 @@ async function handleState(sender) {
   return {
     hasVault: Boolean(vault),
     locked: !vault || vault.locked,
+    // Sent with the rest rather than fetched separately, so the popup can put
+    // the fingerprint in front of the password box on its first paint instead
+    // of showing the password box and then replacing it.
+    bio: await handleBioState(),
     host,
     endpoint: settings.endpoint,
     pending: pending

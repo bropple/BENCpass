@@ -349,3 +349,6 @@ select { color: var(--text); font: inherit; }
    installed and this vault carries the second wrapping; see hosts/PROTOCOL.md. */
 .gate-bio { width: 100%; margin-top: 10px; }
 .foot-bio { display: flex; align-items: center; gap: 8px; }
+.btn-link { background: none; border: 0; color: var(--text-dim); font: inherit;
+            text-decoration: underline; cursor: pointer; padding: 8px 0; width: 100%; }
+.btn-link:hover { color: var(--text); }

@@ -63,3 +63,10 @@ input:focus { outline: none; border-color: var(--accent); }
 /* So "am I actually running the build I just installed?" has an answer that
    does not involve reading files. */
 .version { opacity: .6; }
+
+/* Biometric unlock, which is the primary route once enrolled. */
+#bio-unlock { padding: 10px; text-align: center; }
+#bio-unlock .btn { width: 100%; margin-top: 6px; }
+.btn-link { background: none; border: 0; color: var(--dim); text-decoration: underline;
+            cursor: pointer; padding: 6px 0; }
+.btn-link:hover { color: var(--text); }

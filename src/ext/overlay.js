@@ -55,8 +55,40 @@ async function render() {
   $('head').textContent = kind === 'address' ? 'Addresses' : 'BENCpass';
 
   if (kind === 'locked') {
-    // Deliberately a button that opens the toolbar popup, not a password box
-    // here.
+    // A fingerprint, when there is one to use. This is the row that matters:
+    // meeting a locked vault at a login field is the common case, and sending
+    // someone to another tab to type a master password there is precisely the
+    // errand the fingerprint was enrolled to save.
+    //
+    // Note what is *not* being done here. The prompt belongs to the operating
+    // system and is raised by the background page; this document only asks. It
+    // never sees the device secret, and a page that drew a convincing imitation
+    // of this row would achieve nothing but a real Touch ID prompt it cannot
+    // answer.
+    if (reply.bio?.available && reply.bio?.enrolled) {
+      const name =
+        reply.bio.biometrics === 'touchid'
+          ? 'Touch ID'
+          : reply.bio.biometrics === 'hello'
+            ? 'Windows Hello'
+            : 'your fingerprint';
+      list.append(
+        row({
+          title: `Unlock with ${name}`,
+          sub: 'Then pick an entry',
+          className: 'gen',
+          onPick: async () => {
+            const done = await browser.runtime.sendMessage({ type: MSG.BIO_UNLOCK });
+            // On success the background reopens this menu against the same
+            // field, now holding entries. On a cancel there is nothing to say
+            // that the person does not already know.
+            if (!done?.ok && done?.reason !== 'cancelled') render();
+          },
+        }),
+      );
+    }
+
+    // The master password, deliberately not as a box here.
     //
     // A master password typed into a panel floating over a page teaches exactly
     // the habit that makes phishing work: any site can draw a convincing

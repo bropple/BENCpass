@@ -49,6 +49,7 @@
   let locked = true;
   let activeGroup = null; // the form the open menu belongs to
   let anchorEl = null;
+  let menuKind = 'login'; // which menu anchorEl was opened as
   let rescanTimer = null;
 
   // ---- finding fields ------------------------------------------------------
@@ -372,6 +373,7 @@
     if (!reply || !reply.sessionId || !reply.candidates.length) return;
 
     anchorEl = el;
+    menuKind = kind;
     const frame = document.createElement('iframe');
     frame.id = OVERLAY_ID;
     frame.setAttribute(MARK, 'overlay');
@@ -761,11 +763,17 @@
       return Promise.resolve({ ok: true });
     }
     if (msg?.type === MSG.DISMISS) {
+      // The field the menu was last opened against, before closeMenu forgets
+      // which one that was. Falling straight to the first login field on the
+      // page reopened the menu somewhere else entirely on anything with more
+      // than one form — including, on a checkout, an address field.
+      const previous = anchorEl;
       closeMenu();
       if (msg.open) {
         const login = groups[0]?.login ?? {};
-        const target = at(login.password) ?? at(login.username) ?? at(login.newPassword);
-        if (target) openMenu(target);
+        const target =
+          previous ?? at(login.password) ?? at(login.username) ?? at(login.newPassword);
+        if (target) openMenu(target, previous ? menuKind : 'login');
       }
       return Promise.resolve({ ok: true });
     }

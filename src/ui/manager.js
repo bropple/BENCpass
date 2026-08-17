@@ -199,6 +199,11 @@ const askBackground = async (type, extra = {}) => {
 const bioName = () =>
   bio.biometrics === 'touchid' ? 'Touch ID' : bio.biometrics === 'hello' ? 'Windows Hello' : '';
 
+// Raised once when the gate appears. A prompt that returns the instant it is
+// dismissed cannot be dismissed.
+let promptedThisVisit = false;
+let showPasswordBox = false;
+
 async function refreshBiometrics() {
   const reply = await askBackground(MSG.BIO_STATE);
   Object.assign(bio, {
@@ -207,24 +212,38 @@ async function refreshBiometrics() {
     biometrics: reply?.biometrics ?? 'none',
   });
 
-  // The gate button appears only when all three are true: a host is installed,
-  // the machine can take a fingerprint today, and this vault has the second
-  // wrapping. Any less and it is a button that fails.
-  const canUnlock = bio.available && bio.enrolled;
-  $('gate-bio').hidden = !canUnlock;
+  // Usable means all three: a host is installed, the machine can take a
+  // fingerprint today, and this vault carries the second wrapping. Any less and
+  // the button would be one that fails.
+  const usable = bio.available && bio.enrolled && $('gate').dataset.mode !== 'setup';
+
+  $('gate-bio-panel').hidden = !usable;
+  $('gate-form').hidden = usable && !showPasswordBox;
   $('gate-bio').textContent = `Unlock with ${bioName()}`;
+  if (usable && !showPasswordBox) {
+    $('gate-bio-text').textContent = `Unlock with ${bioName()}.`;
+    // setGate focuses the password box on the way in, and it has just been
+    // hidden underneath this panel.
+    $('gate-bio').focus();
+  }
 
   // The footer control is shown whenever a host exists, since that is where
   // turning it on lives.
   $('foot-bio').hidden = !bio.available;
   $('foot-bio-text').textContent = bio.enrolled ? `${bioName()} on` : `${bioName()} off`;
   $('bio-btn').textContent = bio.enrolled ? 'Turn off' : 'Turn on';
+
+  // Ask straight away rather than waiting to be clicked. Opening the manager
+  // while locked *is* the request to unlock it; making someone press one more
+  // button first is the errand the fingerprint was enrolled to save.
+  if (usable && !showPasswordBox && !promptedThisVisit) {
+    promptedThisVisit = true;
+    unlockWithBiometrics();
+  }
 }
 
-$('gate-bio').addEventListener('click', async () => {
-  const err = $('gate-error');
-  err.hidden = true;
-
+async function unlockWithBiometrics() {
+  $('gate-bio-text').textContent = 'Waiting for you…';
   const reply = await askBackground(MSG.BIO_UNLOCK);
   if (reply?.ok) {
     state.vault = vaultHost.vault;
@@ -232,15 +251,28 @@ $('gate-bio').addEventListener('click', async () => {
     return;
   }
 
-  // `cancelled` is someone changing their mind, not a fault, and saying
-  // anything about it would be noise.
-  if (reply?.reason === 'cancelled') return;
-  err.textContent =
-    reply?.reason === 'stale-secret'
-      ? `${bioName()} no longer matches this vault, so it has been turned off. Unlock with your master password and turn it on again.`
-      : `${bioName()} is not available. Use your master password.`;
-  err.hidden = false;
+  // Cancelling is a decision, not a fault. Offer the password rather than
+  // scolding, and do not raise the prompt again unasked.
+  if (reply?.reason === 'cancelled') {
+    $('gate-bio-text').textContent = 'Cancelled.';
+    return;
+  }
+  if (reply?.reason === 'stale-secret') {
+    $('gate-bio-text').textContent =
+      `${bioName()} no longer matches this vault, so it has been turned off.`;
+  } else {
+    $('gate-bio-text').textContent = `${bioName()} is not available just now.`;
+  }
+  showPasswordBox = true;
   refreshBiometrics();
+}
+
+$('gate-bio').addEventListener('click', unlockWithBiometrics);
+
+$('gate-use-password').addEventListener('click', () => {
+  showPasswordBox = true;
+  refreshBiometrics();
+  $('gate-pw').focus();
 });
 
 $('bio-btn').addEventListener('click', async () => {
@@ -370,6 +402,13 @@ function lock(why = '') {
   $('visor').setAttribute('fill', 'var(--bad)');
   $('gate-hint').textContent = why || 'Locked.';
   $('gate-pw').focus();
+
+  // A fresh visit to the gate, so the fingerprint is offered again — including
+  // after someone chose the password box last time. Locking is the end of a
+  // session, not a standing preference.
+  promptedThisVisit = false;
+  showPasswordBox = false;
+  refreshBiometrics();
 }
 
 $('lock-btn').addEventListener('click', () => lock());

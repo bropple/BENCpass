@@ -22,6 +22,14 @@
 
     <h1 class="wordmark">BENCPASS</h1>
 
+    <!-- When a fingerprint is enrolled it comes first and is asked for on
+         sight; the password form below is put away until it is wanted. -->
+    <div id="gate-bio-panel" hidden>
+      <p class="gate-hint" id="gate-bio-text"></p>
+      <button type="button" class="btn btn-primary gate-bio" id="gate-bio">Unlock</button>
+      <button type="button" class="btn-link" id="gate-use-password">Use master password</button>
+    </div>
+
     <form id="gate-form" autocomplete="off">
       <p class="gate-hint" id="gate-hint">Locked.</p>
 
@@ -39,11 +47,6 @@
 
       <button type="submit" class="btn btn-primary" id="gate-go">Unlock</button>
     </form>
-
-    <!-- Only when a native host is installed AND this vault has the second
-         wrapping AND the machine can actually take a fingerprint right now.
-         Offering it otherwise is a button that fails. -->
-    <button type="button" class="btn gate-bio" id="gate-bio" hidden>Unlock with Touch ID</button>
 
     <p class="gate-note" id="gate-note"></p>
   </div>

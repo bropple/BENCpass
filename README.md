@@ -281,10 +281,16 @@ hosts/install.sh            # build the host and register it, then restart the b
 hosts/install.sh uninstall  # remove the registration
 ```
 
-Then turn it on in the manager. You are asked for the master password once, and
-that is not a formality: the vault key lives in a non-extractable `CryptoKey`
-once unlocked, so a second wrapping genuinely cannot be made without
-re-deriving it.
+Then turn it on in the manager. You are asked for the master password **once**,
+at enrolment, and that is not a formality: the vault key lives in a
+non-extractable `CryptoKey` once unlocked, so a second wrapping genuinely
+cannot be made without re-deriving it.
+
+After that the fingerprint is the way in, not one of two equal options. The
+prompt is raised on sight — opening the popup, opening the manager, or clicking
+the menu on a login field — and the master password is put away behind a link
+for when the reader will not play. Cancelling shows the password box and does
+not ask again until the next time the vault locks.
 
 **How it fits together.** The vault key is wrapped twice, under two independent
 secrets — the master password, and a random 32-byte device secret the operating

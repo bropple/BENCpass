@@ -36,7 +36,7 @@ async function refresh() {
   $('unlock-form').hidden = !state.hasVault;
 
   if (state.locked) {
-    if (state.hasVault) $('pw').focus();
+    if (state.hasVault) renderLocked();
     return;
   }
 
@@ -44,6 +44,76 @@ async function refresh() {
   renderCapture();
   renderList(state.candidates);
 }
+
+// ---- unlocking --------------------------------------------------------------
+//
+// A fingerprint that has been enrolled is the way in, not one of two equal
+// options. Enrolment already cost the master password once; being asked for it
+// again every time afterwards is the thing the fingerprint was meant to spare
+// you, and it is what "I still have to type my password" means.
+
+const bioName = (kind) =>
+  kind === 'touchid' ? 'Touch ID' : kind === 'hello' ? 'Windows Hello' : 'your fingerprint';
+
+// Only ever raised once per opening of this popup. A prompt that reappears the
+// instant it is dismissed cannot be dismissed.
+let promptedThisOpen = false;
+
+function renderLocked() {
+  const bio = state.bio ?? {};
+  const usable = Boolean(bio.available && bio.enrolled);
+
+  $('bio-unlock').hidden = !usable;
+  $('unlock-form').hidden = usable && !showPasswordBox;
+
+  if (!usable || showPasswordBox) {
+    $('pw').focus();
+  }
+  if (!usable) return;
+
+  $('bio-text').textContent = `Unlock with ${bioName(bio.biometrics)}.`;
+  $('bio-retry').textContent = `Unlock with ${bioName(bio.biometrics)}`;
+
+  if (!promptedThisOpen) {
+    promptedThisOpen = true;
+    unlockWithBiometrics();
+  }
+}
+
+let showPasswordBox = false;
+
+async function unlockWithBiometrics() {
+  $('bio-text').textContent = 'Waiting for you…';
+  const reply = await send({ type: MSG.BIO_UNLOCK });
+  if (reply?.ok) {
+    await refresh();
+    return;
+  }
+
+  // Cancelling is a decision, not a fault. Offer the password rather than
+  // scolding, and do not raise the prompt again unasked.
+  if (reply?.reason === 'cancelled') {
+    $('bio-text').textContent = 'Cancelled.';
+    return;
+  }
+  if (reply?.reason === 'stale-secret') {
+    $('bio-text').textContent =
+      'That no longer matches this vault, so it has been turned off. Use your master password.';
+    showPasswordBox = true;
+    renderLocked();
+    return;
+  }
+  $('bio-text').textContent = 'Not available just now.';
+  showPasswordBox = true;
+  renderLocked();
+}
+
+$('bio-retry').addEventListener('click', unlockWithBiometrics);
+
+$('use-password').addEventListener('click', () => {
+  showPasswordBox = true;
+  renderLocked();
+});
 
 function renderCapture() {
   const p = state.pending;

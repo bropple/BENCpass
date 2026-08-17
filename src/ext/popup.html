@@ -16,6 +16,16 @@
     <rect x="53.8" y="95.8" width="92.4" height="28.56" fill="#9a9d94"/>
     <rect id="visor" x="70.6" y="103.36" width="58.8" height="13.44" fill="#d84a3a"/>
   </svg>
+  <!-- When a fingerprint is enrolled it is the way in, not an alternative to
+       one. The prompt is raised as the popup opens — clicking the toolbar icon
+       is the gesture that asked for it — and the password box is put away
+       behind a link, for the times the reader will not play. -->
+  <div id="bio-unlock" hidden>
+    <p class="note" id="bio-text"></p>
+    <button class="btn btn-primary" id="bio-retry">Unlock</button>
+    <button class="btn btn-link" id="use-password">Use master password</button>
+  </div>
+
   <form id="unlock-form">
     <label class="label" for="pw">Master password</label>
     <input type="password" id="pw" autocomplete="current-password" required>
