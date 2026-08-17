@@ -128,6 +128,16 @@ async function run() {
     !report.anchors.some((a) => a.field === 'qty'),
   );
 
+  // The same two fields as plain text boxes, on the form that sets no
+  // autocomplete attributes. A country dropdown and a country text box take
+  // different values — the code and the name — so both paths need covering.
+  const plain = report.anchors.filter((a) => a.section === '8');
+  check(
+    'the text-only form anchors country and phone',
+    ['country', 'phone'].every((n) => plain.some((a) => a.field === n)),
+    plain.map((a) => a.field).join(' '),
+  );
+
   // Scrolling must not change what the extension thinks a form is.
   //
   // It used to. Visibility was measured against the viewport, and visibility

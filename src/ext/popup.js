@@ -48,13 +48,23 @@ async function refresh() {
 function renderCapture() {
   const p = state.pending;
   $('capture').hidden = !p;
+  $('capture-name-row').hidden = !p || p.kind !== 'address';
   if (!p) return;
-  $('capture-text').textContent =
-    p.kind === 'address'
-      ? `Save the address you entered on ${p.host}?${p.summary ? ` (${p.summary})` : ''}`
-      : p.update
-        ? `Update the password for ${p.username || 'this login'} on ${p.host}?`
-        : `Save ${p.username || 'this login'} for ${p.host}?`;
+
+  // An address is not filed under the site it was typed into. It belongs to the
+  // person, gets a name they choose, and is then offered on every checkout —
+  // which is the whole difference between an address and a login.
+  if (p.kind === 'address') {
+    $('capture-text').textContent = p.summary
+      ? `Keep this address? (${p.summary})`
+      : 'Keep this address?';
+    $('capture-name').value = p.suggestedName ?? '';
+    return;
+  }
+
+  $('capture-text').textContent = p.update
+    ? `Update the password for ${p.username || 'this login'} on ${p.host}?`
+    : `Save ${p.username || 'this login'} for ${p.host}?`;
 }
 
 function row(c) {
@@ -145,8 +155,8 @@ $('search').addEventListener('input', async () => {
 });
 
 $('save-btn').addEventListener('click', async () => {
-  const reply = await send({ type: MSG.SAVE });
-  say(reply?.ok ? 'Saved.' : 'Could not save.');
+  const reply = await send({ type: MSG.SAVE, title: $('capture-name').value.trim() });
+  say(reply?.ok ? (reply.merged ? 'Updated.' : 'Saved.') : 'Could not save.');
   await refresh();
 });
 

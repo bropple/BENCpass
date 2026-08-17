@@ -464,6 +464,9 @@
    */
   function selectOption(el, candidates) {
     const options = [...el.options];
+    // The same folding as `foldName` in core/address.js, which is where it is
+    // explained and tested. It is repeated rather than imported because a
+    // content script cannot be a module, and the option text only exists here.
     const fold = (s) =>
       String(s ?? '')
         .normalize('NFD')
@@ -513,6 +516,13 @@
     // A username-only step has nowhere to put the password, and must not be
     // given one to hold until the next page.
     if (!pass && user) lastSubmitted.username = values.username ?? '';
+
+    // What was put there, so that submitting it untouched can be recognised as
+    // the non-event it is. Signing in with a stored password is the ordinary
+    // case, and being asked to save what was just handed over is the manager
+    // failing to remember its own answer of two seconds ago.
+    lastFilled.username = values.username ?? '';
+    lastFilled.password = values.password ?? '';
   }
 
   /**
@@ -532,14 +542,48 @@
       const value = values[token];
       if (!value) continue; // nothing stored for it, or nothing derivable
 
-      if (el.tagName === 'SELECT') selectOption(el, [value, ...(alts?.[token] ?? [])]);
-      else setValue(el, value);
+      const candidates = [value, ...(alts?.[token] ?? [])];
+      if (el.tagName === 'SELECT') selectOption(el, candidates);
+      else setValue(el, textValue(el, token, candidates, values));
     }
+  }
+
+  /**
+   * Which spelling of a value to type into a plain box.
+   *
+   * The background offers the value and its alternatives; the choice between
+   * them depends on the element, which only this side can see.
+   *
+   * `maxlength` is the honest signal for the phone problem. A number is stored
+   * with its country code because that is what the field name `tel` means, but
+   * a great many forms have a single Phone box sized for the domestic form and
+   * nothing else. Rather than guess which country's conventions a page has in
+   * mind, take it at its word: if the full value does not fit and a shorter
+   * spelling does, the shorter one is what was being asked for.
+   */
+  function textValue(el, token, candidates, values) {
+    // An explicit autocomplete="country" asks for the code, which is what the
+    // token means. A box merely *called* country is one a person types a name
+    // into, and typing "US" into it is how you get an order shipped nowhere.
+    if (token === 'country' && !el.getAttribute('autocomplete') && values['country-name']) {
+      return values['country-name'];
+    }
+
+    const max = Number(el.getAttribute('maxlength')) || 0;
+    if (max > 0) {
+      const fits = candidates.find((c) => c.length <= max);
+      if (fits) return fits;
+    }
+    return candidates[0];
   }
 
   // ---- capture -------------------------------------------------------------
 
   const lastSubmitted = { username: '', password: '', address: null };
+
+  // The last thing BENCpass itself wrote into this page's login fields. Kept so
+  // that submitting it unchanged can be told apart from typing something new.
+  const lastFilled = { username: '', password: '' };
 
   function remember() {
     const login = activeGroup?.login ?? groups[0]?.login ?? {};
@@ -563,7 +607,17 @@
   }
 
   function offerCapture() {
-    if (lastSubmitted.password) {
+    // Signing in with a password BENCpass filled, unchanged, teaches it
+    // nothing. The background declines these too, but only when it can match
+    // the record — and it cannot on the second page of a two-step sign-in,
+    // where the username is nowhere on screen. Here the comparison is against
+    // what was actually written into the box, so it holds either way.
+    const untouched =
+      lastFilled.password &&
+      lastSubmitted.password === lastFilled.password &&
+      (!lastSubmitted.username || lastSubmitted.username === lastFilled.username);
+
+    if (lastSubmitted.password && !untouched) {
       browser.runtime
         .sendMessage({
           type: MSG.CAPTURE,

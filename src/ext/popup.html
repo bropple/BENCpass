@@ -41,6 +41,12 @@
 
   <section class="capture" id="capture" hidden>
     <p class="capture-text" id="capture-text"></p>
+    <!-- Addresses are named, not filed under the site they were typed into: one
+         "Home" is offered on every checkout thereafter. -->
+    <label class="capture-name" id="capture-name-row" hidden>
+      <span class="label">Name</span>
+      <input type="text" id="capture-name" placeholder="Home" autocomplete="off" maxlength="60">
+    </label>
     <div class="capture-actions">
       <button class="btn btn-primary btn-sm" id="save-btn">Save</button>
       <button class="btn btn-sm" id="discard-btn">Not now</button>

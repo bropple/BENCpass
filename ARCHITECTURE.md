@@ -217,6 +217,27 @@ decline to use it, but because it never leaves the vault. A token that cannot
 be derived honestly is omitted rather than guessed: an area code is only
 offered for a number whose plan makes the split unambiguous.
 
+**An address belongs to the person, not to a site.** Logins are filed under the
+host they were captured from, because that is what identifies them. An address
+is not: the same one is used at every shop. So it is named — "Home", "Work" —
+and every named address is offered on every checkout. Saving under a name that
+already exists updates that address rather than adding a second one beside it,
+because three entries called "Home" cannot be told apart in a menu. Titling
+captured addresses with the host was the first cut, and it produced a vault of
+near-identical addresses named after shops.
+
+**Where a value has more than one correct spelling, the fill picks.** The
+background sends the value and its alternatives; only the content script can
+see the element, so only it can choose between them. A `<select>` is matched
+against its options. A text box is matched against its `maxlength`, which is
+the honest answer to the phone-number problem: `tel` means the full number
+including the country code, but plenty of forms have a single Phone box sized
+for the domestic form, and rather than guess at a page's assumed country we
+take the field at its word — if `+1 (415) 555-0132` does not fit and
+`(415) 555-0132` does, the shorter one is what was being asked for. Likewise
+`autocomplete="country"` gets the ISO code, while a box merely *labelled*
+Country gets the country name, since that is what a person would type into it.
+
 **Dropdowns are filled by matching an option, never by assignment.** Setting
 `value` on a `<select>` to a string no option carries selects nothing at all,
 which leaves the form looking answered when it is not. So the option is found

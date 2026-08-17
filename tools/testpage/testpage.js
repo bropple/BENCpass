@@ -28,6 +28,65 @@ for (const id of ['f1', 'f2']) {
   });
 }
 
+// Section 10: the two dropdowns, filled in properly rather than with a token
+// three options each — you cannot tell whether an address fills a state field
+// if the only states offered are the three you tested with.
+//
+// Both are deliberately awkward, because a convenient list proves nothing:
+//
+//   states     value is the postal abbreviation, text is the full name. An
+//              address stored as "California" has to match an option worth
+//              "CA", and one stored as "CA" has to match its text.
+//   countries  value is the NAME, not the ISO code, which is the case a naive
+//              implementation gets wrong — and the names are spelled the way
+//              real option lists spell them, including the ones CLDR disagrees
+//              with (Turkey, Hong Kong, Czech Republic) and the ones with
+//              punctuation that never survives a copy and paste.
+const US_STATES =
+  'AL:Alabama,AK:Alaska,AZ:Arizona,AR:Arkansas,CA:California,CO:Colorado,CT:Connecticut,' +
+  'DE:Delaware,DC:District of Columbia,FL:Florida,GA:Georgia,HI:Hawaii,ID:Idaho,IL:Illinois,' +
+  'IN:Indiana,IA:Iowa,KS:Kansas,KY:Kentucky,LA:Louisiana,ME:Maine,MD:Maryland,' +
+  'MA:Massachusetts,MI:Michigan,MN:Minnesota,MS:Mississippi,MO:Missouri,MT:Montana,' +
+  'NE:Nebraska,NV:Nevada,NH:New Hampshire,NJ:New Jersey,NM:New Mexico,NY:New York,' +
+  'NC:North Carolina,ND:North Dakota,OH:Ohio,OK:Oklahoma,OR:Oregon,PA:Pennsylvania,' +
+  'RI:Rhode Island,SC:South Carolina,SD:South Dakota,TN:Tennessee,TX:Texas,UT:Utah,' +
+  'VT:Vermont,VA:Virginia,WA:Washington,WV:West Virginia,WI:Wisconsin,WY:Wyoming';
+
+const COUNTRIES = [
+  'Australia', 'Austria', 'Belgium', 'Brazil', 'Canada', 'China', 'Czech Republic', 'Denmark',
+  'Finland', 'France', 'Germany', 'Greece', 'Hong Kong', 'Hungary', 'India', 'Ireland', 'Israel',
+  'Italy', 'Japan', 'Korea, Republic of', 'Mexico', 'Netherlands', 'New Zealand', 'Norway',
+  'Poland', 'Portugal', 'Singapore', 'South Africa', 'Spain', 'Sweden', 'Switzerland', 'Turkey',
+  'United Arab Emirates', 'United Kingdom', 'United States', 'Viet Nam',
+  // The ones with punctuation. A page rarely reproduces CLDR's curly
+  // apostrophe or its ampersand, and an address stored from one of these has
+  // to come back out matching the other.
+  "Cote d'Ivoire", 'Antigua and Barbuda', 'Aland Islands', 'Sao Tome and Principe',
+];
+
+function fillSelect(id, entries) {
+  const select = document.getElementById(id);
+  if (!select) return;
+  for (const [value, text] of entries) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    select.append(option);
+  }
+}
+
+fillSelect(
+  'c8',
+  US_STATES.split(',').map((entry) => {
+    const at = entry.indexOf(':');
+    return [entry.slice(0, at), entry.slice(at + 1)];
+  }),
+);
+fillSelect(
+  'c10',
+  COUNTRIES.sort((a, b) => a.localeCompare(b, 'en')).map((name) => [name, name]),
+);
+
 // Section 5: the second half of a two-step login. The first page collects the
 // username and the password box only exists after it, which is the shape that
 // defeats a manager expecting both at once.

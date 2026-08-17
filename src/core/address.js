@@ -164,6 +164,8 @@ for (const entry of COUNTRY_TABLE.split('|')) {
 const COUNTRY_ALIASES = {
   US: ['United States of America', 'USA', 'U.S.A.', 'U.S.', 'America'],
   GB: ['United Kingdom of Great Britain and Northern Ireland', 'UK', 'Great Britain', 'England'],
+  // CLDR prefers a short conversational name; the ISO long form is what a
+  // government-shaped dropdown uses.
   KR: ['Korea, Republic of', 'Republic of Korea', 'Korea (South)'],
   KP: ["Korea, Democratic People's Republic of", 'Korea (North)'],
   RU: ['Russian Federation'],
@@ -176,22 +178,27 @@ const COUNTRY_ALIASES = {
   TZ: ['Tanzania, United Republic of'],
   BO: ['Bolivia, Plurinational State of'],
   VE: ['Venezuela, Bolivarian Republic of'],
-  CD: ['Congo, The Democratic Republic of the', 'DR Congo'],
-  CG: ['Congo, Republic of the'],
-  CI: ["Cote d'Ivoire", 'Ivory Coast'],
-  CV: ['Cape Verde'],
+  // CLDR disambiguates the two Congos by capital, which no checkout does.
+  CD: ['Congo, The Democratic Republic of the', 'Democratic Republic of the Congo', 'DR Congo'],
+  CG: ['Congo, Republic of the', 'Republic of the Congo', 'Congo'],
+  CI: ['Ivory Coast'],
   CZ: ['Czech Republic'],
-  SZ: ['Swaziland'],
-  MK: ['Macedonia', 'Republic of North Macedonia'],
-  MM: ['Burma'],
-  TL: ['East Timor'],
   NL: ['Holland', 'The Netherlands'],
   AE: ['UAE'],
-  VA: ['Vatican City', 'Holy See'],
-  PS: ['Palestine, State of'],
+  VA: ['Holy See'],
+  PS: ['Palestine, State of', 'Palestine'],
   BN: ['Brunei Darussalam'],
-  MO: ['Macau'],
-  HK: ['Hong Kong SAR China'],
+  TL: ['East Timor'],
+  // Renamed countries. The old name is still what most option lists say, and
+  // the new one is what CLDR returns, so both have to work.
+  TR: ['Turkey'],
+  CV: ['Cabo Verde'],
+  SZ: ['Swaziland'],
+  MK: ['Macedonia', 'Republic of North Macedonia'],
+  // CLDR keeps a parenthetical or an administrative suffix that a site drops.
+  MM: ['Burma', 'Myanmar'],
+  HK: ['Hong Kong'],
+  MO: ['Macao', 'Macau'],
 };
 
 // ---- subdivisions ---------------------------------------------------------
@@ -393,6 +400,16 @@ function valueFor(record, token) {
  * all three mean the same thing.
  */
 function altsFor(record, token) {
+  if (token === 'tel') {
+    // The same number without its country code. Plenty of forms have a single
+    // "Phone" box that means the domestic form and will not accept `+44` in
+    // front of it — some reject it outright, and a good many simply have a
+    // maxlength too short to hold it. Offering both lets the fill pick the one
+    // that fits rather than this file guessing which country's conventions the
+    // page has in mind.
+    const national = telParts(record?.tel)['tel-national'];
+    return national ? [national] : [];
+  }
   if (token === 'country' || token === 'country-name') {
     const code = countryCode(record?.country);
     if (!code) return [];
@@ -423,7 +440,18 @@ export function valuesForTokens(record, tokens) {
   const alts = {};
   const seen = new Set();
 
-  for (const raw of tokens ?? []) {
+  const asked = [...new Set((tokens ?? []).map((t) => String(t ?? '')))];
+
+  // A country code and a country name are the same fact written two ways, so
+  // asking for either is asking for both. The fill needs both to hand: `US`
+  // belongs in a field the page marked `autocomplete="country"`, and "United
+  // States" belongs in a box merely labelled Country that a person would type a
+  // name into. This is the one place a token is added that was not requested,
+  // and it discloses nothing the requested one did not.
+  if (asked.includes('country') && !asked.includes('country-name')) asked.push('country-name');
+  if (asked.includes('country-name') && !asked.includes('country')) asked.push('country');
+
+  for (const raw of asked) {
     const token = String(raw ?? '');
     if (!ADDRESS_TOKENS.has(token) || seen.has(token)) continue;
     seen.add(token);

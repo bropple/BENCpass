@@ -40,6 +40,11 @@ input:focus { outline: none; border-color: var(--accent); }
 .capture { background: var(--panel); border-bottom: 1px solid var(--border); padding: 10px; }
 .capture-text { margin: 0 0 8px; }
 .capture-actions { display: flex; gap: 6px; }
+/* The name an address is kept under. Shown only for addresses — a login is
+   identified by its site, an address by whatever you call it. */
+.capture-name { display: block; margin: 0 0 8px; }
+.capture-name .label { display: block; margin-bottom: 3px; }
+.capture-name input { width: 100%; }
 
 .search { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
 .row { display: block; width: 100%; text-align: left; background: none; border: 0;

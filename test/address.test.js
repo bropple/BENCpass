@@ -81,6 +81,39 @@ test('spelling differences that are not really differences still match', () => {
   assert.equal(countryCode('Antigua & Barbuda'), 'AG');
 });
 
+test('the spellings a real option list actually uses all resolve', () => {
+  // CLDR's name is often not what a checkout prints. Every one of these was a
+  // miss before the alias list was checked against it rather than written from
+  // memory — an alias that merely repeats the CLDR name adds nothing.
+  const cases = {
+    Turkey: 'TR',
+    'Cabo Verde': 'CV',
+    Myanmar: 'MM',
+    'Hong Kong': 'HK',
+    Macao: 'MO',
+    Palestine: 'PS',
+    'Vatican City': 'VA',
+    'Timor-Leste': 'TL',
+    'Democratic Republic of the Congo': 'CD',
+    'Republic of the Congo': 'CG',
+    'Czech Republic': 'CZ',
+    Swaziland: 'SZ',
+    'Ivory Coast': 'CI',
+    'Korea, Republic of': 'KR',
+    'Viet Nam': 'VN',
+    Holland: 'NL',
+  };
+  for (const [name, code] of Object.entries(cases)) {
+    assert.equal(countryCode(name), code, `${name} should resolve to ${code}`);
+  }
+});
+
+test('every country still resolves from its own name', () => {
+  for (const [code, name] of countryOptions()) {
+    assert.equal(countryCode(name), code, `${name} no longer resolves to ${code}`);
+  }
+});
+
 test('a country that is not one resolves to nothing', () => {
   assert.equal(countryCode('Atlantis'), '');
   assert.equal(countryCode(''), '');
@@ -192,6 +225,40 @@ test('a dropdown gets the alternatives it may be spelled with', () => {
   assert.ok(alts.country.includes('USA'));
   // A state stored by name can still match a dropdown of abbreviations.
   assert.deepEqual(alts['address-level1'], ['CA']);
+});
+
+test('a phone number is offered without its country code as well', () => {
+  // Not every form with a single Phone box will take `+1` in front of it, and
+  // many are sized so it cannot fit. The fill picks whichever suits the field;
+  // the model just has to offer both.
+  const { values, alts } = valuesForTokens(HOME, ['tel']);
+  assert.equal(values.tel, '+1 (415) 555-0132');
+  assert.deepEqual(alts.tel, ['(415) 555-0132']);
+});
+
+test('a phone number with no country code to strip has no alternative', () => {
+  const local = { ...HOME, tel: '0118 496 0000' };
+  const { values, alts } = valuesForTokens(local, ['tel']);
+  assert.equal(values.tel, '0118 496 0000');
+  assert.equal(alts.tel, undefined);
+});
+
+test('asking for the country gets the name too, and the other way round', () => {
+  // The same fact written two ways. An `autocomplete="country"` field wants the
+  // code; a box merely labelled Country wants the name, and only the fill side
+  // can tell which it is looking at.
+  const byCode = valuesForTokens(HOME, ['country']).values;
+  assert.equal(byCode.country, 'US');
+  assert.equal(byCode['country-name'], 'United States');
+
+  const byName = valuesForTokens(HOME, ['country-name']).values;
+  assert.equal(byName.country, 'US');
+  assert.equal(byName['country-name'], 'United States');
+});
+
+test('the country pair is the only thing volunteered', () => {
+  const { values } = valuesForTokens(HOME, ['country', 'postal-code']);
+  assert.deepEqual(Object.keys(values).sort(), ['country', 'country-name', 'postal-code']);
 });
 
 test('a state outside the countries with a subdivision table has no alternatives', () => {

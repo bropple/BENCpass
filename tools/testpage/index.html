@@ -141,11 +141,22 @@
     <input id="g4b" name="state">
     <label for="g5">Postcode</label>
     <input id="g5" name="zip">
+    <!-- Country as a text box, which is the case the dropdown in section 10
+         does not cover: here the country has to arrive as a name a person
+         would type, not as an option to be picked. -->
+    <label for="g7">Country</label>
+    <input id="g7" name="country">
+    <label for="g8">Phone</label>
+    <input id="g8" name="phone" type="tel" maxlength="14">
     <label for="g6">Discount code</label>
     <input id="g6" name="promo_code">
     <button>Continue</button>
   </form>
-  <p class="expect">Expect: address fields map; the discount box is left alone.</p>
+  <p class="expect">
+    Expect: address fields map, including country and phone as plain text; the
+    discount box is left alone. The phone box is <code>maxlength=14</code>, so a
+    number stored with its country code should arrive without one.
+  </p>
 </section>
 
 <section>
@@ -187,20 +198,18 @@
     <label for="c7">City</label>
     <input id="c7" autocomplete="shipping address-level2">
     <label for="c8">State</label>
+    <!-- Both lists are filled in by testpage.js, and neither is convenient:
+         the states carry abbreviations as values with the full name as text,
+         and the countries carry the *name* as the value rather than the ISO
+         code, spelled the way sites really spell them. See testpage.js. -->
     <select id="c8" autocomplete="shipping address-level1">
       <option value="">Choose…</option>
-      <option value="CA">California</option>
-      <option value="NY">New York</option>
-      <option value="TX">Texas</option>
     </select>
     <label for="c9">ZIP</label>
     <input id="c9" autocomplete="shipping postal-code">
     <label for="c10">Country</label>
     <select id="c10" name="country">
       <option value="">Choose…</option>
-      <option value="US">United States</option>
-      <option value="GB">United Kingdom</option>
-      <option value="DE">Germany</option>
     </select>
     <label for="c11">Phone</label>
     <input id="c11" type="tel" autocomplete="shipping tel">

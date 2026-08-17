@@ -15,6 +15,7 @@ import {
   valuesForTokens,
   normalizeCaptured,
   isAddressish,
+  addressSummary,
 } from '../core/address.js';
 import { generate } from '../core/generate.js';
 import { SyncClient, syncOnce, loadSyncState, dumpSyncState } from '../core/sync.js';
@@ -234,7 +235,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     case MSG.SYNC:
       return handleSync();
     case MSG.SAVE:
-      return handleSave(sender);
+      return handleSave(msg, sender);
     case MSG.DISCARD:
       return handleDiscard();
     case MSG.CLOSE:
@@ -563,7 +564,7 @@ async function handleClose(msg, sender) {
  * Only ever reached by the user pressing Save in the popup. A capture sits in
  * memory until then and is discarded when the tab closes.
  */
-async function handleSave(sender) {
+async function handleSave(msg, sender) {
   if (!isExtensionPage(sender)) return { ok: false };
   if (!vault || vault.locked) return { ok: false, reason: 'locked' };
 
@@ -571,8 +572,31 @@ async function handleSave(sender) {
   const pending = tab ? pendingCaptures.get(tab.id) : null;
   if (!pending) return { ok: false, reason: 'nothing-pending' };
 
+  let merged = false;
   if (pending.kind === 'address') {
-    await vault.add({ type: 'address', title: pending.host, ...pending.address });
+    // Named by the user, never by the site it was typed into. An address
+    // belongs to the person: one "Home" is then offered on every checkout,
+    // which is the whole difference between an address and a login. Titling
+    // these with the host produced a vault full of near-identical addresses
+    // called after shops.
+    const title =
+      asString(msg.title, 60).trim() ||
+      pending.suggestedName ||
+      addressSummary(pending.address) ||
+      'Address';
+
+    // Saving under a name that already exists updates that address rather than
+    // adding a second one beside it. Otherwise "Home" becomes "Home", "Home",
+    // "Home" — and there is no way to tell from the menu which is current.
+    const existing = addressesFor(vault.list()).find(
+      (r) => (r.title ?? '').toLowerCase() === title.toLowerCase(),
+    );
+    if (existing) {
+      await vault.update(existing.id, { ...pending.address, title });
+      merged = true;
+    } else {
+      await vault.add({ type: 'address', title, ...pending.address });
+    }
   } else if (pending.existingId) {
     // The old password is kept in the record's history by applyPatch, so a
     // capture that turns out to be a typo is recoverable.
@@ -591,7 +615,7 @@ async function handleSave(sender) {
   clearCaptureNotice();
   paintBadge();
   bumpAutolock();
-  return { ok: true };
+  return { ok: true, merged };
 }
 
 async function handleDiscard() {
@@ -646,10 +670,18 @@ async function handleCapture(msg, sender) {
   const password = asString(msg.password, 1024);
   if (!password) return { ok: false };
 
-  const existing = matchesFor(vault.list(), origin.frameHost).find(
-    (r) => (r.username ?? '') === username,
-  );
-  if (existing && existing.password === password) {
+  const forHost = matchesFor(vault.list(), origin.frameHost);
+  const existing = forHost.find((r) => (r.username ?? '') === username);
+
+  // Nothing to learn if this host already has this exact password on file. The
+  // username is only required to match when there was one to see: the second
+  // page of a two-step sign-in has no username box at all, so insisting on it
+  // there turned every such sign-in into an offer to save a duplicate.
+  const alreadyKnown = existing
+    ? existing.password === password
+    : !username && forHost.some((r) => r.password === password);
+
+  if (alreadyKnown) {
     // Nothing new — and anything still pending for this tab is now stale. A
     // leftover offer looks identical to a fresh one, which is how "it asks to
     // update a password I did not change" happens.
@@ -709,21 +741,40 @@ function captureAddress(msg, origin) {
     kind: 'address',
     host: origin.frameHost,
     address: incoming,
+    // A starting point for the name, never the final word — the popup offers it
+    // in an editable box, and "Home" is the placeholder. The site is not a
+    // candidate: an address is not a per-site thing, and naming one after the
+    // shop it was first typed into is what made a vault full of addresses
+    // called after shops.
+    suggestedName: suggestAddressName(incoming),
   });
   paintBadge();
-  announceAddress(origin.frameHost);
+  announceAddress();
   return { ok: true };
 }
 
-function announceAddress(host) {
+/**
+ * A plausible name for a newly seen address.
+ *
+ * The town, which is the part of an address a person is most likely to think of
+ * it by after "home" and "work". Failing that the street, and failing that
+ * nothing at all — an empty box with a placeholder is more honest than a name
+ * nobody chose.
+ */
+const suggestAddressName = (a) =>
+  asString(a['address-level2'] || a['address-line1'] || '', 60).trim();
+
+function announceAddress() {
   if (!browser.notifications?.create) return;
   try {
     browser.notifications
       .create(CAPTURE_NOTICE, {
         type: 'basic',
         iconUrl: browser.runtime.getURL('ext/icons/64.png'),
-        title: 'BENCpass — save address?',
-        message: `Keep the address you entered on ${host}?`,
+        title: 'BENCpass — keep this address?',
+        // No site named, deliberately. The address is not being filed under the
+        // shop; it is being added to your addresses, under a name you give it.
+        message: 'Open BENCpass to name it and keep it.',
       })
       .catch(() => {});
   } catch {
@@ -802,12 +853,8 @@ async function handleState(sender) {
           kind: pending.kind ?? 'login',
           host: pending.host,
           username: pending.username,
-          summary:
-            pending.kind === 'address'
-              ? [pending.address['address-line1'], pending.address['address-level2']]
-                  .filter(Boolean)
-                  .join(', ')
-              : '',
+          summary: pending.kind === 'address' ? addressSummary(pending.address) : '',
+          suggestedName: pending.suggestedName ?? '',
           update: Boolean(pending.existingId),
         }
       : null,
