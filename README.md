@@ -60,6 +60,24 @@ cd server && go run . -dir ./data   # prints a bootstrap enrolment code
 `npm test` skips the integration tests if no Go toolchain is present, and says
 so rather than passing quietly.
 
+### `npm install` reports high-severity vulnerabilities
+
+Expected, and not worth acting on. All of them trace to one package:
+
+```
+web-ext (devDependency) -> addons-linter -> image-size
+    "ICNS parser allows denial of service through an infinite loop"
+```
+
+`web-ext` is the lint-and-run tool. It is not shipped: the built `.xpi` contains
+no `node_modules` at all, and the only runtime dependency is `hash-wasm`. The
+bug needs `web-ext lint` pointed at a hostile macOS icon file; the icons here
+are PNGs this repository generates.
+
+**Do not run `npm audit fix --force`.** It will move `web-ext` across a major
+version to fix a denial of service in a code path that never runs, and break the
+tooling in exchange.
+
 **On Windows.** The extension itself is the same `.xpi` — it is browser
 JavaScript and contains no platform-specific code — and the Go server
 cross-compiles to a static `.exe`. Only the developer tooling differs, and only
