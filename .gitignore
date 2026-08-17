@@ -1,33 +1,38 @@
+# Dependencies and build output
 node_modules/
 dist/
+
+# Logs
 *.log
-
-# macOS leaves these all over a shared folder
-.DS_Store
-._*
-
-# preview harness output
-screenshots/
-src/ui/.preview.html
-src/ext/.toast-preview.html
 
 # BENCO style guides, shared across apps rather than owned by this one
 style/
 
-# build output
-dist/
+# Preview harness output. The two .html files are generated from the real
+# markup with only their script swapped — see tools/preview.sh — so they are
+# derived from tracked files and must never be committed alongside them.
+screenshots/
+src/ui/.preview.html
+src/ext/.toast-preview.html
 
-# stray go build output
+# Go server: the compiled binary and anything it has been asked to store
 server/server
 server/data/
 
-# test browser profile, kept between runs
+# The test browser profile, kept between runs so the vault survives
 .bencpass-profile/
 
-# self-test output
-/tmp/bencpass-selftest.json
-
-# built native hosts
-hosts/macos/bencpass-auth
-hosts/linux/bencpass-auth
+# Native hosts are built on the machine that will run them — a Touch ID binary
+# is not portable and has no business in a repository.
+hosts/*/bencpass-auth
 hosts/windows/bin/
+*.dSYM/
+
+# Editors and operating systems, which scatter these through a working tree and
+# have never once been worth committing.
+.DS_Store
+._*
+.vscode/
+.idea/
+*.swp
+*~
