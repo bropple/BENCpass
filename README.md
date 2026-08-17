@@ -61,6 +61,22 @@ cd server && go run . -dir ./data   # prints a bootstrap enrolment code
 `npm test` skips the integration tests if no Go toolchain is present, and says
 so rather than passing quietly.
 
+### Keyboard
+
+| | |
+|---|---|
+| `Alt+Shift+B` | open the BENCpass sidebar |
+| `Ctrl+Shift+L` | offer a login for the page |
+
+Rebind them at `about:addons` → gear → Manage Extension Shortcuts.
+
+The sidebar shortcut exists because nothing else can open a sidebar from a web
+page. `sidebarAction.open()` is not exposed to an extension page framed inside
+one, and from the background it refuses with *"may only be called from a user
+input handler"*. A keyboard command **is** a user input handler, and Firefox
+reserves the command name `_execute_sidebar_action` to open the sidebar itself —
+so there is no API call left to refuse.
+
 The test browser uses a dedicated profile at `.bencpass-profile/`, kept between
 runs so the vault survives — recreating it every launch makes autofill
 essentially untestable. Updates are disabled inside it, because a second

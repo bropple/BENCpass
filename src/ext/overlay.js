@@ -65,7 +65,7 @@ async function render() {
     list.append(
       row({
         title: 'Unlock BENCpass',
-        sub: 'Opens the manager, and comes back here',
+        sub: 'Or press Alt+Shift+B for the sidebar',
         className: 'gen',
         onPick: async () => {
           // A tab, and deliberately not the sidebar or the toolbar popup.
@@ -78,9 +78,15 @@ async function render() {
           //   browserAction        no button to anchor to when the chrome is
           //   .openPopup()         hidden; resolves and shows nothing
           //
-          // No context has both the API and a gesture, so the tab is not a
-          // fallback here, it is the answer. The background closes it again
-          // once the vault opens and returns to this page.
+          // No context has both the API and a gesture — from here. A keyboard
+          // command does have one, and Firefox reserves the command name
+          // `_execute_sidebar_action` for exactly this, opening the sidebar
+          // itself with no API call to refuse. That is in the manifest, bound
+          // to Alt+Shift+B, and is the way to get a sidebar rather than a tab.
+          //
+          // This row cannot press it for you, so it opens the manager. The
+          // background closes that tab again once the vault opens and returns
+          // to this page.
           //
           // Still not a password box in the page: see the note above.
           await browser.runtime.sendMessage({ type: MSG.OPEN_MANAGER });
