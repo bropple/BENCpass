@@ -11,14 +11,21 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 port=${PORT:-8731}
-gen="$root/src/ui/.preview.html"
-toast_gen="$root/src/ext/.toast-preview.html"
+# Generated into build/, not next to the source it is generated from. A file
+# that appears inside src/ dirties the working tree for reasons nobody can
+# account for later, and src/ is what web-ext packages — a stray page there can
+# end up inside the extension.
+out_dir="$root/build/preview"
+gen="$out_dir/manager.html"
+toast_gen="$out_dir/toast.html"
+mkdir -p "$out_dir"
 
 # The preview page is the real manager.html with its script swapped, so the
 # markup cannot drift between what is previewed and what ships. The held script
 # is added only for screenshots; see tools/serve.mjs for why.
 build_page() {
-  sed 's|src="manager.js"|src="../../tools/preview.js"|' \
+  sed -e 's|src="manager.js"|src="/tools/preview.js"|' \
+      -e 's|href="style.css"|href="/src/ui/style.css"|' \
     "$root/src/ui/manager.html" > "$gen"
   if [ -n "${1:-}" ]; then
     sed -i "s|</body>|<script defer src=\"/__hold?ms=$1\"></script></body>|" "$gen"
@@ -28,7 +35,9 @@ build_page() {
 # The save prompt, the same way: the real markup and stylesheet with only the
 # script swapped, so a screenshot is of the thing that ships.
 build_toast() {
-  sed 's|src="toast.js"|src="../../tools/toast-preview.js"|' \
+  sed -e 's|src="toast.js"|src="/tools/toast-preview.js"|' \
+      -e 's|href="toast.css"|href="/src/ext/toast.css"|' \
+      -e 's|src="icons/32.png"|src="/src/ext/icons/32.png"|' \
     "$root/src/ext/toast.html" > "$toast_gen"
   # The toast draws itself from a message posted after its module has run, so
   # the load event fires before there is anything on screen and a screenshot
@@ -44,8 +53,8 @@ cleanup() { kill $server 2>/dev/null || true; rm -f "$gen" "$toast_gen"; }
 trap cleanup EXIT
 sleep 0.5
 
-base="http://127.0.0.1:$port/src/ui/.preview.html"
-toast_base="http://127.0.0.1:$port/src/ext/.toast-preview.html"
+base="http://127.0.0.1:$port/build/preview/manager.html"
+toast_base="http://127.0.0.1:$port/build/preview/toast.html"
 
 if [ "${1:-}" = "shot" ]; then
   build_page 3000

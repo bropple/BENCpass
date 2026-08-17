@@ -8,7 +8,7 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-out="$root/dist/server"
+out="$root/build/server"
 version=${VERSION:-dev}
 
 mkdir -p "$out"

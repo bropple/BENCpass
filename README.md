@@ -39,8 +39,17 @@ src/ui/       the manager page
 src/vendor/   Argon2 (hash-wasm), vendored as one ES module
 server/       the Go sync server
 tools/        preview harness, icon and build scripts
+hosts/        the native host that puts Touch ID in front of the vault
 test/         Node tests, including integration tests against the real server
+build/        everything generated — gitignored whole, safe to delete
 ```
+
+Nothing is written outside `build/` except the screenshots and the test browser
+profile, which are kept where they are because they are looked at and lived in
+rather than built. One ignored directory rather than a list of rules that has
+to be kept in step with the scripts: a generated file landing beside its source
+is how a working tree ends up dirty for reasons nobody can account for, and how
+a stray page ends up inside a packaged extension.
 
 ## Running things
 
@@ -54,7 +63,7 @@ tools/run-extension.sh fresh   # ...discarding the previous test vault
 tools/run-extension.sh verbose # ...logging what the browser itself prints
 tools\run-extension.ps1     # the same on Windows; -Fresh to discard
 npx web-ext lint --source-dir=src --self-hosted
-npx web-ext build --source-dir=src --artifacts-dir=dist/ext
+npx web-ext build --source-dir=src --artifacts-dir=build/ext
 
 tools/preview.sh            # the manager UI, with a throwaway seeded vault
 tools/preview.sh shot       # screenshots of every state, into screenshots/

@@ -15,7 +15,10 @@ set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 port=${PORT:-8734}
-result=${RESULT_FILE:-/tmp/bencpass-selftest.json}
+logs="$root/build/logs"
+mkdir -p "$logs"
+result=${RESULT_FILE:-$logs/selftest.json}
+webext_log="$logs/selftest-webext.log"
 . "$root/tools/find-browser.sh"
 browser=$BROWSER_BIN
 profile=$(mktemp -d)
@@ -49,7 +52,7 @@ while IFS= read -r pref; do
   set -- "$@" --pref "$pref"
 done < "$root/tools/test-prefs.txt"
 
-npx web-ext run "$@" >/tmp/bencpass-webext.log 2>&1 &
+npx web-ext run "$@" >"$webext_log" 2>&1 &
 webext=$!
 
 # The page reports after roughly eight seconds of scripted interaction.
@@ -61,7 +64,7 @@ done
 
 if [ ! -f "$result" ]; then
   echo "no result after ${i}s — web-ext log follows:" >&2
-  tail -20 /tmp/bencpass-webext.log >&2
+  tail -20 "$webext_log" >&2
   exit 1
 fi
 

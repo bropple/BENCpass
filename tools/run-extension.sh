@@ -93,7 +93,8 @@ if command -v pgrep >/dev/null 2>&1 && pgrep -f "$profile" >/dev/null 2>&1; then
   echo >&2
 fi
 
-log=${TMPDIR:-/tmp}/bencpass-web-ext.log
+log="$root/build/logs/web-ext.log"
+mkdir -p "$root/build/logs"
 
 # The status has to come out of the brace group, because a pipeline reports the
 # exit code of its last command and that is the filter, not web-ext.

@@ -17,6 +17,7 @@ set -eu
 name="net.ropple.bencpass.auth"
 extension_id="bencpass@ropple.net"
 root=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$root/.." && pwd)
 
 case $(uname -s) in
   Darwin)
@@ -24,12 +25,12 @@ case $(uname -s) in
     # Firefox and Zen both read the Mozilla directory; Zen is a Firefox fork and
     # has not moved it.
     manifest_dir="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
-    binary="$root/macos/bencpass-auth"
+    binary="$repo/build/hosts/bencpass-auth"
     ;;
   Linux)
     platform=linux
     manifest_dir="$HOME/.mozilla/native-messaging-hosts"
-    binary="$root/linux/bencpass-auth"
+    binary="$repo/build/hosts/bencpass-auth"
     ;;
   *)
     echo "No host for $(uname -s). Windows uses hosts\\windows\\install.ps1." >&2
@@ -60,6 +61,7 @@ case $platform in
       exit 1
     fi
     echo "building $binary"
+    mkdir -p "$(dirname "$binary")"
     swiftc -O -o "$binary" "$root/macos/main.swift"
 
     # Ad-hoc signing. Not for distribution — it is what makes macOS attribute
