@@ -1,11 +1,15 @@
 // BENCpass native host for macOS: Touch ID in front of one random string.
 //
 // See ../PROTOCOL.md for the messages. In short: the browser hands this program
-// 32 bytes it cannot interpret, it puts them in the Keychain behind a biometric
-// access control, and hands them back when Touch ID says so. It never sees the
-// master password, the vault key, or a record.
+// 32 bytes it cannot interpret, it seals them so that only a fingerprint on this
+// Mac can open them again, and hands them back when Touch ID says so. It never
+// sees the master password, the vault key, or a record.
 //
-// Build with ../build-macos.sh, which also installs the manifest.
+// Sealed against a key held in the Secure Enclave rather than put in the
+// keychain, for a reason worth reading before changing it — see "the enclave"
+// below, and hosts/macos/README.md.
+//
+// Build and register with ../install.sh.
 
 import Foundation
 import LocalAuthentication

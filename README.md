@@ -319,15 +319,15 @@ random bytes it cannot interpret and asked for them back later. See
 
 | | |
 |---|---|
-| macOS | Touch ID, via `LocalAuthentication` and a Keychain item with `.biometryCurrentSet` — so changing your enrolled fingerprints destroys the secret |
+| macOS | Touch ID, via a Secure Enclave key with `.biometryCurrentSet` — the secret is sealed to it and kept as ciphertext, so changing your enrolled fingerprints destroys the key and the file becomes unopenable. Not a keychain item: see `hosts/macos/README.md` for the three measurements that ruled that out |
 | Windows | not yet |
 | Linux | deliberately not. There is no equivalent to put in front of the secret: the desktop keyrings unlock with your login password, which would make this a way into the vault *without* a password rather than a stronger one |
 
-The macOS host uses the file-based keychain rather than the data-protection
-one. The latter requires a `keychain-access-groups` entitlement backed by a real
-team identifier, which a locally built command-line tool cannot have; it fails
-with `errSecMissingEntitlement`. The file-based keychain honours the same
-`SecAccessControl`, which is the part that matters.
+The macOS host does not use the keychain at all. A keychain item carrying a
+biometric access control needs a `keychain-access-groups` entitlement, and that
+entitlement is authorised by Apple alone — a self-signed certificate embeds it
+and the kernel then refuses to run the program. Measured three ways on a runner
+rather than reasoned about; the table is in `hosts/macos/README.md`.
 
 `hosts/install.sh` ad-hoc signs the binary (`codesign --sign -`). That is not
 for distribution — it gives macOS a stable identity to attribute the Touch ID
