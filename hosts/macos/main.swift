@@ -276,7 +276,62 @@ func probe() -> [String: Any] {
         "accessControl": "created",
         "biometrics": biometricsAvailable() ? "available" : "none",
         "results": results,
+        "secureEnclave": probeSecureEnclave(),
     ]
+}
+
+/// Can a Secure Enclave key be created and kept, without a keychain group?
+///
+/// This is the other shape the feature could take, and it needs no access group
+/// if it works. Rather than putting the secret in the keychain behind a
+/// biometric access control — which needs an entitlement only Apple can
+/// authorise — generate a key *in the enclave* whose use is gated by a
+/// fingerprint, and keep the device secret as ciphertext in an ordinary file.
+/// The file is then worthless without the enclave, and the enclave will not act
+/// without the fingerprint.
+///
+/// Whether the enclave will keep a key for a binary with no entitlement is the
+/// same kind of question as the one above, and gets the same treatment.
+func probeSecureEnclave() -> [String: Any] {
+    var accessError: Unmanaged<CFError>?
+    guard
+        let access = SecAccessControlCreateWithFlags(
+            nil,
+            kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
+            [.privateKeyUsage, .biometryCurrentSet],
+            &accessError
+        )
+    else {
+        return ["created": false, "error": "access control refused"]
+    }
+
+    let tag = "net.ropple.bencpass.probe.\(UInt32.random(in: 0..<UInt32.max))".data(using: .utf8)!
+    let attributes: [String: Any] = [
+        kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+        kSecAttrKeySizeInBits as String: 256,
+        kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
+        kSecPrivateKeyAttrs as String: [
+            kSecAttrIsPermanent as String: true,
+            kSecAttrApplicationTag as String: tag,
+            kSecAttrAccessControl as String: access,
+        ],
+    ]
+
+    var error: Unmanaged<CFError>?
+    guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
+        let e = error?.takeRetainedValue()
+        return ["created": false, "error": String(describing: e)]
+    }
+
+    // Clean up: this was only ever a question.
+    SecItemDelete(
+        [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: tag,
+        ] as CFDictionary
+    )
+    _ = key
+    return ["created": true]
 }
 
 // ---- dispatch ---------------------------------------------------------------
