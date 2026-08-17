@@ -33,18 +33,23 @@ cleanup() {
 trap cleanup EXIT
 sleep 0.5
 
-npx web-ext run \
-  --source-dir="$root/src" \
-  --firefox="$browser" \
-  --firefox-profile="$profile" \
-  --profile-create-if-missing \
-  --no-input \
-  --arg=--headless \
-  --start-url "http://127.0.0.1:$port/tools/testpage/index.html?selftest" \
-  --pref app.update.auto=false \
-  --pref app.update.enabled=false \
-  --pref browser.shell.checkDefaultBrowser=false \
-  >/tmp/bencpass-webext.log 2>&1 &
+set -- --source-dir="$root/src" \
+       --firefox="$browser" \
+       --firefox-profile="$profile" \
+       --profile-create-if-missing \
+       --no-input \
+       --arg=--headless \
+       --start-url "http://127.0.0.1:$port/tools/testpage/index.html?selftest"
+
+# The same prefs the interactive script uses. This one runs headless against a
+# throwaway profile, but it is still a second instance of the browser you use,
+# and it can nag it to restart just as readily.
+while IFS= read -r pref; do
+  case $pref in '' | \#*) continue ;; esac
+  set -- "$@" --pref "$pref"
+done < "$root/tools/test-prefs.txt"
+
+npx web-ext run "$@" >/tmp/bencpass-webext.log 2>&1 &
 webext=$!
 
 # The page reports after roughly eight seconds of scripted interaction.

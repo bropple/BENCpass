@@ -83,9 +83,45 @@ so there is no API call left to refuse.
 
 The test browser uses a dedicated profile at `.bencpass-profile/`, kept between
 runs so the vault survives — recreating it every launch makes autofill
-essentially untestable. Updates are disabled inside it, because a second
-instance would otherwise stage an update to the shared installation and the
-browser you actually use would then demand a restart.
+essentially untestable.
+
+### "Restart to update"
+
+Updates are turned off in the test profile, from `tools/test-prefs.txt` — one
+list, read by `run-extension.sh`, `run-extension.ps1` and `selftest.sh` alike.
+A second instance would otherwise stage an update into the shared installation,
+and the browser you actually use notices its own files changing underneath it.
+
+The prefs do not behave the same on every platform, which is why a list that
+looked settled on Windows still produced the nag on macOS:
+
+| | |
+|---|---|
+| `app.update.auto` | per-**profile** on macOS and Linux; per-**installation** on Windows, read from `update-config.json`, where setting the pref does nothing |
+| `app.update.service.enabled` | the Windows Maintenance Service. There is no such service on macOS |
+| `app.update.promptWaitTime` | the one that actually silences the nag — the restart prompt is scheduled 68 years out instead of the default twelve hours |
+
+Every name in that file was checked against the browser's own `omni.ja` rather
+than against memory. Three the list used to carry are not read by any current
+build: `app.update.enabled`, `app.update.checkInstallTime`, and
+`app.update.background.scheduling.enabled` — whose real name is
+`app.update.background.enabled`.
+
+**There is no supported pref that turns update checking off outright.**
+`app.update.disabledForTesting` exists but is gated on `Cu.isInAutomation ||
+Marionette.running || RemoteAgent.running`, none of which `web-ext` turns on.
+The only complete switch is the enterprise policy, and it belongs to the
+installation rather than to a profile — so it stops your ordinary browsing
+updating too, and it is not something these scripts will do to your machine
+behind your back. If you want it anyway, on macOS:
+
+```sh
+mkdir -p "/Applications/Zen.app/Contents/Resources/distribution"
+echo '{"policies":{"DisableAppUpdate":true}}' \
+  > "/Applications/Zen.app/Contents/Resources/distribution/policies.json"
+```
+
+Remember you have done it; the browser will then never update itself again.
 
 ### The self-test
 

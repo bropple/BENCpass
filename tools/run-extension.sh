@@ -61,29 +61,6 @@ if [ -n "$fresh" ]; then
   echo "wiped $profile"
 fi
 
-# Updates off, and thoroughly. A second instance starting up will otherwise
-# check for, stage and apply an update to the shared installation — at which
-# point the browser you actually use notices its own files have changed
-# underneath it and demands a restart. That is the whole cause of the nag.
-#
-# The rest silence first-run behaviour that has nothing to offer a test profile.
-prefs="
-app.update.auto=false
-app.update.enabled=false
-app.update.checkInstallTime=false
-app.update.staging.enabled=false
-app.update.service.enabled=false
-app.update.background.scheduling.enabled=false
-app.update.notifyDuringDownload=false
-extensions.update.enabled=false
-extensions.update.autoUpdateDefault=false
-browser.shell.checkDefaultBrowser=false
-browser.startup.homepage_override.mstone=ignore
-browser.aboutwelcome.enabled=false
-datareporting.policy.dataSubmissionEnabled=false
-toolkit.telemetry.reportingpolicy.firstRun=false
-"
-
 set -- --source-dir="$root/src" \
        --firefox="$browser" \
        --firefox-profile="$profile" \
@@ -92,9 +69,13 @@ set -- --source-dir="$root/src" \
        --start-url "http://127.0.0.1:$port/tools/testpage/index.html" \
        --browser-console
 
-for pref in $prefs; do
+# Updates off, and the reasons are long enough to live in their own file —
+# which is also the file the PowerShell script and the self-test read, so the
+# three cannot drift the way they had.
+while IFS= read -r pref; do
+  case $pref in '' | \#*) continue ;; esac
   set -- "$@" --pref "$pref"
-done
+done < "$root/tools/test-prefs.txt"
 
 if [ -n "$verbose" ]; then
   set -- "$@" --verbose

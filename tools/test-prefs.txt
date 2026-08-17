@@ -1,0 +1,82 @@
+# Preferences for the BENCpass test profile.
+#
+# One list, read by tools/run-extension.sh, tools/run-extension.ps1 and
+# tools/selftest.sh. It used to be written out in each of them, which is how the
+# shell and PowerShell copies came to disagree.
+#
+# Every name here was checked against the browser's own omni.ja rather than
+# against memory or a blog post. That check removed three prefs the list used to
+# carry that no current build reads at all — `app.update.enabled`,
+# `app.update.checkInstallTime` and `app.update.background.scheduling.enabled` —
+# and produced the correct name for the last of those.
+#
+# Format: one key=value per line, # for a comment.
+
+# ---- updates ---------------------------------------------------------------
+#
+# The point of all of this is that a test instance must not cause the browser
+# you actually use to demand a restart, and must not demand one itself.
+#
+# Note that these prefs do NOT behave the same on every platform, which is why
+# the same list looked like it worked on Windows and did not on macOS:
+#
+#   app.update.auto        a per-PROFILE pref on macOS and Linux, and a
+#                          per-INSTALLATION file on Windows — the pref is read
+#                          from update-config.json there and setting it here
+#                          does nothing (PER_INSTALLATION_PREFS_PLATFORMS is
+#                          ["win"]).
+#   app.update.service     the Windows Maintenance Service. There is no such
+#                          service on macOS, so this pref does nothing there.
+#
+# There is no supported pref that turns update checking off outright on a
+# release build. `app.update.disabledForTesting` exists but is gated on
+# `Cu.isInAutomation || Marionette.running || RemoteAgent.running`, none of
+# which web-ext turns on. The only complete switch is the enterprise policy
+# DisableAppUpdate, which lives in the installation directory and would apply to
+# your ordinary browsing too — see the README before reaching for it.
+#
+# So the approach here is: never write into the shared installation, and never
+# get around to prompting.
+
+# Download, but do not install by itself.
+app.update.auto=false
+
+# Do not stage an update into the installation directory. This is the one that
+# keeps the test instance from disturbing the browser you actually use: a staged
+# update rewrites files underneath it and it notices.
+app.update.staging.enabled=false
+
+# The standalone background update agent — a scheduled task that updates the
+# installation with no browser running at all.
+app.update.background.enabled=false
+
+# The background check timer, in seconds. 86400 is a full day and also the
+# ceiling: the timer is registered as `app.update.interval,21600,86400` and the
+# manager clamps to the maximum, so a larger number here buys nothing.
+app.update.interval=86400
+extensions.update.interval=86400
+
+# How long an update waits before prompting for a restart, in seconds. The
+# default is 43200 — twelve hours — and this is the pref that actually silences
+# the nag: the prompt is scheduled for a date no test session will reach.
+app.update.promptWaitTime=2147483647
+
+# The rest of the ways an update can announce itself.
+app.update.notifyDuringDownload=false
+app.update.noWindowAutoRestart.enabled=false
+app.update.checkOnlyInstance.enabled=false
+app.update.langpack.enabled=false
+app.update.service.enabled=false
+
+extensions.update.enabled=false
+extensions.update.autoUpdateDefault=false
+
+# ---- first-run noise -------------------------------------------------------
+#
+# Nothing here is about updates; it is the welcome tour, the default-browser
+# prompt and the telemetry consent, none of which a throwaway profile wants.
+browser.shell.checkDefaultBrowser=false
+browser.startup.homepage_override.mstone=ignore
+browser.aboutwelcome.enabled=false
+datareporting.policy.dataSubmissionEnabled=false
+toolkit.telemetry.reportingpolicy.firstRun=false

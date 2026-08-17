@@ -12,10 +12,11 @@
   survives; -Fresh wipes it. The extension is still installed unsigned and
   temporarily, so nothing touches the browser you actually use.
 
-  Updates are disabled in that profile. A second browser instance would
-  otherwise check for, stage and apply an update to the shared installation,
-  and the browser you actually use then notices its own files changing
-  underneath it and demands a restart.
+  Updates are disabled in that profile, from the shared list in
+  tools\test-prefs.txt. A second browser instance would otherwise check for,
+  stage and apply an update to the shared installation, and the browser you
+  actually use then notices its own files changing underneath it and demands a
+  restart.
 
   The test page is served over http://127.0.0.1, which BENCpass treats as a
   private host — so filling is allowed without a certificate and the
@@ -141,25 +142,14 @@ if ($Fresh -and (Test-Path $profileDir)) {
     Write-Host "wiped $profileDir"
 }
 
-# Updates off, and thoroughly -- this is what stops the running browser being
-# nagged to restart. The rest silence first-run behaviour a test profile has no
-# use for.
-$prefs = @(
-    'app.update.auto=false',
-    'app.update.enabled=false',
-    'app.update.checkInstallTime=false',
-    'app.update.staging.enabled=false',
-    'app.update.service.enabled=false',
-    'app.update.background.scheduling.enabled=false',
-    'app.update.notifyDuringDownload=false',
-    'extensions.update.enabled=false',
-    'extensions.update.autoUpdateDefault=false',
-    'browser.shell.checkDefaultBrowser=false',
-    'browser.startup.homepage_override.mstone=ignore',
-    'browser.aboutwelcome.enabled=false',
-    'datareporting.policy.dataSubmissionEnabled=false',
-    'toolkit.telemetry.reportingpolicy.firstRun=false'
-)
+# Updates off, and the reasons long enough to live in their own file. That file
+# is shared with the shell scripts, which is the point: the two lists were
+# written out separately and had begun to disagree.
+$prefsFile = Join-Path -Path (Join-Path -Path $root -ChildPath 'tools') -ChildPath 'test-prefs.txt'
+if (-not (Test-Path $prefsFile)) { throw "Missing $prefsFile" }
+$prefs = Get-Content $prefsFile |
+    ForEach-Object { $_.Trim() } |
+    Where-Object { $_ -and -not $_.StartsWith('#') }
 
 try {
     # Hidden rather than minimised: the static server has no output worth
