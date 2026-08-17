@@ -19,30 +19,41 @@ extension_id="bencpass@ropple.net"
 root=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$root/.." && pwd)
 
+# Where the browser looks for a manifest is the vendor directory, resolved from
+# `XREUserNativeManifests` — see NativeManifests.sys.mjs, which asks the
+# directory service rather than hard-coding a path. Zen is a Firefox fork and
+# its libxul carries the Mozilla vendor strings and no Zen ones, so it reads
+# Mozilla's directory.
+#
+# Every plausible location is written anyway. The alternative is a manifest in
+# the wrong place, which fails as the feature simply not appearing — no error,
+# nothing in a log, and no way to tell it apart from a browser that has not been
+# restarted. A stray JSON file in a directory nothing reads costs nothing.
 case $(uname -s) in
   Darwin)
     platform=macos
-    # Firefox and Zen both read the Mozilla directory; Zen is a Firefox fork and
-    # has not moved it.
-    manifest_dir="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
-    binary="$repo/build/hosts/bencpass-auth"
+    manifest_dirs="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts
+$HOME/Library/Application Support/Zen/NativeMessagingHosts
+$HOME/Library/Application Support/zen/NativeMessagingHosts"
     ;;
   Linux)
     platform=linux
-    manifest_dir="$HOME/.mozilla/native-messaging-hosts"
-    binary="$repo/build/hosts/bencpass-auth"
+    manifest_dirs="$HOME/.mozilla/native-messaging-hosts
+$HOME/.zen/native-messaging-hosts"
     ;;
   *)
     echo "No host for $(uname -s). Windows uses hosts\\windows\\install.ps1." >&2
     exit 1
     ;;
 esac
-
-manifest="$manifest_dir/$name.json"
+binary="$repo/build/hosts/bencpass-auth"
 
 if [ "${1:-}" = "uninstall" ]; then
-  rm -f "$manifest"
-  echo "removed $manifest"
+  echo "$manifest_dirs" | while IFS= read -r dir; do
+    [ -f "$dir/$name.json" ] || continue
+    rm -f "$dir/$name.json"
+    echo "removed $dir/$name.json"
+  done
   if [ "$platform" = macos ]; then
     echo "The secret itself is in the login keychain as 'BENCpass device secret'."
     echo "Turning biometric unlock off in BENCpass removes it; this script does not,"
@@ -86,8 +97,9 @@ esac
 
 # ---- register ---------------------------------------------------------------
 
-mkdir -p "$manifest_dir"
-cat > "$manifest" <<EOF
+echo "$manifest_dirs" | while IFS= read -r dir; do
+  mkdir -p "$dir"
+  cat > "$dir/$name.json" <<EOF
 {
   "name": "$name",
   "description": "BENCpass biometric unlock",
@@ -96,9 +108,18 @@ cat > "$manifest" <<EOF
   "allowed_extensions": ["$extension_id"]
 }
 EOF
+  echo "installed $dir/$name.json"
+done
 
-echo "installed $manifest"
-echo
-echo "Restart the browser, then turn on biometric unlock in BENCpass."
-echo "You will be asked for your master password once, to wrap the vault key"
-echo "for the keystore — see the second-wrapping notes in src/core/vault.js."
+cat <<'EOF'
+
+Now start the browser — for the test profile, that is tools/run-extension.sh.
+The manifest belongs to your user account rather than to a profile, so the
+temporarily-installed extension can reach it just as a permanently installed one
+would. Quit any test browser already running first: it read the list of hosts at
+startup, before this file existed.
+
+Then, under the gear in the manager, turn on biometric unlock. You will be asked
+for your master password once, to wrap the vault key for the keystore — see the
+second-wrapping notes in src/core/vault.js for why that is unavoidable.
+EOF

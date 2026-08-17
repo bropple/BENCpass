@@ -286,7 +286,9 @@ which is what it does today and will always keep doing — the fingerprint is a
 shortcut, never the only key.
 
 Nothing appears in the interface until the host is installed — until then
-Settings says so, and says what to run:
+Settings says so, and says what to run. The manifest belongs to your user
+account rather than to a profile, so the temporarily-installed test extension
+reaches it just as a permanently installed one would:
 
 ```sh
 hosts/install.sh            # build the host and register it, then restart the browser
