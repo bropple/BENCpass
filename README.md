@@ -48,6 +48,7 @@ npm install && npm test     # 118 tests; the sync ones build and run the Go serv
 cd server && go test ./...  # 15 tests
 
 tools/run-extension.sh      # load into a scratch Zen profile, open the test page
+tools\run-extension.ps1     # the same, on Windows
 npx web-ext lint --source-dir=src --self-hosted
 npx web-ext build --source-dir=src --artifacts-dir=dist/ext
 
@@ -58,6 +59,17 @@ cd server && go run . -dir ./data   # prints a bootstrap enrolment code
 
 `npm test` skips the integration tests if no Go toolchain is present, and says
 so rather than passing quietly.
+
+**On Windows.** The extension itself is the same `.xpi` — it is browser
+JavaScript and contains no platform-specific code — and the Go server
+cross-compiles to a static `.exe`. Only the developer tooling differs, and only
+`run-extension` has a PowerShell counterpart so far; the rest of `tools/` is
+POSIX shell and wants Git Bash or WSL. Windows blocks unsigned scripts by
+default, so run it as:
+
+```
+powershell -ExecutionPolicy Bypass -File tools\run-extension.ps1
+```
 
 ## Reading
 

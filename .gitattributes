@@ -1,0 +1,20 @@
+# Keep line endings sane across a mixed-OS checkout.
+#
+# Without this, a clone on Windows with core.autocrlf=true rewrites the shell
+# scripts with CRLF, and every one of them then fails under Git Bash or WSL
+# with "bad interpreter: /bin/sh^M" — a message that says nothing about the
+# real cause. PowerShell is happy either way, but is pinned for symmetry.
+
+* text=auto
+
+*.sh    text eol=lf
+*.mjs   text eol=lf
+*.js    text eol=lf
+*.go    text eol=lf
+*.ps1   text eol=crlf
+
+*.png   binary
+*.ico   binary
+*.woff2 binary
+*.ttf   binary
+*.bmp   binary

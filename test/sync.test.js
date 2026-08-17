@@ -35,7 +35,10 @@ const haveGo = (() => {
 before(() => {
   if (!haveGo) return;
   buildDir = mkdtempSync(join(tmpdir(), 'bencpass-build-'));
-  binary = join(buildDir, 'bencpass-server');
+  // The extension is explicit rather than left to the toolchain: passing -o with
+  // .exe already on it makes the output name the same on every platform, so the
+  // spawn below does not have to guess what Go decided to call the file.
+  binary = join(buildDir, `bencpass-server${process.platform === 'win32' ? '.exe' : ''}`);
   execFileSync('go', ['build', '-o', binary, '.'], { cwd: join(root, 'server') });
 });
 
