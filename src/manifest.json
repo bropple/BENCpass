@@ -26,6 +26,7 @@
     "storage",
     "tabs",
     "idle",
+    "notifications",
     "nativeMessaging",
     "<all_urls>"
   ],

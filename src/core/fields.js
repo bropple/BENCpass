@@ -172,6 +172,33 @@ export function classifyLoginFields(fields) {
 }
 
 /**
+ * Classify each form on the page separately.
+ *
+ * Fields carry a `group` — their owning <form>, or a synthetic bucket for
+ * inputs with no form. Without this the whole document is treated as one form,
+ * and a page with more than one login-shaped thing on it gets exactly one set
+ * of roles: the classifier sees every password box at once, reads the count as
+ * a sign-up, and picks the first. Every other form on the page then goes
+ * unrecognised — which is not an exotic case, a login form beside a newsletter
+ * box is enough.
+ */
+export function classifyGroups(fields) {
+  const groups = new Map();
+  for (const f of fields) {
+    const key = f.group ?? 0;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+
+  return [...groups.entries()].map(([group, members]) => ({
+    group,
+    login: classifyLoginFields(members),
+    address: classifyAddressFields(members),
+    usernameOnly: isUsernameOnlyStep(members),
+  }));
+}
+
+/**
  * Is this a page asking for a username with no password yet?
  *
  * The two-step login, which is now the common shape. Getting it wrong means

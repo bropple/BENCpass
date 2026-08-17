@@ -54,6 +54,31 @@ async function render() {
   const kind = reply?.kind ?? 'login';
   $('head').textContent = kind === 'address' ? 'Addresses' : 'BENCpass';
 
+  if (kind === 'locked') {
+    // Deliberately a button that opens the toolbar popup, not a password box
+    // here.
+    //
+    // A master password typed into a panel floating over a page teaches exactly
+    // the habit that makes phishing work: any site can draw a convincing
+    // imitation of this menu, and the person has no way to tell them apart. The
+    // toolbar popup is browser chrome, which a page cannot draw over.
+    list.append(
+      row({
+        title: 'Unlock BENCpass',
+        sub: 'Opens the toolbar panel',
+        className: 'gen',
+        onPick: async () => {
+          try {
+            await browser.browserAction.openPopup();
+          } catch {
+            await browser.runtime.openOptionsPage();
+          }
+        },
+      }),
+    );
+    return;
+  }
+
   if (!candidates.length) {
     const p = document.createElement('p');
     p.className = 'empty';

@@ -9,7 +9,7 @@
 import { Vault } from '../core/vault.js';
 import { WebExtStorage } from '../core/storage.js';
 import { matchesFor, canFill, canFillAddress, addressesFor, hostOf } from '../core/match.js';
-import { classifyLoginFields, classifyAddressFields, isUsernameOnlyStep } from '../core/fields.js';
+import { classifyGroups } from '../core/fields.js';
 import { generate } from '../core/generate.js';
 import { SyncClient, syncOnce, loadSyncState, dumpSyncState } from '../core/sync.js';
 import { MSG, publicCandidate, publicAddress, isMessage, asString, asId } from './protocol.js';
@@ -198,10 +198,24 @@ browser.runtime.onMessage.addListener((msg, sender) => {
  * Titles and usernames only — enough to draw a menu. No password crosses here.
  */
 async function handleCandidates(msg, sender) {
-  if (!vault || vault.locked) return { locked: true, candidates: [] };
-  bumpAutolock();
-
   const origin = originOf(sender);
+
+  // A locked vault still gets a session. Returning nothing made the menu look
+  // broken rather than locked, and left no route to unlocking from the field
+  // the user was actually standing in.
+  if (!vault || vault.locked) {
+    const sessionId = newSessionId();
+    sessions.set(sessionId, {
+      created: Date.now(),
+      tabId: origin.tabId,
+      frameId: origin.frameId,
+      kind: 'locked',
+      ids: [],
+    });
+    return { locked: true, sessionId, candidates: [{ id: 'locked' }] };
+  }
+
+  bumpAutolock();
   if (!origin.frameHost) return { locked: false, candidates: [] };
 
   const wantAddresses = msg.kind === 'address';
@@ -253,13 +267,19 @@ async function handleCandidates(msg, sender) {
   };
 }
 
-/** Classify a frame's fields. Pure judgement, kept out of the content script. */
+/**
+ * Classify a frame's fields, one form at a time. Pure judgement, kept out of
+ * the content script.
+ */
 async function handleDescribe(msg, sender) {
   const fields = Array.isArray(msg.fields) ? msg.fields.slice(0, 300) : [];
   return {
-    login: describeIndices(classifyLoginFields(fields)),
-    address: classifyAddressFields(fields).map((a) => ({ index: a.field.index, token: a.token })),
-    usernameOnly: isUsernameOnlyStep(fields),
+    groups: classifyGroups(fields).map((g) => ({
+      group: g.group,
+      login: describeIndices(g.login),
+      address: g.address.map((a) => ({ index: a.field.index, token: a.token })),
+      usernameOnly: g.usernameOnly,
+    })),
   };
 }
 
@@ -274,7 +294,10 @@ const describeIndices = (c) => ({
 async function handleSession(msg, sender) {
   if (!isExtensionPage(sender)) return { candidates: [] };
   const session = sessions.get(asString(msg.sessionId, 64));
-  if (!session || !vault || vault.locked) return { candidates: [] };
+  if (!session) return { candidates: [] };
+  if (session.kind === 'locked' || !vault || vault.locked) {
+    return { kind: 'locked', candidates: [] };
+  }
 
   const byId = new Map(vault.list().map((r) => [r.id, r]));
   const records = session.ids.map((id) => byId.get(id)).filter(Boolean);
@@ -419,6 +442,7 @@ async function handleSave(sender) {
 
   await persistVault();
   pendingCaptures.delete(tab.id);
+  clearCaptureNotice();
   paintBadge();
   bumpAutolock();
   return { ok: true };
@@ -427,6 +451,7 @@ async function handleSave(sender) {
 async function handleDiscard() {
   const tab = (await browser.tabs.query({ active: true, currentWindow: true }))[0];
   if (tab) pendingCaptures.delete(tab.id);
+  clearCaptureNotice();
   paintBadge();
   return { ok: true };
 }
@@ -493,8 +518,45 @@ async function handleCapture(msg, sender) {
     existingId: existing?.id ?? null,
   });
   paintBadge();
+  announceCapture(origin.frameHost, username, Boolean(existing));
   return { ok: true };
 }
+
+const CAPTURE_NOTICE = 'bencpass-capture';
+
+/**
+ * Say out loud that there is something to save.
+ *
+ * A badge on the toolbar icon is the conventional signal and it is far too
+ * quiet — in Zen the chrome can be hidden entirely, and the offer then exists
+ * only somewhere the person is not looking. No password goes in the text.
+ */
+function announceCapture(host, username, isUpdate) {
+  const who = username || 'this login';
+  browser.notifications
+    .create(CAPTURE_NOTICE, {
+      type: 'basic',
+      iconUrl: browser.runtime.getURL('ext/icons/64.png'),
+      title: isUpdate ? 'BENCpass — update password?' : 'BENCpass — save login?',
+      message: isUpdate
+        ? `The password for ${who} on ${host} has changed. Open BENCpass to update it.`
+        : `Save ${who} for ${host}? Open BENCpass to keep it.`,
+    })
+    .catch(() => {
+      /* notifications can be refused by the OS; the badge still stands */
+    });
+}
+
+const clearCaptureNotice = () =>
+  browser.notifications.clear(CAPTURE_NOTICE).catch(() => {});
+
+browser.notifications.onClicked.addListener(async () => {
+  try {
+    await browser.browserAction.openPopup();
+  } catch {
+    await browser.runtime.openOptionsPage();
+  }
+});
 
 // ---- popup surface ---------------------------------------------------------
 

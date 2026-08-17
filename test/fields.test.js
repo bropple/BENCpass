@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   classifyLoginFields,
+  classifyGroups,
   classifyAddressFields,
   isUsernameOnlyStep,
   autocompleteToken,
@@ -215,4 +216,57 @@ test('a postcode field is matched even though it looks like a coupon box', () =>
 
 test('a discount code box is not treated as an address field', () => {
   assert.deepEqual(classifyAddressFields(form({ name: 'promo_code' })), []);
+});
+
+// ---- more than one form on a page -----------------------------------------
+
+test('each form is classified on its own', () => {
+  // The whole-document version of this saw four password boxes, read the count
+  // as a sign-up, picked the first, and left every later form unrecognised.
+  const fields = [
+    { tag: 'input', type: 'text', name: 'user1', index: 0, group: 1, visible: true },
+    { tag: 'input', type: 'password', name: 'pw1', index: 1, group: 1, visible: true },
+    { tag: 'input', type: 'email', name: 'user2', index: 2, group: 2, visible: true },
+    { tag: 'input', type: 'password', name: 'pw2', index: 3, group: 2, visible: true },
+  ];
+
+  const groups = classifyGroups(fields);
+  assert.equal(groups.length, 2);
+
+  assert.equal(groups[0].login.username.name, 'user1');
+  assert.equal(groups[0].login.password.name, 'pw1');
+  assert.equal(groups[0].login.newPassword, null);
+
+  // The second form is a login too, not a sign-up — which is what the
+  // single-group reading turned it into.
+  assert.equal(groups[1].login.username.name, 'user2');
+  assert.equal(groups[1].login.password.name, 'pw2');
+  assert.equal(groups[1].login.newPassword, null);
+});
+
+test('a sign-up form beside a login form does not contaminate it', () => {
+  const fields = [
+    { tag: 'input', type: 'text', name: 'user', index: 0, group: 1, visible: true },
+    { tag: 'input', type: 'password', name: 'pw', index: 1, group: 1, visible: true },
+    { tag: 'input', type: 'email', name: 'signup_email', index: 2, group: 2, visible: true },
+    { tag: 'input', type: 'password', name: 'choose', index: 3, group: 2, visible: true },
+    { tag: 'input', type: 'password', name: 'confirm', index: 4, group: 2, visible: true },
+  ];
+  const [login, signup] = classifyGroups(fields);
+
+  assert.equal(login.login.password.name, 'pw');
+  assert.equal(login.login.newPassword, null);
+
+  assert.equal(signup.login.newPassword.name, 'choose');
+  assert.equal(signup.login.password, null);
+});
+
+test('fields with no form share one group', () => {
+  const fields = [
+    { tag: 'input', type: 'text', name: 'user', index: 0, visible: true },
+    { tag: 'input', type: 'password', name: 'pw', index: 1, visible: true },
+  ];
+  const groups = classifyGroups(fields);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].login.password.name, 'pw');
 });

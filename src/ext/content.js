@@ -39,7 +39,9 @@
     Boolean(node && node.nodeType === 1 && node.closest(`[${MARK}], [${BOUND}]`));
 
   let fields = []; // live elements, index-aligned with the descriptors sent
-  let roles = null; // what the background said they are
+  let groups = []; // per-form roles, as the background classified them
+  let formIds = new WeakMap();
+  let activeGroup = null; // the form the open menu belongs to
   let anchorEl = null;
   let rescanTimer = null;
 
@@ -77,9 +79,18 @@
     return '';
   }
 
+  /** Which form an input belongs to; one shared bucket for those with none. */
+  function groupOf(el) {
+    const form = el.form ?? el.closest('form');
+    if (!form) return 0;
+    if (!formIds.has(form)) formIds.set(form, formIds.size + 1);
+    return formIds.get(form);
+  }
+
   function describe(el, index) {
     return {
       index,
+      group: groupOf(el),
       tag: el.tagName.toLowerCase(),
       type: (el.getAttribute('type') ?? (el.tagName === 'TEXTAREA' ? 'textarea' : 'text')).toLowerCase(),
       name: el.getAttribute('name') ?? '',
@@ -97,16 +108,32 @@
   async function scan() {
     fields = collect(document, []);
     if (!fields.length) {
-      roles = null;
+      groups = [];
       return;
     }
+    formIds = new WeakMap();
     const descriptors = fields.slice(0, 300).map(describe);
     try {
-      roles = await browser.runtime.sendMessage({ type: MSG.DESCRIBE, fields: descriptors });
+      const reply = await browser.runtime.sendMessage({
+        type: MSG.DESCRIBE,
+        fields: descriptors,
+      });
+      groups = reply?.groups ?? [];
     } catch {
-      roles = null; // background asleep or extension reloading
+      groups = []; // background asleep or extension reloading
     }
     placeAnchors();
+  }
+
+  /** The roles for whichever form an element sits in. */
+  function groupFor(el) {
+    const index = fields.indexOf(el);
+    if (index < 0) return null;
+    return (
+      groups.find((g) =>
+        [g.login.username, g.login.password, g.login.newPassword, g.login.otp].includes(index),
+      ) ?? null
+    );
   }
 
   const rescan = () => {
@@ -123,14 +150,17 @@
 
   function placeAnchors() {
     document.querySelectorAll(ANCHOR_SEL).forEach((el) => el.remove());
-    if (!roles) return;
 
-    const targets = new Set(
-      [roles.login?.username, roles.login?.password, roles.login?.newPassword]
-        .filter((i) => i !== null && i !== undefined)
-        .map((i) => fields[i])
-        .filter(Boolean),
-    );
+    // Every form on the page, not just the first. Treating the document as one
+    // form left every login below the first one unmarked.
+    const targets = new Set();
+    for (const g of groups) {
+      for (const i of [g.login.username, g.login.password, g.login.newPassword]) {
+        if (i === null || i === undefined) continue;
+        const el = fields[i];
+        if (el) targets.add(el);
+      }
+    }
     for (const el of targets) attachAnchor(el);
   }
 
@@ -217,6 +247,7 @@
 
   async function openMenu(el, kind = 'login') {
     closeMenu();
+    activeGroup = groupFor(el);
     let reply;
     try {
       reply = await browser.runtime.sendMessage({ type: MSG.CANDIDATES, kind });
@@ -305,7 +336,8 @@
   function fill(kind, values) {
     if (kind === 'address') return fillAddress(values);
 
-    const login = roles?.login ?? {};
+    // The form the menu was opened from, not whichever one happens to be first.
+    const login = activeGroup?.login ?? groups[0]?.login ?? {};
     if (kind === 'generated') {
       const target = at(login.newPassword) ?? at(login.password);
       if (target) setValue(target, values.password);
@@ -322,7 +354,8 @@
   }
 
   function fillAddress(values) {
-    for (const { index, token } of roles?.address ?? []) {
+    const address = activeGroup?.address ?? groups.flatMap((g) => g.address);
+    for (const { index, token } of address) {
       const el = at(index);
       if (!el) continue;
       let value = values[token];
@@ -339,7 +372,7 @@
   const lastSubmitted = { username: '', password: '' };
 
   function remember() {
-    const login = roles?.login ?? {};
+    const login = activeGroup?.login ?? groups[0]?.login ?? {};
     const user = at(login.username);
     const pass = at(login.password) ?? at(login.newPassword);
     if (user?.value) lastSubmitted.username = user.value;
@@ -388,7 +421,7 @@
     if (msg?.type === MSG.DISMISS) {
       closeMenu();
       if (msg.open) {
-        const login = roles?.login ?? {};
+        const login = groups[0]?.login ?? {};
         const target = at(login.password) ?? at(login.username) ?? at(login.newPassword);
         if (target) openMenu(target);
       }
