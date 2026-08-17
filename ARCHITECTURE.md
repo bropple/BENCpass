@@ -4,10 +4,11 @@ A self-hosted, end-to-end encrypted password manager that replaces Firefox's
 built-in one, as a Firefox/Zen extension, syncing through a small server you run
 yourself.
 
-Status: design. Nothing here has been built or measured yet — which, by the
-house rule in `style/benco-desktop-app-conventions.md`, means every number below
-is a target rather than an observation. Replace them with real ones as they are
-taken.
+Status: the crypto core, vault, manager, sync server and extension are built and
+running; the native biometric host, the Firefox importer and the recovery kit
+are not. Numbers in this document are measurements unless they say otherwise —
+the house rule in `style/benco-desktop-app-conventions.md` — and where a figure
+has only been taken on one machine, it says which.
 
 ---
 
