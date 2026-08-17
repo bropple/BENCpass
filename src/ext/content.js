@@ -144,8 +144,10 @@
     const index = fields.indexOf(el);
     if (index < 0) return null;
     return (
-      groups.find((g) =>
-        [g.login.username, g.login.password, g.login.newPassword, g.login.otp].includes(index),
+      groups.find(
+        (g) =>
+          [g.login.username, g.login.password, g.login.newPassword, g.login.otp].includes(index) ||
+          (g.address ?? []).some((a) => a.index === index),
       ) ?? null
     );
   }
@@ -167,15 +169,21 @@
 
     // Every form on the page, not just the first. Treating the document as one
     // form left every login below the first one unmarked.
-    const targets = new Set();
+    const targets = new Map(); // element -> which menu it opens
     for (const g of groups) {
       for (const i of [g.login.username, g.login.password, g.login.newPassword]) {
         if (i === null || i === undefined) continue;
         const el = fields[i];
-        if (el) targets.add(el);
+        if (el) targets.set(el, 'login');
+      }
+      // Address fields get an anchor too. Without one there was no way to ask
+      // for an address at all — the menu existed and nothing ever opened it.
+      for (const { index } of g.address ?? []) {
+        const el = fields[index];
+        if (el && !targets.has(el)) targets.set(el, 'address');
       }
     }
-    for (const el of targets) attachAnchor(el);
+    for (const [el, kind] of targets) attachAnchor(el, kind);
   }
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -217,7 +225,7 @@
     return svg;
   }
 
-  function attachAnchor(el) {
+  function attachAnchor(el, kind = 'login') {
     const dot = document.createElement('div');
     dot.setAttribute(MARK, 'anchor');
     // `all: initial` first, so the page's own stylesheet cannot restyle this
@@ -231,7 +239,7 @@
     dot.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      openMenu(el);
+      openMenu(el, kind);
     });
 
     // Clicking the field opens the menu too, the way Firefox's own login
@@ -240,7 +248,7 @@
     if (!el.hasAttribute(BOUND)) {
       el.setAttribute(BOUND, '1');
       el.addEventListener('click', () => {
-        if (!document.getElementById(OVERLAY_ID)) openMenu(el);
+        if (!document.getElementById(OVERLAY_ID)) openMenu(el, kind);
       });
     }
 

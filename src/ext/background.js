@@ -576,8 +576,12 @@ function announceCapture(host, username, isUpdate) {
         ? `The password for ${who} on ${host} has changed. Open BENCpass to update it.`
         : `Save ${who} for ${host}? Open BENCpass to keep it.`,
     })
-    .catch(() => {
-      /* notifications can be refused by the OS; the badge still stands */
+    .catch((err) => {
+      // Not swallowed. Windows in particular can refuse these outright — the
+      // OS notification setting for the browser, or Focus Assist — and the
+      // failure is then completely silent, which is indistinguishable from the
+      // code never having run. The badge still stands either way.
+      console.warn('BENCpass: could not show the save notification', err);
     });
 }
 

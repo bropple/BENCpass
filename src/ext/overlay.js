@@ -65,14 +65,17 @@ async function render() {
     list.append(
       row({
         title: 'Unlock BENCpass',
-        sub: 'Opens the toolbar panel',
+        sub: 'Opens the manager in a tab',
         className: 'gen',
         onPick: async () => {
-          try {
-            await browser.browserAction.openPopup();
-          } catch {
-            await browser.runtime.openOptionsPage();
-          }
+          // Opens the manager rather than the toolbar popup, because
+          // browserAction.openPopup() has no button to hang off when the
+          // browser chrome is hidden — which Zen's compact mode does by
+          // default. It resolves and shows nothing, so even a catch cannot
+          // tell that it failed. A tab is unambiguous.
+          //
+          // Still not a password box in the page: see the note above.
+          await browser.runtime.openOptionsPage();
         },
       }),
     );
