@@ -71,6 +71,25 @@ app.update.service.enabled=false
 extensions.update.enabled=false
 extensions.update.autoUpdateDefault=false
 
+# ---- the debugger port web-ext needs ---------------------------------------
+#
+# `-start-debugger-server`, which is how web-ext talks to the browser at all,
+# is refused unless BOTH `devtools.chrome.enabled` and
+# `devtools.debugger.remote-enabled` are true — see `_isRemoteDebuggingEnabled`
+# in DevToolsStartup.sys.mjs. Both ship as `sticky` prefs defaulting to false,
+# so a profile that has ever had them turned off keeps them off.
+#
+# web-ext sets both itself. This is belt and braces for a build that ships a
+# different default, and it costs nothing.
+#
+# `devtools.debugger.remote-enabled` is deliberately NOT here: web-ext lists it
+# in `nonOverridablePreferences` and throws a UsageError if --pref names it.
+devtools.chrome.enabled=true
+
+# Devtools disabled by enterprise policy also silently refuses the flag, with
+# no message at all — the one failure mode that says nothing.
+devtools.policy.disabled=false
+
 # ---- first-run noise -------------------------------------------------------
 #
 # Nothing here is about updates; it is the welcome tour, the default-browser

@@ -166,16 +166,36 @@ BROWSER_BIN='/Applications/Zen Browser.app/Contents/MacOS/zen' tools/run-extensi
 Every run now prints the binary it chose, on the `browser:` line, so a bad guess
 shows up before the browser does.
 
-If a run ends in `Error: connect ECONNREFUSED 127.0.0.1:<port>`, that is not the
-test server — it is `web-ext` giving up on the browser. It launches the browser
-with `-start-debugger-server <port>` and then dials that port for thirty
-seconds; the message means the browser started but never listened. Run
-`tools/run-extension.sh verbose` and read the `Firefox stderr:` lines, which say
-why. Two causes account for most of it: the browser refuses the debugger server
-outright, or the profile could not be opened and it exited. `tools/selftest.sh`
-is a useful second data point, since it uses a throwaway profile and headless
-mode — if that connects and `run-extension.sh` does not, the profile is the
-difference, and `tools/run-extension.sh fresh` clears it.
+### `connect ECONNREFUSED 127.0.0.1:<port>`
+
+Not the test server. That is `web-ext` giving up on the browser: it launches it
+with `-start-debugger-server <port>`, dials that port for thirty seconds, and
+says this when nothing ever answers.
+
+The script now explains it rather than leaving you with that line. It always
+runs `web-ext` verbose into `$TMPDIR/bencpass-web-ext.log`, because the
+browser's own stdout and stderr only reach `web-ext`'s output at debug level —
+and they are the only place that says which of four things happened.
+`DevToolsStartup.sys.mjs` prints a distinct line for three of them:
+
+| What the log says | What it means |
+|---|---|
+| `Started devtools server on <port>` | it worked; something on loopback is in the way |
+| `Could not run chrome debugger! You need...` | `devtools.chrome.enabled` and `devtools.debugger.remote-enabled` were not both true |
+| `Unable to start devtools server on <port>: ...` | the socket would not open — something has the port |
+| *nothing* | the flag was never read: the browser exited during startup, handed off to an instance already running, or has devtools disabled by policy |
+
+Both of those prefs ship `sticky` and default to **false**, so a profile that
+has ever had them off keeps them off. `web-ext` sets both, and
+`tools/test-prefs.txt` sets `devtools.chrome.enabled` again for good measure —
+but not `devtools.debugger.remote-enabled`, which `web-ext` lists in
+`nonOverridablePreferences` and will throw a `UsageError` over if `--pref`
+names it.
+
+The last row is the intermittent one, and on a desktop it is almost always a
+browser instance that is still running. The script warns before launching if
+anything already holds the test profile. `tools/run-extension.sh verbose` shows
+the whole log on screen instead of a summary; `fresh` rules out the profile.
 
 **On Windows.** The extension itself is the same `.xpi` — it is browser
 JavaScript and contains no platform-specific code — and the Go server
