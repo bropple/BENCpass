@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Entitlements for the ad-hoc signature on the native host.
+
+  A keychain item carrying a biometric SecAccessControl is refused with
+  errSecMissingEntitlement (-34018) unless the signature claims a keychain
+  access group. That is a statement about the signature on the binary rather
+  than about the code, which is why it cannot be fixed by writing the Swift
+  differently.
+
+  `codesign --sign -` will embed these without a team identifier. Whether the
+  system then accepts them is exactly what hosts.yml measures, on a real Mac,
+  rather than anything asserted here.
+-->
+<plist version="1.0">
+<dict>
+  <key>keychain-access-groups</key>
+  <array>
+    <string>net.ropple.bencpass</string>
+  </array>
+</dict>
+</plist>

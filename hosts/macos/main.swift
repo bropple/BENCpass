@@ -236,6 +236,49 @@ func forget(id: String) -> [String: Any] {
     return ["ok": true]
 }
 
+// ---- probe ------------------------------------------------------------------
+
+/// Try the thing that fails, and report what each keychain said.
+///
+/// `SecItemAdd` does not prompt — the biometric constraint is evaluated when the
+/// item is *read* — so this runs on a machine with no fingerprint reader at all,
+/// which is what makes it something CI can answer. It writes a throwaway item
+/// and removes it again.
+///
+/// It exists because -34018 (errSecMissingEntitlement) is a claim about the
+/// signature on this binary rather than about the code, and the only way to
+/// learn which signature satisfies it is to sign a few ways and ask.
+func probe() -> [String: Any] {
+    var accessError: Unmanaged<CFError>?
+    let access = SecAccessControlCreateWithFlags(
+        nil,
+        kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
+        .biometryCurrentSet,
+        &accessError
+    )
+    guard let access else {
+        return ["ok": true, "accessControl": "failed", "results": [:]]
+    }
+
+    var results: [String: Int32] = [:]
+    let id = "probe-\(UInt32.random(in: 0..<UInt32.max))"
+    for keychain in KEYCHAINS {
+        var add = query(id, dataProtection: keychain.dataProtection)
+        add[kSecValueData as String] = Data("probe".utf8)
+        add[kSecAttrAccessControl as String] = access
+        let status = SecItemAdd(add as CFDictionary, nil)
+        results[keychain.name] = status
+        SecItemDelete(query(id, dataProtection: keychain.dataProtection) as CFDictionary)
+    }
+
+    return [
+        "ok": true,
+        "accessControl": "created",
+        "biometrics": biometricsAvailable() ? "available" : "none",
+        "results": results,
+    ]
+}
+
 // ---- dispatch ---------------------------------------------------------------
 
 func handle(_ message: [String: Any]) -> [String: Any] {
@@ -270,6 +313,9 @@ func handle(_ message: [String: Any]) -> [String: Any] {
     case "forget":
         guard !id.isEmpty else { return fail("error", "forget needs an id") }
         return forget(id: id)
+
+    case "probe":
+        return probe()
 
     default:
         return fail("unsupported", "unknown op")
