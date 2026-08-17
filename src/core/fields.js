@@ -13,28 +13,18 @@
 // Sites that get autocomplete right are the easy half. The rest is why this
 // file is the largest part of the extension.
 
+import { ADDRESS_TOKENS, STRUCTURAL_TOKENS } from './address.js';
+
 export const USERNAME = 'username';
 export const PASSWORD = 'password';
 export const NEW_PASSWORD = 'new-password';
 export const OTP = 'otp';
 
-/** Address roles are the WHATWG tokens verbatim, matching the record's keys. */
-export const ADDRESS_TOKENS = new Set([
-  'name',
-  'given-name',
-  'family-name',
-  'organization',
-  'street-address',
-  'address-line1',
-  'address-line2',
-  'address-level1',
-  'address-level2',
-  'postal-code',
-  'country',
-  'country-name',
-  'tel',
-  'email',
-]);
+// Which WHATWG tokens count as part of an address, and which of those are
+// strong enough evidence that a form *is* one, both live in address.js beside
+// the record they describe. Re-exported because this module is where the rest
+// of the extension asks about fields.
+export { ADDRESS_TOKENS };
 
 // Tokens that may precede the field name in an autocomplete attribute:
 // "shipping address-line1", "section-foo billing tel", "home email".
@@ -93,6 +83,21 @@ export function isFillableInput(f) {
   const t = (f.type ?? 'text').toLowerCase();
   return ['text', 'email', 'tel', 'password', 'url', 'number', 'search', 'textarea', ''].includes(t);
 }
+
+/**
+ * A dropdown. Country is one on almost every checkout, and state on most
+ * American ones, so an address that cannot answer a <select> cannot answer a
+ * checkout.
+ *
+ * Kept separate from `isFillableInput` on purpose: a select is a candidate for
+ * an address token and never for a credential. There is no such thing as a
+ * password dropdown, and letting one into the login classifier would only give
+ * it a new way to pick the wrong element.
+ */
+export const isSelect = (f) => f.tag === 'select' && !f.disabled;
+
+/** Anything an address may be written into. */
+export const isAddressControl = (f) => isSelect(f) || isFillableInput(f);
 
 export const isPasswordInput = (f) => (f.type ?? '').toLowerCase() === 'password';
 
@@ -212,11 +217,12 @@ export function classifyGroups(fields) {
     const login = classifyLoginFields(members);
     const addressFields = classifyAddressFields(members);
 
-    // Street, city, region, postcode, company. Not email, phone or name — all
-    // three appear on sign-in and checkout alike and settle nothing.
-    const structural = addressFields.filter(
-      (a) => !['email', 'tel', 'name'].includes(a.token),
-    ).length;
+    // Street, city, region, postcode, country, company. Not email, phone or a
+    // name — those appear on sign-in pages and newsletter boxes as readily as
+    // on a checkout, and settle nothing. STRUCTURAL_TOKENS is the list.
+    const structural = new Set(
+      addressFields.filter((a) => STRUCTURAL_TOKENS.has(a.token)).map((a) => a.token),
+    ).size;
     const looksLikeAddress = structural >= 2;
 
     // `isUsernameOnlyStep` alone is far too eager: any form with an email box
@@ -268,7 +274,7 @@ export function isUsernameOnlyStep(fields) {
  * normalised by the caller, which is the only place that knows the record.
  */
 export function classifyAddressFields(fields) {
-  const visible = fields.filter((f) => f.visible !== false && isFillableInput(f));
+  const visible = fields.filter((f) => f.visible !== false && isAddressControl(f));
   const out = [];
 
   for (const f of visible) {
@@ -287,19 +293,39 @@ export function classifyAddressFields(fields) {
 }
 
 // Only used when the page sets no autocomplete attribute at all. Ordered most
-// specific first: "address-line2" contains "address", and a postcode field is
-// very often called "zip".
+// specific first, and the order carries real weight: "address-line2" contains
+// "address", "tel-extension" contains neither "tel" nor "extension" reliably,
+// and a postcode field is very often called "zip".
 const ADDRESS_HINTS = [
-  ['address-line2', /(address.?2|addr.?2|line.?2|apt|apartment|suite|unit)/],
-  ['address-line1', /(address.?1|addr.?1|line.?1|street|^address$|shipping.?address)/],
-  ['address-level2', /(city|town|suburb|locality)/],
-  ['address-level1', /(state|province|region|county)/],
-  ['postal-code', /(zip|postal|postcode|post.?code)/],
-  ['country', /(country)/],
-  ['organization', /(company|organi[sz]ation|business)/],
-  ['family-name', /(last.?name|surname|family.?name)/],
-  ['given-name', /(first.?name|given.?name|forename)/],
-  ['name', /(full.?name|^name$|your.?name|recipient)/],
+  // Telephone parts before `tel`, which would otherwise swallow all of them.
+  ['tel-extension', /(extension|\bext\b|ext.?no|phone.?ext)/],
+  ['tel-country-code', /(country.?code|dial.?code|phone.?prefix|tel.?cc)/],
+  ['tel-area-code', /(area.?code|npa)/],
+  ['tel-local-prefix', /(exchange|phone.?prefix.?3)/],
+  ['tel-local-suffix', /(line.?number|phone.?suffix)/],
+  ['tel-national', /(national.?number|phone.?national)/],
+  // Street lines, most specific number first.
+  ['address-line3', /(address.?3|addr.?3|line.?3)/],
+  ['address-line2', /(address.?2|addr.?2|line.?2|apt|apartment|suite|unit|floor|building)/],
+  ['address-line1', /(address.?1|addr.?1|line.?1|street|^address$|shipping.?address|house)/],
+  ['street-address', /(street.?address|full.?address|address.?block)/],
+  // Administrative levels, finest first so "district" does not fall to "city".
+  ['address-level4', /(sublocality|sub.?locality|village|hamlet)/],
+  ['address-level3', /(district|neighbou?rhood|barrio|bairro|ward|dependent.?locality)/],
+  ['address-level2', /(city|town|suburb|locality|municipality)/],
+  ['address-level1', /(state|province|region|county|prefecture|territory|oblast)/],
+  ['postal-code', /(zip|postal|postcode|post.?code|pin.?code|cep)/],
+  ['country-name', /(country.?name)/],
+  ['country', /(country|nation)/],
+  ['organization-title', /(job.?title|position|role|occupation)/],
+  ['organization', /(company|organi[sz]ation|business|employer)/],
+  // Name parts. "name" last, because every one of the others contains it.
+  ['honorific-prefix', /(honorific.?prefix|salutation|^title$|prefix.?name)/],
+  ['honorific-suffix', /(honorific.?suffix|name.?suffix)/],
+  ['additional-name', /(middle.?name|middle.?initial|additional.?name)/],
+  ['family-name', /(last.?name|surname|family.?name|lname|^ln$)/],
+  ['given-name', /(first.?name|given.?name|forename|fname|^fn$)/],
+  ['name', /(full.?name|^name$|your.?name|recipient|contact.?name)/],
   ['tel', /(phone|tel|mobile|contact.?number)/],
   ['email', /(email|e-mail)/],
 ];

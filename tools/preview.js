@@ -66,7 +66,8 @@ const SAMPLES = [
   {
     type: 'address',
     title: 'Home',
-    name: 'Ben Ropple',
+    'given-name': 'Ben',
+    'family-name': 'Ropple',
     'address-line1': '1 Pentagon Way',
     'address-level2': 'Springfield',
     'address-level1': 'Berkshire',
@@ -79,13 +80,30 @@ const SAMPLES = [
   {
     type: 'address',
     title: 'Work',
-    name: 'Ben Ropple',
+    'honorific-prefix': 'Dr',
+    'given-name': 'Ben',
+    'additional-name': 'Q',
+    'family-name': 'Ropple',
     organization: 'BENCO Holdings',
+    'organization-title': 'Proprietor',
     'address-line1': '4 Phosphor Street',
+    'address-line2': 'Floor 3',
     'address-level2': 'Reading',
     'postal-code': 'RG1 1AA',
     country: 'GB',
+    'tel-extension': '204',
     created: now - 120 * DAY,
+  },
+  {
+    // Kept in the shape the manager used to store, so the preview covers the
+    // path that splits a whole name on the way to the editor.
+    type: 'address',
+    title: 'Old format',
+    name: 'Ben Ropple',
+    'address-line1': '9 Legacy Lane',
+    'address-level2': 'Reading',
+    'postal-code': 'RG1 2BB',
+    created: now - 600 * DAY,
   },
   {
     title: 'Something imported with a bad clock',
@@ -169,6 +187,9 @@ if (q.has('select')) {
       if (q.has('edit')) $('edit-btn').click();
       if (q.has('show')) $('e-reveal-btn').click();
       if (q.has('gen')) $('gen-btn').click();
+      // The address editor keeps its rarely-asked-for fields behind a
+      // disclosure; ?more opens it so a screenshot can show them.
+      if (q.has('more')) document.querySelector('.more-fields')?.setAttribute('open', '');
     },
   );
 }

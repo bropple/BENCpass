@@ -51,9 +51,15 @@
 
   // ---- finding fields ------------------------------------------------------
 
-  /** Collect inputs, descending into open shadow roots. */
+  /**
+   * Collect the form controls, descending into open shadow roots.
+   *
+   * Selects included: country is a dropdown on nearly every checkout and state
+   * on most American ones, so leaving them out meant an address could be filled
+   * except for the two fields most likely to be mandatory.
+   */
   function collect(root, out) {
-    const nodes = root.querySelectorAll('input, textarea');
+    const nodes = root.querySelectorAll('input, textarea, select');
     for (const el of nodes) out.push(el);
     for (const el of root.querySelectorAll('*')) {
       if (el.shadowRoot) collect(el.shadowRoot, out);
@@ -75,10 +81,23 @@
     // opacity and `display: block`. The self-test caught two anchors on exactly
     // that.
     //
-    // Only sideways and upward are rejected. Below the fold is where most of a
-    // long form legitimately lives.
-    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-    if (r.right <= 0 || r.bottom <= 0 || r.left >= viewportWidth) return false;
+    // In *document* coordinates, deliberately. Viewport coordinates made this
+    // answer change as the page scrolled, and visibility feeds classification:
+    // scroll a checkout far enough that its street and city boxes sit above the
+    // fold and the group has fewer than two structural address fields left, so
+    // the next rescan decides it was never an address form and drops every
+    // anchor on it. That is exactly the "P. Gons disappear after I fill it in"
+    // symptom — the form had scrolled, not changed.
+    const docLeft = r.left + window.scrollX;
+    const docTop = r.top + window.scrollY;
+    if (docLeft + r.width <= 0 || docTop + r.height <= 0) return false;
+
+    // The same rule for the other side. clientWidth is the layout viewport,
+    // which does not move with the scroll position — so this stays a statement
+    // about the page rather than about where the window is. Downward is not
+    // checked at all: below the fold is where most of a long form lives.
+    const layoutWidth = document.documentElement.clientWidth;
+    if (layoutWidth && docLeft >= layoutWidth) return false;
 
     return true;
   }
@@ -117,7 +136,10 @@
       index,
       group: groupOf(el),
       tag: el.tagName.toLowerCase(),
-      type: (el.getAttribute('type') ?? (el.tagName === 'TEXTAREA' ? 'textarea' : 'text')).toLowerCase(),
+      // `el.type` rather than the attribute, so a <select> reports
+      // `select-one` instead of defaulting to `text` and being mistaken for a
+      // box something could be typed into.
+      type: String(el.type ?? el.getAttribute('type') ?? 'text').toLowerCase(),
       name: el.getAttribute('name') ?? '',
       id: el.getAttribute('id') ?? '',
       autocomplete: el.getAttribute('autocomplete') ?? '',
@@ -131,24 +153,32 @@
   }
 
   async function scan() {
-    fields = collect(document, []);
-    if (!fields.length) {
+    const found = collect(document, []);
+    if (!found.length) {
+      fields = [];
       groups = [];
+      placeAnchors();
       return;
     }
     formIds = new WeakMap();
     formSeq = 0;
-    const descriptors = fields.slice(0, 300).map(describe);
+    const descriptors = found.slice(0, 300).map(describe);
+
+    let reply;
     try {
-      const reply = await browser.runtime.sendMessage({
-        type: MSG.DESCRIBE,
-        fields: descriptors,
-      });
-      groups = reply?.groups ?? [];
-      locked = reply?.locked !== false;
+      reply = await browser.runtime.sendMessage({ type: MSG.DESCRIBE, fields: descriptors });
     } catch {
-      groups = []; // background asleep or extension reloading
+      // Background asleep, or the extension reloading. Keep the last state that
+      // worked rather than replacing it with nothing: committing the new field
+      // list and an empty set of groups swept every anchor off the page and put
+      // none back, while the click handlers already bound to the fields carried
+      // on opening the menu — anchors gone, dropdown still working.
+      return;
     }
+
+    fields = found;
+    groups = reply?.groups ?? [];
+    locked = reply?.locked !== false;
     placeAnchors();
   }
 
@@ -320,7 +350,16 @@
     activeGroup = groupFor(el);
     let reply;
     try {
-      reply = await browser.runtime.sendMessage({ type: MSG.CANDIDATES, kind });
+      // The tokens go with the request so the background can answer with those
+      // and only those. A form with a postcode box and nothing else has no
+      // reason to be handed a phone number, and the way to guarantee that is
+      // for the phone number never to leave the vault, rather than for it to be
+      // sent and then not used.
+      reply = await browser.runtime.sendMessage({
+        type: MSG.CANDIDATES,
+        kind,
+        tokens: kind === 'address' ? (activeGroup?.address ?? []).map((a) => a.token) : undefined,
+      });
     } catch {
       return;
     }
@@ -396,7 +435,12 @@
    * bypasses React's override and updates its tracker.
    */
   function setValue(el, value) {
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement;
+    const proto =
+      el instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement
+        : el instanceof HTMLSelectElement
+          ? HTMLSelectElement
+          : HTMLInputElement;
     const setter = Object.getOwnPropertyDescriptor(proto.prototype, 'value')?.set;
     el.focus();
     if (setter) setter.call(el, value);
@@ -405,10 +449,48 @@
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  /**
+   * Choose an option in a dropdown.
+   *
+   * A select cannot be assigned an arbitrary string — setting `value` to
+   * something no option carries silently selects nothing at all, which is worse
+   * than leaving it alone because the form then looks answered and is not. So
+   * the option is found first, and the select is only touched if one matches.
+   *
+   * `candidates` is the value and its alternatives: `US`, `United States`,
+   * `USA` all name the same country, and the page picked one of them. Each is
+   * tried against the option's value and its text, exactly, then folded — which
+   * is what makes `Côte d'Ivoire` match `CÔTE D’IVOIRE`.
+   */
+  function selectOption(el, candidates) {
+    const options = [...el.options];
+    const fold = (s) =>
+      String(s ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[\u2018\u2019]/g, "'")
+        .toLowerCase()
+        .replace(/&/g, ' and ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+
+    for (const want of candidates) {
+      if (!want) continue;
+      const hit =
+        options.find((o) => o.value === want || o.text.trim() === want) ??
+        options.find((o) => fold(o.value) === fold(want) || fold(o.text) === fold(want));
+      if (hit) {
+        setValue(el, hit.value);
+        return true;
+      }
+    }
+    return false;
+  }
+
   const at = (i) => (i === null || i === undefined ? null : fields[i] ?? null);
 
-  function fill(kind, values) {
-    if (kind === 'address') return fillAddress(values);
+  function fill(kind, values, alts) {
+    if (kind === 'address') return fillAddress(values, alts);
 
     // The form the menu was opened from, not whichever one happens to be first.
     const login = activeGroup?.login ?? groups[0]?.login ?? {};
@@ -433,17 +515,25 @@
     if (!pass && user) lastSubmitted.username = values.username ?? '';
   }
 
-  function fillAddress(values) {
+  /**
+   * Write an address into the form the menu was opened from.
+   *
+   * Every token was derived in the background, which holds the record and knows
+   * how to turn it into whatever the page asked for — a full name out of two
+   * name fields, one street block out of three lines, a country name out of a
+   * country code. Nothing is composed here; this only puts strings where they
+   * go, and picks an option when the field is a dropdown.
+   */
+  function fillAddress(values, alts) {
     const address = activeGroup?.address ?? groups.flatMap((g) => g.address);
     for (const { index, token } of address) {
       const el = at(index);
       if (!el) continue;
-      let value = values[token];
-      // Some forms take one box where the record has two lines.
-      if (token === 'street-address') {
-        value = [values['address-line1'], values['address-line2']].filter(Boolean).join('\n');
-      }
-      if (value) setValue(el, value);
+      const value = values[token];
+      if (!value) continue; // nothing stored for it, or nothing derivable
+
+      if (el.tagName === 'SELECT') selectOption(el, [value, ...(alts?.[token] ?? [])]);
+      else setValue(el, value);
     }
   }
 
@@ -516,7 +606,7 @@
 
   browser.runtime.onMessage.addListener((msg) => {
     if (msg?.type === MSG.FILL) {
-      fill(msg.kind, msg.values ?? {});
+      fill(msg.kind, msg.values ?? {}, msg.alts ?? {});
       closeMenu();
       return Promise.resolve({ ok: true });
     }

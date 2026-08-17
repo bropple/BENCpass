@@ -27,6 +27,7 @@ clients.
 | ✅ Extension: manifest, background, content script, popup, overlay | `src/ext/` |
 | ✅ Origin matching against the Public Suffix List | `src/core/match.js` |
 | ✅ Form-field classification, logins and addresses | `src/core/fields.js` |
+| ✅ Address model: every WHATWG token, country and state dropdowns | `src/core/address.js` |
 | ⬜ Native host: Touch ID / Windows Hello | — |
 | ⬜ Import from Firefox, recovery kit | — |
 
@@ -44,7 +45,7 @@ test/         Node tests, including integration tests against the real server
 ## Running things
 
 ```sh
-npm install && npm test     # 118 tests; the sync ones build and run the Go server
+npm install && npm test     # 159 tests; the sync ones build and run the Go server
 cd server && go test ./...  # 15 tests
 
 tools/selftest.sh           # drive the extension in a real browser, unattended
@@ -58,6 +59,7 @@ npx web-ext build --source-dir=src --artifacts-dir=dist/ext
 tools/preview.sh            # the manager UI, with a throwaway seeded vault
 tools/preview.sh shot       # screenshots of every state, into screenshots/
 cd server && go run . -dir ./data   # prints a bootstrap enrolment code
+node tools/gen-countries.mjs --check # the country table still matches ICU
 ```
 
 `npm test` skips the integration tests if no Go toolchain is present, and says
@@ -93,8 +95,9 @@ an event dispatched by one reaches the other's listeners. The page reports what
 it found back to the local server, and the script prints a pass/fail table.
 
 It covers what has actually regressed: which fields get an anchor, what those
-anchors look like, whether the menu opens and stays open, and that nothing is
-ever filled without a person choosing it. The vault stays locked throughout,
+anchors look like, whether the menu opens and stays open, whether anchors
+survive the page being scrolled, and that nothing is ever filled — or chosen in
+a dropdown — without a person asking for it. The vault stays locked throughout,
 since nothing can type a master password into the manager.
 
 ### `npm install` reports high-severity vulnerabilities

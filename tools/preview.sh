@@ -69,9 +69,11 @@ if [ "${1:-}" = "shot" ]; then
   # Sidebar width, where the two-pane split has to stack or the detail pane
   # is squeezed to nothing.
   shot 15-narrow     '?open&select=0'                400,900
-  # The addresses section, and the address editor.
+  # The addresses section, and the address editor — closed and opened, since
+  # the less-common fields are behind a disclosure.
   shot 16-addresses  '?open&section=address&select=0'
-  shot 17-address-edit '?open&section=address&select=0&edit'
+  shot 17-address-edit '?open&section=address&select=1&edit'      1280,1100
+  shot 18-address-more '?open&section=address&select=1&edit&more' 1280,1400
   exit 0
 fi
 

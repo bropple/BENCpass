@@ -163,6 +163,62 @@
   <p class="expect">Expect: no anchor, and the fields stay empty.</p>
 </section>
 
+<section>
+  <h2>10. Checkout with dropdowns</h2>
+  <p class="why">
+    The shape a real checkout is: the name split in two, the street in three
+    lines, and country and state as <code>&lt;select&gt;</code> rather than text
+    boxes. A country dropdown is on nearly every one of these, so an address
+    that cannot answer one cannot answer a checkout.
+  </p>
+  <form>
+    <label for="c1">First name</label>
+    <input id="c1" autocomplete="shipping given-name">
+    <label for="c2">Last name</label>
+    <input id="c2" autocomplete="shipping family-name">
+    <label for="c3">Company</label>
+    <input id="c3" name="company">
+    <label for="c4">Street address</label>
+    <input id="c4" autocomplete="shipping address-line1">
+    <label for="c5">Apartment</label>
+    <input id="c5" autocomplete="shipping address-line2">
+    <label for="c6">Care of</label>
+    <input id="c6" autocomplete="shipping address-line3">
+    <label for="c7">City</label>
+    <input id="c7" autocomplete="shipping address-level2">
+    <label for="c8">State</label>
+    <select id="c8" autocomplete="shipping address-level1">
+      <option value="">Choose…</option>
+      <option value="CA">California</option>
+      <option value="NY">New York</option>
+      <option value="TX">Texas</option>
+    </select>
+    <label for="c9">ZIP</label>
+    <input id="c9" autocomplete="shipping postal-code">
+    <label for="c10">Country</label>
+    <select id="c10" name="country">
+      <option value="">Choose…</option>
+      <option value="US">United States</option>
+      <option value="GB">United Kingdom</option>
+      <option value="DE">Germany</option>
+    </select>
+    <label for="c11">Phone</label>
+    <input id="c11" type="tel" autocomplete="shipping tel">
+    <label for="c12">Ext.</label>
+    <input id="c12" name="phone_ext">
+    <label for="c13">Quantity</label>
+    <select id="c13" name="qty">
+      <option>1</option>
+      <option>2</option>
+    </select>
+    <button>Place order</button>
+  </form>
+  <p class="expect">
+    Expect: anchors on the address fields including both dropdowns, and none on
+    the quantity dropdown.
+  </p>
+</section>
+
 <script src="testpage.js"></script>
 </body>
 </html>

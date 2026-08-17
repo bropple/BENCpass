@@ -10,6 +10,12 @@ import { Vault } from '../core/vault.js';
 import { WebExtStorage } from '../core/storage.js';
 import { matchesFor, canFill, canFillAddress, addressesFor, hostOf } from '../core/match.js';
 import { classifyGroups } from '../core/fields.js';
+import {
+  ADDRESS_TOKENS,
+  valuesForTokens,
+  normalizeCaptured,
+  isAddressish,
+} from '../core/address.js';
 import { generate } from '../core/generate.js';
 import { SyncClient, syncOnce, loadSyncState, dumpSyncState } from '../core/sync.js';
 import { MSG, publicCandidate, publicAddress, isMessage, asString, asId } from './protocol.js';
@@ -327,6 +333,11 @@ async function handleCandidates(msg, sender) {
     frameProtocol: origin.frameProtocol,
     kind: wantAddresses ? 'address' : 'login',
     ids: records.map((r) => r.id),
+    // Which parts of an address this form has fields for. Filtered against the
+    // known tokens because it came from the content script, which is the least
+    // trusted part of the extension — though the worst a page could do by
+    // lying is ask for everything, which is what every request used to get.
+    tokens: wantAddresses ? sanitizeTokens(msg.tokens) : [],
   });
 
   return {
@@ -406,6 +417,7 @@ async function handleChoose(msg, sender) {
   if (!record) return { ok: false, reason: 'gone' };
 
   let values;
+  let alts;
   if (session.kind === 'address') {
     const verdict = canFillAddress(session.frameHost, {
       pageHost: session.pageHost,
@@ -413,7 +425,12 @@ async function handleChoose(msg, sender) {
       allowInsecure: settings.allowInsecure,
     });
     if (!verdict.ok) return { ok: false, reason: verdict.reason };
-    values = addressValues(record);
+    // Exactly the tokens the form has fields for, derived from the record —
+    // a full name assembled from its parts, a country name from its code, a
+    // street block from its lines. What the form did not ask for is not built
+    // and does not travel.
+    ({ values, alts } = valuesForTokens(record, session.tokens));
+    if (!Object.keys(values).length) return { ok: false, reason: 'nothing-to-fill' };
   } else {
     const verdict = canFill(record, session.frameHost, {
       pageHost: session.pageHost,
@@ -427,7 +444,7 @@ async function handleChoose(msg, sender) {
 
   await browser.tabs.sendMessage(
     session.tabId,
-    { type: MSG.FILL, kind: session.kind, values },
+    { type: MSG.FILL, kind: session.kind, values, alts },
     { frameId: session.frameId },
   );
 
@@ -585,36 +602,16 @@ async function handleDiscard() {
   return { ok: true };
 }
 
-const ADDRESS_KEYS = [
-  'name',
-  'organization',
-  'address-line1',
-  'address-line2',
-  'address-level1',
-  'address-level2',
-  'postal-code',
-  'country',
-  'tel',
-  'email',
-];
-
-const addressValues = (r) =>
-  Object.fromEntries(
-    [
-      'name',
-      'organization',
-      'address-line1',
-      'address-line2',
-      'address-level1',
-      'address-level2',
-      'postal-code',
-      'country',
-      'tel',
-      'email',
-    ]
-      .map((k) => [k, r[k] ?? ''])
-      .filter(([, v]) => v !== ''),
-  );
+/** The address tokens a page claims to have fields for, kept honest. */
+const sanitizeTokens = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const token of raw.slice(0, 64)) {
+    const clean = asString(token, 32);
+    if (ADDRESS_TOKENS.has(clean) && !out.includes(clean)) out.push(clean);
+  }
+  return out;
+};
 
 /** A generated password goes to the page, but is never stored until saved. */
 async function handleGenerate(msg, sender) {
@@ -679,15 +676,23 @@ async function handleCapture(msg, sender) {
  *
  * Only the WHATWG tokens are taken, and only from a page that already sent a
  * plausible set of them; anything else in the message is ignored rather than
- * merged into a record.
+ * merged into a record. What arrives is in the page's shape and is converted
+ * into the record's — a full name split into parts, a street block cut into
+ * lines, a country name resolved to its code — so that what comes back out is
+ * answerable in whatever shape the *next* site asks for.
  */
 function captureAddress(msg, origin) {
-  const incoming = {};
-  for (const key of ADDRESS_KEYS) {
-    const value = asString(msg.address?.[key], 256).trim();
-    if (value) incoming[key] = value;
+  const raw = {};
+  if (msg.address && typeof msg.address === 'object') {
+    for (const [key, value] of Object.entries(msg.address)) {
+      if (ADDRESS_TOKENS.has(key)) raw[key] = asString(value, 256);
+    }
   }
-  if (Object.keys(incoming).length < 2) return { ok: false };
+  const incoming = normalizeCaptured(raw);
+
+  // Two structural fields. A name and an email off a newsletter box is not an
+  // address, however many boxes it happened to have.
+  if (!isAddressish(incoming)) return { ok: false };
 
   // Already stored, if every field we saw matches one on file.
   const known = addressesFor(vault.list()).some((r) =>

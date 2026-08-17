@@ -199,6 +199,32 @@ One flat address type, not a separate "identity" record: shipping forms ask for
 the name, the phone and the address together, and splitting them would mean
 filling one form from two records.
 
+**The record stores the granular fields and derives the composite ones.** First
+name and last name, not a full name; three street lines, not one block; a
+country code, not a country name. Joining is exact and splitting is a guess, so
+storing the parts means every shape a form might ask for can be produced, while
+storing the whole loses the parts the moment a site wants "First name" and all
+that was kept is "Ben Ropple". `src/core/address.js` holds the schema, the
+derivations and the reverse for capture; the manager's editor, the record's
+keys, and what the fill code looks up are all the same list, so none of the
+three can drift.
+
+**A form is answered with exactly the tokens it has fields for.** The content
+script sends the group's tokens with its request for candidates, and the
+background derives those and only those. A checkout with a postcode box and
+nothing else is not handed a phone number — not because the fill code would
+decline to use it, but because it never leaves the vault. A token that cannot
+be derived honestly is omitted rather than guessed: an area code is only
+offered for a number whose plan makes the split unambiguous.
+
+**Dropdowns are filled by matching an option, never by assignment.** Setting
+`value` on a `<select>` to a string no option carries selects nothing at all,
+which leaves the form looking answered when it is not. So the option is found
+first — against its value and its text, exactly and then folded for accents and
+punctuation — and the element is left alone if none matches. Country and state
+alternatives (`US`, `United States`, `USA`) travel with the value for this
+reason alone.
+
 **No payment card type, by decision.** Card data carries a materially different
 threat model and compliance surface for very little convenience gained, and the
 browser and the OS already store cards. Addresses are PII and get the same

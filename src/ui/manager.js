@@ -8,6 +8,7 @@
 import { Vault } from '../core/vault.js';
 import { pickStorage } from '../core/storage.js';
 import { generate, entropyBits } from '../core/generate.js';
+import { ADDRESS_SCHEMA, countryOptions, countryName, splitName } from '../core/address.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -81,22 +82,25 @@ async function makeVaultHost() {
 /**
  * The address fields, in the order a person fills a form.
  *
- * Keys are the WHATWG autofill tokens, the same ones the record stores and the
- * fill code looks up — so this list is the only place the field set is written
- * down for the UI, and it cannot drift from the model.
+ * From the model rather than written out again here: the tokens are the WHATWG
+ * autofill names, and they are simultaneously the record's keys, the editor's
+ * inputs and what the fill code looks up. One list, so none of the three can
+ * drift from the others.
  */
-const ADDRESS_FIELDS = [
-  ['name', 'Full name'],
-  ['organization', 'Company'],
-  ['address-line1', 'Address'],
-  ['address-line2', 'Address line 2'],
-  ['address-level2', 'City'],
-  ['address-level1', 'State / Province'],
-  ['postal-code', 'Postcode'],
-  ['country', 'Country (ISO code)'],
-  ['tel', 'Phone'],
-  ['email', 'Email'],
-];
+const ADDRESS_FIELDS = ADDRESS_SCHEMA;
+
+/**
+ * An address as the schema expects it.
+ *
+ * Records written before the name was stored in parts keep a single `name`,
+ * and so do addresses captured from a form that only had one box for it. The
+ * split happens on the way to the screen, so nothing has to be migrated and
+ * nothing shows up blank in the meantime.
+ */
+function withNameParts(r) {
+  if (!r?.name || r['given-name'] || r['family-name']) return r;
+  return { ...r, ...splitName(r.name) };
+}
 
 const state = {
   vault: null,
@@ -373,12 +377,13 @@ function renderDetail() {
   renderMeta(r);
 }
 
-function renderAddressDetail(r) {
+function renderAddressDetail(record) {
+  const r = withNameParts(record);
   const box = $('d-address');
   box.replaceChildren();
 
-  for (const [key, label] of ADDRESS_FIELDS) {
-    if (!r[key]) continue;
+  for (const { token, label, kind } of ADDRESS_FIELDS) {
+    if (!r[token]) continue;
     const row = document.createElement('div');
     row.className = 'row';
 
@@ -386,14 +391,18 @@ function renderAddressDetail(r) {
     name.className = 'label';
     name.textContent = label;
 
+    // The country is stored as its code, which is the right thing to store and
+    // the wrong thing to read: "GB" tells you less than "United Kingdom".
+    const shown = kind === 'country' ? countryName(r[token]) || r[token] : r[token];
+
     const value = document.createElement('span');
     value.className = 'value';
-    value.textContent = r[key];
+    value.textContent = shown;
 
     const copy = document.createElement('button');
     copy.className = 'btn btn-sm';
     copy.textContent = 'Copy';
-    copy.addEventListener('click', () => copyText(r[key], label));
+    copy.addEventListener('click', () => copyText(r[token], label));
 
     row.append(name, value, copy);
     box.append(row);
@@ -618,28 +627,73 @@ function openEditor(which) {
   $('e-title').focus();
 }
 
-/** The address inputs are generated from ADDRESS_FIELDS rather than written out. */
+/**
+ * The address inputs, generated from the schema rather than written out.
+ *
+ * Nineteen fields is a great many to face at once when eleven of them cover
+ * almost every form ever filled in, so the rest sit behind a disclosure. They
+ * are still real fields, still saved, still filled — just not in the way.
+ */
 function buildAddressEditor(record) {
   const box = $('e-address');
   box.replaceChildren();
 
-  for (const [key, label] of ADDRESS_FIELDS) {
+  // An older record, or one captured from a form with a single "Full name"
+  // box, keeps `name` and no parts. Split it on the way in so the editor shows
+  // something, and so saving does not quietly drop it.
+  const source = withNameParts({ ...record });
+
+  const rare = document.createElement('details');
+  rare.className = 'more-fields';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Less common fields';
+  rare.append(summary);
+
+  for (const field of ADDRESS_FIELDS) {
     const wrap = document.createElement('label');
     wrap.className = 'field';
 
     const name = document.createElement('span');
     name.className = 'label';
-    name.textContent = label;
+    name.textContent = field.label;
 
-    const input = document.createElement('input');
-    input.type = key === 'email' ? 'email' : key === 'tel' ? 'tel' : 'text';
-    input.dataset.addressKey = key;
-    input.value = record?.[key] ?? '';
-    input.autocomplete = 'off';
-
-    wrap.append(name, input);
-    box.append(wrap);
+    wrap.append(name, addressInput(field, source[field.token] ?? ''));
+    (field.rare ? rare : box).append(wrap);
   }
+
+  // Only offered when it has something in it, which it always does — but the
+  // check keeps the markup honest if the schema ever loses its rare fields.
+  if (rare.childElementCount > 1) box.append(rare);
+}
+
+/** One input, typed to what it holds. Country is a real list, not a code box. */
+function addressInput(field, value) {
+  if (field.kind === 'country') {
+    const select = document.createElement('select');
+    select.dataset.addressKey = field.token;
+
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = '—';
+    select.append(blank);
+
+    for (const [code, label] of countryOptions()) {
+      const option = document.createElement('option');
+      option.value = code;
+      option.textContent = label;
+      select.append(option);
+    }
+    select.value = String(value ?? '').toUpperCase();
+    return select;
+  }
+
+  const input = document.createElement('input');
+  input.type = field.token === 'email' ? 'email' : field.token === 'tel' ? 'tel' : 'text';
+  input.dataset.addressKey = field.token;
+  input.value = value;
+  if (field.placeholder) input.placeholder = field.placeholder;
+  input.autocomplete = 'off';
+  return input;
 }
 
 $('edit-form').addEventListener('submit', async (e) => {
@@ -651,6 +705,10 @@ $('edit-form').addEventListener('submit', async (e) => {
           type: 'address',
           title: $('e-title').value.trim(),
           notes: $('e-notes').value,
+          // The editor showed the name in parts, so the whole-name key an older
+          // record kept is now stale. Cleared rather than left behind, so there
+          // is only ever one answer to what this address's name is.
+          name: '',
           ...Object.fromEntries(
             [...$('e-address').querySelectorAll('[data-address-key]')].map((i) => [
               i.dataset.addressKey,

@@ -12,6 +12,8 @@
 // picked an entry, and after the background has re-derived the frame's origin
 // from `sender` rather than believing anything the frame claimed about itself.
 
+import { addressSummary } from '../core/address.js';
+
 export const MSG = Object.freeze({
   // content -> background
   DESCRIBE: 'describe', // "here are my fields, what are they?"
@@ -62,9 +64,7 @@ export function publicAddress(record) {
   return {
     id: record.id,
     title: record.title ?? '',
-    summary: [record['address-line1'], record['address-level2'], record['postal-code']]
-      .filter(Boolean)
-      .join(', '),
+    summary: addressSummary(record),
     type: 'address',
   };
 }

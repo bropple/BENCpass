@@ -96,20 +96,34 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .btn-danger { color: var(--bad); }
 .btn-danger:hover { border-color: var(--bad); }
 
-input[type=text], input[type=password], input[type=search], textarea {
+input[type=text], input[type=password], input[type=search],
+input[type=email], input[type=tel], textarea, select {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 2px;
   padding: 6px 8px;
   width: 100%;
 }
-input:focus, textarea:focus {
+input:focus, textarea:focus, select:focus {
   outline: none;
   border-color: var(--accent);
 }
+select { color: var(--text); font: inherit; }
 
 .field { display: block; margin-bottom: 12px; }
 .field .label { display: block; margin-bottom: 4px; }
+
+/* The address fields nobody fills in on most forms — real, saved, and out of
+   the way until they are wanted. */
+.more-fields { margin: 4px 0 12px; }
+.more-fields > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  padding: 4px 0;
+  user-select: none;
+}
+.more-fields > summary:hover { color: var(--text); }
+.more-fields[open] > summary { margin-bottom: 12px; }
 
 .input-row { display: flex; align-items: center; gap: 8px; }
 .input-row input { flex: 1; }
