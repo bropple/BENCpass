@@ -76,6 +76,17 @@
     <span class="bar-spacer"></span>
     <span class="bar-status" id="status" aria-live="polite"></span>
     <button class="btn" id="new-btn">New</button>
+    <!-- Drawn rather than loaded: one more file to keep in step for a shape
+         this simple is not worth it, and an <img> would need the icon in
+         web_accessible_resources. -->
+    <button class="btn btn-icon" id="settings-btn" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
+           fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3.2"/>
+        <path d="M12 2.6v3.1M12 18.3v3.1M2.6 12h3.1M18.3 12h3.1
+                 M5.3 5.3l2.2 2.2M16.5 16.5l2.2 2.2M18.7 5.3l-2.2 2.2M7.5 16.5l-2.2 2.2"/>
+      </svg>
+    </button>
     <button class="btn" id="lock-btn">Lock</button>
   </header>
 
@@ -192,16 +203,87 @@
     </section>
   </main>
 
+  <!-- Settings. A pane over the split rather than a separate page, so leaving
+       it puts you back exactly where you were. -->
+  <section class="settings" id="settings" hidden>
+    <div class="settings-inner">
+      <header class="settings-head">
+        <h2>Settings</h2>
+        <button class="btn" id="settings-close">Done</button>
+      </header>
+
+      <h3 class="settings-group">Unlocking</h3>
+
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-name" id="s-bio-name">Biometric unlock</span>
+          <span class="setting-note" id="s-bio-note"></span>
+        </div>
+        <button class="btn btn-sm" id="s-bio-btn" hidden></button>
+      </div>
+
+      <label class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Lock after</span>
+          <span class="setting-note">Minutes of inactivity before the vault shuts.</span>
+        </div>
+        <input type="number" id="s-autolock" min="1" max="1440" class="setting-input">
+      </label>
+
+      <h3 class="settings-group">Sync</h3>
+
+      <label class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Server</span>
+          <span class="setting-note">
+            https, or plain http to a private address — a LAN name cannot hold a
+            certificate.
+          </span>
+        </div>
+        <input type="text" id="s-endpoint" class="setting-input wide"
+               placeholder="https://bencpass.your-tailnet.ts.net">
+      </label>
+
+      <label class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Enrolment code</span>
+          <span class="setting-note" id="s-enrol-note"></span>
+        </div>
+        <input type="text" id="s-enrolment" class="setting-input wide"
+               placeholder="device-id:key" autocomplete="off">
+      </label>
+
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Sync now</span>
+          <span class="setting-note" id="s-sync-note"></span>
+        </div>
+        <button class="btn btn-sm" id="s-sync-btn">Sync</button>
+      </div>
+
+      <h3 class="settings-group">Filling</h3>
+
+      <label class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Fill on insecure pages</span>
+          <span class="setting-note">
+            Off by default. A password sent over plain http to a public site is
+            readable by anything on the way; private addresses are already
+            exempt without this.
+          </span>
+        </div>
+        <input type="checkbox" id="s-insecure" class="setting-check">
+      </label>
+
+      <h3 class="settings-group">About</h3>
+      <dl class="meta" id="s-about"></dl>
+
+      <p class="settings-error" id="s-error" role="alert" hidden></p>
+    </div>
+  </section>
+
   <footer class="foot">
     <span id="foot-count"></span>
-    <span class="bar-spacer"></span>
-    <!-- Biometric unlock is a per-machine setting, so it lives where you can
-         see which machine you are on rather than in a settings page shared
-         between them. Hidden entirely where no host is installed. -->
-    <span class="foot-bio" id="foot-bio" hidden>
-      <span id="foot-bio-text"></span>
-      <button type="button" class="btn btn-sm" id="bio-btn"></button>
-    </span>
     <span class="bar-spacer"></span>
     <span id="foot-lock"></span>
   </footer>

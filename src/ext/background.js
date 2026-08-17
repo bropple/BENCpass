@@ -8,7 +8,14 @@
 
 import { Vault } from '../core/vault.js';
 import { WebExtStorage } from '../core/storage.js';
-import { matchesFor, canFill, canFillAddress, addressesFor, hostOf } from '../core/match.js';
+import {
+  matchesFor,
+  canFill,
+  canFillAddress,
+  addressesFor,
+  hostOf,
+  isPrivateHost,
+} from '../core/match.js';
 import { classifyGroups } from '../core/fields.js';
 import {
   ADDRESS_TOKENS,
@@ -43,6 +50,7 @@ let settings = {
 let syncState = loadSyncState(null);
 let autolockTimer = null;
 let autolockAt = 0; // when the vault will shut, for anything that wants to show it
+let lastSyncAt = 0; // when a sync last succeeded, for the settings panel
 
 /** Menus currently on screen, keyed by an unguessable id. */
 const sessions = new Map();
@@ -255,6 +263,10 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleSync();
     case MSG.NOTICE_STATE:
       return handleNoticeState(msg, sender);
+    case MSG.SETTINGS_GET:
+      return handleSettingsGet();
+    case MSG.SETTINGS_SET:
+      return handleSettingsSet(msg);
     case MSG.BIO_STATE:
       return handleBioState();
     case MSG.BIO_ENROL:
@@ -837,6 +849,78 @@ function captureAddress(msg, origin) {
 const suggestAddressName = (a) =>
   asString(a['address-level2'] || a['address-line1'] || '', 60).trim();
 
+// ---- settings ---------------------------------------------------------------
+//
+// Read and written one field at a time, through an allow-list. The settings
+// object also holds the device key the sync server authenticates us with, and
+// that never leaves here: the manager is told *whether* this machine is
+// enrolled, never with what.
+
+const MIN_AUTOLOCK_MS = 60 * 1000;
+const MAX_AUTOLOCK_MS = 24 * 60 * 60 * 1000;
+
+async function handleSettingsGet() {
+  return {
+    endpoint: settings.endpoint,
+    autolockMinutes: Math.round((settings.autolockMs || AUTOLOCK_MS) / 60000),
+    allowInsecure: Boolean(settings.allowInsecure),
+    // Enough to say "this machine is enrolled with the server" and no more.
+    deviceId: settings.deviceId,
+    enrolled: Boolean(settings.deviceId && settings.deviceKey),
+    lastSync: lastSyncAt,
+    version: browser.runtime.getManifest().version,
+    records: vault && !vault.locked ? vault.list().length : null,
+  };
+}
+
+async function handleSettingsSet(msg) {
+  const patch = {};
+
+  if (typeof msg.endpoint === 'string') {
+    const endpoint = asString(msg.endpoint, 512).trim().replace(/\/+$/, '');
+    if (endpoint) {
+      let url;
+      try {
+        url = new URL(endpoint);
+      } catch {
+        return { ok: false, reason: 'bad-endpoint' };
+      }
+      // The same rule the fill code applies to a page: plaintext is allowed to
+      // a private host, because a LAN address cannot get a public certificate,
+      // and refused to anything else however convenient.
+      if (url.protocol !== 'https:' && !isPrivateHost(url.hostname)) {
+        return { ok: false, reason: 'insecure-endpoint' };
+      }
+    }
+    patch.endpoint = endpoint;
+  }
+
+  if (msg.autolockMinutes !== undefined) {
+    const ms = Number(msg.autolockMinutes) * 60000;
+    if (!Number.isFinite(ms) || ms < MIN_AUTOLOCK_MS || ms > MAX_AUTOLOCK_MS) {
+      return { ok: false, reason: 'bad-autolock' };
+    }
+    patch.autolockMs = ms;
+  }
+
+  if (msg.allowInsecure !== undefined) patch.allowInsecure = Boolean(msg.allowInsecure);
+
+  // An enrolment code from the server, as one string. Split here rather than
+  // asking someone to paste two halves into two boxes.
+  if (typeof msg.enrolment === 'string' && msg.enrolment.trim()) {
+    const parts = asString(msg.enrolment, 512).trim().split(/[:\s]+/).filter(Boolean);
+    if (parts.length !== 2) return { ok: false, reason: 'bad-enrolment' };
+    patch.deviceId = parts[0];
+    patch.deviceKey = parts[1];
+  }
+
+  settings = { ...settings, ...patch };
+  await persistSettings();
+  // A changed auto-lock has to take effect now, not at the next unlock.
+  if (patch.autolockMs !== undefined) bumpAutolock();
+  return { ok: true, settings: await handleSettingsGet() };
+}
+
 // ---- biometric unlock -------------------------------------------------------
 //
 // Two independent wrappings of one vault key: the master password, and a random
@@ -880,6 +964,15 @@ async function handleBioState() {
   const enrolled = Boolean(vault?.hasBiometric);
   const hello = await biometricCapabilities();
 
+  // Which operating system, asked of the browser rather than inferred from the
+  // host — because when there is no host that is exactly what has to be
+  // reported, and the interface still has to say something useful. Hiding the
+  // whole feature when nothing is installed left no way to find out it existed.
+  const os = await browser.runtime
+    .getPlatformInfo()
+    .then((info) => info.os)
+    .catch(() => '');
+
   return {
     // Is there a host, and can it do anything today? A Mac with Touch ID
     // switched off answers 'none' and is treated as having no host at all —
@@ -889,6 +982,11 @@ async function handleBioState() {
     platform: hello.ok ? hello.platform : '',
     reason: hello.ok ? '' : hello.reason,
     enrolled,
+    os,
+    // Whether this machine could have it at all, which is a different question
+    // from whether it does. Linux is a deliberate no — see hosts/install.sh —
+    // and saying "not set up" there would be an invitation to a dead end.
+    possible: os === 'mac' || os === 'win',
   };
 }
 
@@ -1123,6 +1221,7 @@ async function handleSync() {
   if (!c || !vault) return { ok: false, reason: 'not-configured' };
   try {
     const result = await syncOnce(vault, c, syncState);
+    lastSyncAt = Date.now();
     await persistVault();
     await persistSettings();
     return { ok: true, ...result, conflicts: result.conflicts.length };

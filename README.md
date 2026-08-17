@@ -276,12 +276,15 @@ Optional, and per machine. Without it BENCpass asks for the master password,
 which is what it does today and will always keep doing — the fingerprint is a
 shortcut, never the only key.
 
+Nothing appears in the interface until the host is installed — until then
+Settings says so, and says what to run:
+
 ```sh
 hosts/install.sh            # build the host and register it, then restart the browser
 hosts/install.sh uninstall  # remove the registration
 ```
 
-Then turn it on in the manager. You are asked for the master password **once**,
+Then turn it on under the gear in the manager. You are asked for the master password **once**,
 at enrolment, and that is not a formality: the vault key lives in a
 non-extractable `CryptoKey` once unlocked, so a second wrapping genuinely
 cannot be made without re-deriving it.

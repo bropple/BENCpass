@@ -91,15 +91,19 @@ if [ "${1:-}" = "shot" ]; then
   shot 17-address-edit '?open&section=address&select=1&edit'      1280,1100
   shot 18-address-more '?open&section=address&select=1&edit&more' 1280,1400
 
+  # Settings, in the states worth looking at.
+  shot 19-settings   '?open&settings'                    1280,1000
+  shot 20-settings-bio '?open&settings&bio=ready'        1280,1000
+
   # The save prompt, at the size the content script frames it at.
   toast() {
     "$browser" --headless --profile "$profile" --window-size="$3" \
       --screenshot "$out/$1.png" "$toast_base$2" >/dev/null 2>&1
     echo "  screenshots/$1.png"
   }
-  toast 19-toast-save    '?kind=login'          330,104
-  toast 20-toast-update  '?kind=login&update'   330,104
-  toast 21-toast-address '?kind=address'        330,148
+  toast 21-toast-save    '?kind=login'          330,104
+  toast 22-toast-update  '?kind=login&update'   330,104
+  toast 23-toast-address '?kind=address'        330,148
   exit 0
 fi
 

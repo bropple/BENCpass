@@ -45,6 +45,10 @@ export const MSG = Object.freeze({
   SEARCH: 'search',
   SYNC: 'sync',
 
+  // manager -> background
+  SETTINGS_GET: 'settings-get',
+  SETTINGS_SET: 'settings-set',
+
   // manager -> background, for the native host that guards the device secret
   BIO_STATE: 'bio-state', // "is a fingerprint an option on this machine?"
   BIO_ENROL: 'bio-enrol', // "wrap the vault key for the keystore"

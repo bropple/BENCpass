@@ -97,7 +97,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .btn-danger:hover { border-color: var(--bad); }
 
 input[type=text], input[type=password], input[type=search],
-input[type=email], input[type=tel], textarea, select {
+input[type=email], input[type=tel], input[type=number], textarea, select {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 2px;
@@ -352,3 +352,53 @@ select { color: var(--text); font: inherit; }
 .btn-link { background: none; border: 0; color: var(--text-dim); font: inherit;
             text-decoration: underline; cursor: pointer; padding: 8px 0; width: 100%; }
 .btn-link:hover { color: var(--text); }
+
+/* ---- settings ------------------------------------------------------------ */
+/* A pane over the split rather than a page of its own, so closing it returns
+   you to exactly the entry you were looking at. */
+.settings {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  overflow-y: auto;
+  z-index: 5;
+}
+.settings-inner { max-width: 680px; margin: 0 auto; padding: 20px 24px 40px; }
+.settings-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.settings-head h2 {
+  font-family: var(--display);
+  font-size: 30px;
+  font-weight: normal;
+  letter-spacing: 1px;
+  margin: 0;
+  flex: 1;
+}
+.settings-group {
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: normal;
+  margin: 24px 0 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.setting {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setting-text { flex: 1; min-width: 0; }
+.setting-name { display: block; }
+.setting-note { display: block; color: var(--text-dim); font-size: 13px; margin-top: 2px; }
+.setting-input { width: 90px; flex: none; }
+.setting-input.wide { width: 280px; }
+.setting-check { width: auto; margin-top: 4px; }
+.settings-error { color: var(--bad); margin-top: 16px; }
+
+/* The app pane has to be a containing block for the settings overlay. */
+.split { position: relative; }
+
+.btn-icon { padding: 5px 8px; line-height: 0; }

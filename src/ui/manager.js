@@ -184,10 +184,14 @@ async function boot() {
 // the extension (the preview harness) there is no background page, and none of
 // it appears.
 
-const bio = { available: false, enrolled: false, biometrics: 'none' };
+const bio = { available: false, enrolled: false, biometrics: 'none', possible: false, reason: '' };
 
+// Guarded on there being something to ask rather than on `vaultHost.shared`,
+// which is a statement about where the vault lives and not about whether a
+// message can be sent. If the background is gone the send rejects and this
+// returns null, which is the same answer by a shorter route.
 const askBackground = async (type, extra = {}) => {
-  if (!vaultHost?.shared) return null;
+  if (!globalThis.browser?.runtime?.sendMessage) return null;
   try {
     return await browser.runtime.sendMessage({ type, ...extra });
   } catch {
@@ -210,6 +214,8 @@ async function refreshBiometrics() {
     available: Boolean(reply?.available),
     enrolled: Boolean(reply?.enrolled),
     biometrics: reply?.biometrics ?? 'none',
+    possible: Boolean(reply?.possible),
+    reason: reply?.reason ?? '',
   });
 
   // Usable means all three: a host is installed, the machine can take a
@@ -227,11 +233,7 @@ async function refreshBiometrics() {
     $('gate-bio').focus();
   }
 
-  // The footer control is shown whenever a host exists, since that is where
-  // turning it on lives.
-  $('foot-bio').hidden = !bio.available;
-  $('foot-bio-text').textContent = bio.enrolled ? `${bioName()} on` : `${bioName()} off`;
-  $('bio-btn').textContent = bio.enrolled ? 'Turn off' : 'Turn on';
+  renderBioSetting();
 
   // Ask straight away rather than waiting to be clicked. Opening the manager
   // while locked *is* the request to unlock it; making someone press one more
@@ -275,7 +277,43 @@ $('gate-use-password').addEventListener('click', () => {
   $('gate-pw').focus();
 });
 
-$('bio-btn').addEventListener('click', async () => {
+/**
+ * The biometric row in Settings.
+ *
+ * Shown even where nothing is installed, which is the whole point. Hiding it
+ * when no host was present meant a machine that could do this perfectly well
+ * gave no sign the feature existed, let alone what to run — which is exactly
+ * how it looked like it had not shipped.
+ */
+function renderBioSetting() {
+  const name = bioName() || 'Biometric unlock';
+  $('s-bio-name').textContent = name;
+  $('s-bio-btn').hidden = !bio.available;
+  $('s-bio-btn').textContent = bio.enrolled ? 'Turn off' : 'Turn on';
+
+  if (bio.available) {
+    $('s-bio-note').textContent = bio.enrolled
+      ? `On for this machine. Your master password still works, and still opens it anywhere else.`
+      : `Available on this machine. You will be asked for your master password once.`;
+    return;
+  }
+
+  if (!bio.possible) {
+    // Linux, or something the browser will not name. Not a defect to fix.
+    $('s-bio-note').textContent =
+      'Not available on this system. There is no equivalent of Touch ID or Windows Hello to put in front of the key, and a login-password keyring would be a weaker door rather than a stronger one.';
+    return;
+  }
+
+  // The case that produced "no Touch ID option anywhere": the platform can do
+  // it, and the helper that reaches the keystore has simply not been built yet.
+  $('s-bio-note').textContent =
+    bio.reason === 'no-host' || bio.reason === 'unsupported'
+      ? 'Not set up on this machine yet. A small helper program has to be built and registered first — run hosts/install.sh from the repository, then restart the browser.'
+      : 'The helper is installed, but this machine reports no enrolled fingerprint. Set one up in system settings first.';
+}
+
+$('s-bio-btn').addEventListener('click', async () => {
   if (bio.enrolled) {
     await askBackground(MSG.BIO_FORGET);
     await refreshBiometrics();
@@ -397,6 +435,7 @@ function lock(why = '') {
   $('e-password').value = '';
   $('search').value = '';
 
+  $('settings').hidden = true;
   $('app').hidden = true;
   $('gate').hidden = false;
   $('visor').setAttribute('fill', 'var(--bad)');
@@ -683,6 +722,118 @@ function say(msg) {
   clearTimeout(sayTimer);
   sayTimer = setTimeout(() => { $('status').textContent = ''; }, 4000);
 }
+
+// ---- settings ---------------------------------------------------------------
+//
+// A pane over the list rather than a page of its own, so closing it puts you
+// back exactly where you were. Everything here belongs to the background: this
+// reads what it reports and hands back what was typed, and the background
+// validates before storing. The device key the sync server authenticates with
+// is deliberately never sent this way — the panel is told *whether* this
+// machine is enrolled, never with what.
+
+const ago = (at) => {
+  if (!at) return 'Never synced.';
+  const mins = Math.round((Date.now() - at) / 60000);
+  if (mins < 1) return 'Synced just now.';
+  if (mins < 60) return `Synced ${mins}m ago.`;
+  return `Synced ${Math.round(mins / 60)}h ago.`;
+};
+
+async function openSettings() {
+  $('settings').hidden = false;
+  $('s-error').hidden = true;
+  await refreshBiometrics();
+  await loadSettings();
+}
+
+async function loadSettings() {
+  const s = await askBackground(MSG.SETTINGS_GET);
+  if (!s) {
+    // Outside the extension there is no background to ask, and the panel has
+    // nothing true to show.
+    $('s-error').textContent = 'Settings are only available inside the extension.';
+    $('s-error').hidden = false;
+    return;
+  }
+
+  $('s-autolock').value = s.autolockMinutes;
+  $('s-endpoint').value = s.endpoint;
+  $('s-insecure').checked = s.allowInsecure;
+  $('s-enrol-note').textContent = s.enrolled
+    ? `This machine is enrolled as ${s.deviceId}. Pasting a new code replaces it.`
+    : 'Paste the code the server printed when it started.';
+  $('s-sync-note').textContent = s.endpoint ? ago(s.lastSync) : 'No server set.';
+
+  const about = $('s-about');
+  about.replaceChildren();
+  for (const [k, v] of [
+    ['Version', s.version],
+    ['Entries', s.records === null ? '—' : String(s.records)],
+    ['Device', s.deviceId || 'not enrolled'],
+  ]) {
+    const dt = document.createElement('dt');
+    dt.textContent = k;
+    const dd = document.createElement('dd');
+    dd.textContent = v;
+    about.append(dt, dd);
+  }
+}
+
+/** Send one field, and report a refusal in the words the background used. */
+async function saveSetting(patch) {
+  const reply = await askBackground(MSG.SETTINGS_SET, patch);
+  const problems = {
+    'bad-endpoint': 'That is not a URL.',
+    'insecure-endpoint':
+      'Plain http is only allowed to a private address. Use https, or a LAN or Tailscale name.',
+    'bad-autolock': 'Between 1 minute and 24 hours.',
+    'bad-enrolment': 'An enrolment code looks like `device-id:key`.',
+  };
+  if (!reply?.ok) {
+    $('s-error').textContent = problems[reply?.reason] ?? 'Could not save that.';
+    $('s-error').hidden = false;
+    return false;
+  }
+  $('s-error').hidden = true;
+  await loadSettings();
+  return true;
+}
+
+$('settings-btn').addEventListener('click', openSettings);
+$('settings-close').addEventListener('click', () => {
+  $('settings').hidden = true;
+});
+
+$('s-autolock').addEventListener('change', () =>
+  saveSetting({ autolockMinutes: Number($('s-autolock').value) }),
+);
+$('s-endpoint').addEventListener('change', () => saveSetting({ endpoint: $('s-endpoint').value }));
+$('s-insecure').addEventListener('change', () =>
+  saveSetting({ allowInsecure: $('s-insecure').checked }),
+);
+$('s-enrolment').addEventListener('change', async () => {
+  const code = $('s-enrolment').value.trim();
+  if (!code) return;
+  if (await saveSetting({ enrolment: code })) {
+    // Not left on screen: it is a credential, and it has been stored.
+    $('s-enrolment').value = '';
+    say('Enrolled.');
+  }
+});
+
+$('s-sync-btn').addEventListener('click', async () => {
+  $('s-sync-note').textContent = 'Syncing…';
+  const reply = await askBackground(MSG.SYNC);
+  if (reply?.ok) {
+    const conflicts = reply.conflicts ? ` ${reply.conflicts} conflict(s) kept.` : '';
+    $('s-sync-note').textContent = `Synced.${conflicts}`;
+    render();
+  } else {
+    $('s-sync-note').textContent =
+      reply?.reason === 'not-configured' ? 'No server set.' : `Failed: ${reply?.reason ?? 'error'}`;
+  }
+});
 
 // ---- reveal / edit / delete ------------------------------------------------
 

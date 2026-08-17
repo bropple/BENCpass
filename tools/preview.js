@@ -117,6 +117,43 @@ const SAMPLES = [
 const q = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
 
+// The settings panel asks the background page for everything it shows, and
+// there is no background page here. Only the two messages it actually sends are
+// answered — a stub of anything more would be a stub of behaviour the real
+// panel does not have.
+//
+// `?bio=` chooses which of the three biometric states to draw, since they are
+// the ones with words in them worth looking at:
+//   absent   the platform could, but no host is installed  (the common case)
+//   ready    a host is installed and nothing is enrolled yet
+//   on       enrolled
+const BIO = {
+  absent: { available: false, enrolled: false, biometrics: 'none', possible: true, reason: 'no-host' },
+  ready: { available: true, enrolled: false, biometrics: 'touchid', possible: true, reason: '' },
+  on: { available: true, enrolled: true, biometrics: 'touchid', possible: true, reason: '' },
+};
+
+globalThis.browser = {
+  runtime: {
+    sendMessage: async (msg) => {
+      if (msg.type === 'bio-state') return BIO[q.get('bio')] ?? BIO.absent;
+      if (msg.type === 'settings-get') {
+        return {
+          endpoint: q.has('nosync') ? '' : 'https://bencpass.example.ts.net',
+          autolockMinutes: 15,
+          allowInsecure: false,
+          deviceId: q.has('nosync') ? '' : 'workshop-mac',
+          enrolled: !q.has('nosync'),
+          lastSync: Date.now() - 12 * 60 * 1000,
+          version: '0.7.1',
+          records: SAMPLES.length,
+        };
+      }
+      return { ok: true };
+    },
+  },
+};
+
 /** Poll until the UI reaches a state, then act on it. */
 const when = (ready, then) => {
   const t = setInterval(() => {
@@ -152,6 +189,13 @@ if (q.has('section')) {
   when(
     () => document.querySelector(`.seg-btn[data-section="${q.get('section')}"]`),
     () => document.querySelector(`.seg-btn[data-section="${q.get('section')}"]`).click(),
+  );
+}
+
+if (q.has('settings')) {
+  when(
+    () => !$('app').hidden,
+    () => $('settings-btn').click(),
   );
 }
 
