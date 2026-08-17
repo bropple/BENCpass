@@ -1024,7 +1024,12 @@ async function handleBioEnrol(msg) {
     // The wrapping exists but nothing can open it. Undo it rather than leave a
     // vault claiming a biometric unlock it cannot perform.
     vault.forgetBiometric();
-    return { ok: false, reason: stored.reason ?? 'error' };
+    // `detail` is passed through untouched. It is the host's own account of
+    // what the keystore said — an OSStatus, usually — and it is the only thing
+    // that tells one failure from another. Swallowing it is how "it crashed
+    // with no log explanation" happens.
+    console.warn('BENCpass: the keystore refused the secret', stored);
+    return { ok: false, reason: stored.reason ?? 'error', detail: stored.detail };
   }
 
   await persistVault();

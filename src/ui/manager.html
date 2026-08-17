@@ -76,15 +76,20 @@
     <span class="bar-spacer"></span>
     <span class="bar-status" id="status" aria-live="polite"></span>
     <button class="btn" id="new-btn">New</button>
-    <!-- Drawn rather than loaded: one more file to keep in step for a shape
-         this simple is not worth it, and an <img> would need the icon in
-         web_accessible_resources. -->
+    <!-- Drawn rather than loaded: one more file to keep in step is not worth it
+         for one shape, and an <img> would need the icon in
+         web_accessible_resources.
+
+         A filled cog, not spokes around a circle. The first attempt was eight
+         evenly spaced lines radiating from a ring, which is a drawing of the
+         sun — teeth have width and sit flush against the body, and that is the
+         whole difference. -->
     <button class="btn btn-icon" id="settings-btn" title="Settings" aria-label="Settings">
-      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
-           fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="3.2"/>
-        <path d="M12 2.6v3.1M12 18.3v3.1M2.6 12h3.1M18.3 12h3.1
-                 M5.3 5.3l2.2 2.2M16.5 16.5l2.2 2.2M18.7 5.3l-2.2 2.2M7.5 16.5l-2.2 2.2"/>
+      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="currentColor">
+        <path d="M20.3 13.6a8.6 8.6 0 0 0 0-3.2l2-1.5-2-3.5-2.4 1a8.4 8.4 0 0 0-2.7-1.6L14.8 2
+                 h-4l-.4 2.8a8.4 8.4 0 0 0-2.7 1.6l-2.4-1-2 3.5 2 1.5a8.6 8.6 0 0 0 0 3.2l-2 1.5
+                 2 3.5 2.4-1a8.4 8.4 0 0 0 2.7 1.6l.4 2.8h4l.4-2.8a8.4 8.4 0 0 0 2.7-1.6l2.4 1
+                 2-3.5-2-1.5ZM12 15.4A3.4 3.4 0 1 1 12 8.6a3.4 3.4 0 0 1 0 6.8Z"/>
       </svg>
     </button>
     <button class="btn" id="lock-btn">Lock</button>
@@ -218,6 +223,20 @@
         <div class="setting-text">
           <span class="setting-name" id="s-bio-name">Biometric unlock</span>
           <span class="setting-note" id="s-bio-note"></span>
+
+          <!-- Asked for here rather than through window.prompt(), which draws a
+               browser dialog with a *plain text* box — a master password in
+               clear view of the room, and a synchronous modal in a panel that
+               is not reliably allowed to draw one. -->
+          <form class="bio-confirm" id="s-bio-form" hidden autocomplete="off">
+            <label class="label" for="s-bio-pw">Master password</label>
+            <div class="input-row">
+              <input type="password" id="s-bio-pw" autocomplete="current-password" required>
+              <button type="submit" class="btn btn-sm btn-primary">Confirm</button>
+              <button type="button" class="btn btn-sm" id="s-bio-cancel">Cancel</button>
+            </div>
+            <p class="setting-note" id="s-bio-error"></p>
+          </form>
         </div>
         <button class="btn btn-sm" id="s-bio-btn" hidden></button>
       </div>

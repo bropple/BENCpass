@@ -123,22 +123,38 @@ func authenticate(_ reason: String) -> Result<LAContext, AuthFailure> {
 
 // ---- the keychain -----------------------------------------------------------
 //
-// The file-based keychain, deliberately, rather than the data-protection one.
-// The data-protection keychain on macOS requires the caller to be signed with a
-// `keychain-access-groups` entitlement backed by a real team identifier, which
-// a locally built command-line tool does not have — it fails with
-// errSecMissingEntitlement (-34018) and there is no way around that short of a
-// paid developer account. The file-based keychain honours the same
-// `SecAccessControl`, and `.biometryCurrentSet` means the item is destroyed if
-// the enrolled fingerprints change, which is the property that matters.
+// macOS has two, and which one will take a biometric access control from a
+// locally built command-line tool is not something that can be settled by
+// reading:
+//
+//   data protection   the iOS-style keychain, and where Apple's own Touch ID
+//                     sample puts such items. It wants the caller signed with a
+//                     keychain-access-groups entitlement backed by a real team
+//                     identifier, which an ad-hoc signature does not carry, and
+//                     refuses with errSecMissingEntitlement (-34018) when it
+//                     does not like the caller.
+//   file based        the older one. It has honoured SecAccessControl since
+//                     10.12.1, and may reject the newer flags with errSecParam.
+//
+// So both are tried, in that order, and the reply says which one worked. Trying
+// and reporting beats asserting: the failure this replaces was a refusal with
+// no account of itself, which is indistinguishable from a crash.
 
-func query(_ id: String) -> [String: Any] {
-    [
+func query(_ id: String, dataProtection: Bool) -> [String: Any] {
+    var q: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: SERVICE,
         kSecAttrAccount as String: id,
     ]
+    if dataProtection { q[kSecUseDataProtectionKeychain as String] = true }
+    return q
 }
+
+/// Both keychains, most-preferred first.
+let KEYCHAINS: [(name: String, dataProtection: Bool)] = [
+    ("data-protection", true),
+    ("file", false),
+]
 
 func store(id: String, secret: Data) -> [String: Any] {
     guard biometricsAvailable() else { return fail("unavailable") }
@@ -156,20 +172,27 @@ func store(id: String, secret: Data) -> [String: Any] {
         return fail("error", "SecAccessControlCreateWithFlags failed")
     }
 
-    // Replace rather than update: the access control is set at creation, so an
-    // update cannot be trusted to reapply it.
-    SecItemDelete(query(id) as CFDictionary)
+    var attempts: [String] = []
+    for keychain in KEYCHAINS {
+        // Replace rather than update: the access control is set at creation, so
+        // an update cannot be trusted to reapply it. Both keychains are cleared
+        // so a secret cannot survive in the one that is no longer being used.
+        for other in KEYCHAINS {
+            SecItemDelete(query(id, dataProtection: other.dataProtection) as CFDictionary)
+        }
 
-    var add = query(id)
-    add[kSecValueData as String] = secret
-    add[kSecAttrAccessControl as String] = access
-    add[kSecAttrLabel as String] = "BENCpass device secret"
+        var add = query(id, dataProtection: keychain.dataProtection)
+        add[kSecValueData as String] = secret
+        add[kSecAttrAccessControl as String] = access
+        add[kSecAttrLabel as String] = "BENCpass device secret"
 
-    let status = SecItemAdd(add as CFDictionary, nil)
-    guard status == errSecSuccess else {
-        return fail("error", "SecItemAdd: \(status)")
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status == errSecSuccess {
+            return ["ok": true, "keychain": keychain.name]
+        }
+        attempts.append("\(keychain.name): \(status)")
     }
-    return ["ok": true]
+    return fail("error", "SecItemAdd failed — \(attempts.joined(separator: ", "))")
 }
 
 func retrieve(id: String, prompt: String) -> [String: Any] {
@@ -177,31 +200,38 @@ func retrieve(id: String, prompt: String) -> [String: Any] {
     case .failure(let reason):
         return fail(reason.rawValue)
     case .success(let context):
-        var get = query(id)
-        get[kSecReturnData as String] = true
-        get[kSecMatchLimit as String] = kSecMatchLimitOne
-        // Already authenticated, so this does not prompt again.
-        get[kSecUseAuthenticationContext as String] = context
+        var attempts: [String] = []
+        // Whichever keychain accepted it at enrolment. Asked in the same order,
+        // so the usual case finds it first.
+        for keychain in KEYCHAINS {
+            var get = query(id, dataProtection: keychain.dataProtection)
+            get[kSecReturnData as String] = true
+            get[kSecMatchLimit as String] = kSecMatchLimitOne
+            // Already authenticated, so this does not prompt again.
+            get[kSecUseAuthenticationContext as String] = context
 
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(get as CFDictionary, &item)
-        if status == errSecItemNotFound { return fail("not-found") }
-        guard status == errSecSuccess, let data = item as? Data else {
-            // errSecUserCanceled can still surface here if the context expired
-            // between the prompt and the read.
+            var item: CFTypeRef?
+            let status = SecItemCopyMatching(get as CFDictionary, &item)
+            if status == errSecSuccess, let data = item as? Data {
+                return ["ok": true, "secret": data.base64EncodedString()]
+            }
+            // Cancelling is the person's answer and applies to both keychains;
+            // there is nothing to be gained by asking the second one.
             if status == errSecUserCanceled { return fail("cancelled") }
-            return fail("error", "SecItemCopyMatching: \(status)")
+            attempts.append("\(keychain.name): \(status)")
         }
-        return ["ok": true, "secret": data.base64EncodedString()]
+        return fail("not-found", attempts.joined(separator: ", "))
     }
 }
 
 func forget(id: String) -> [String: Any] {
-    let status = SecItemDelete(query(id) as CFDictionary)
-    // Deleting something that was never there is a success. The caller wants it
-    // gone, and it is gone.
-    guard status == errSecSuccess || status == errSecItemNotFound else {
-        return fail("error", "SecItemDelete: \(status)")
+    for keychain in KEYCHAINS {
+        let status = SecItemDelete(query(id, dataProtection: keychain.dataProtection) as CFDictionary)
+        // Deleting something that was never there is a success. The caller wants
+        // it gone, and it is gone.
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            return fail("error", "SecItemDelete (\(keychain.name)): \(status)")
+        }
     }
     return ["ok": true]
 }

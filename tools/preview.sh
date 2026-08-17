@@ -103,6 +103,7 @@ if [ "${1:-}" = "shot" ]; then
   # Settings, in the states worth looking at.
   shot 19-settings   '?open&settings'                    1280,1000
   shot 20-settings-bio '?open&settings&bio=ready'        1280,1000
+  shot 20b-settings-narrow '?open&settings&bio=ready'    460,1000
 
   # The save prompt, at the size the content script frames it at.
   toast() {

@@ -393,10 +393,34 @@ select { color: var(--text); font: inherit; }
 .setting-text { flex: 1; min-width: 0; }
 .setting-name { display: block; }
 .setting-note { display: block; color: var(--text-dim); font-size: 13px; margin-top: 2px; }
-.setting-input { width: 90px; flex: none; }
-.setting-input.wide { width: 280px; }
+/* Sized to what goes in it. "Lock after" holds at most four digits and had
+   been given ninety pixels, which took the room from the label beside it and
+   left that wrapping into a column. The control takes what it needs; the text
+   gets the rest. */
+/* Qualified with the element, and not for tidiness: the shared rule above is
+   input[type=number], which is an element plus an attribute and so outranks a
+   bare class. The number box was inheriting width:100% from it, taking the
+   whole row and leaving the label beside it wrapping one word per line. */
+.setting input.setting-input { width: 5.5em; flex: none; text-align: right; }
+.setting input.setting-input.wide { width: 260px; max-width: 100%; text-align: left; }
 .setting-check { width: auto; margin-top: 4px; }
+
+/* Narrow enough and side-by-side stops working — the sidebar is 400px, and a
+   260px box next to a paragraph in that is two squeezed columns rather than
+   one of each. Below that the control goes under the text it belongs to. */
+@media (max-width: 620px) {
+  .setting { flex-direction: column; align-items: stretch; gap: 8px; }
+  .setting input.setting-input,
+  .setting input.setting-input.wide { width: 100%; text-align: left; }
+  .setting > .btn, .setting > .setting-check { align-self: flex-start; }
+}
 .settings-error { color: var(--bad); margin-top: 16px; }
+
+/* The master-password confirmation, which appears in place rather than as a
+   browser dialog. See the note in manager.html. */
+.bio-confirm { margin-top: 10px; }
+.bio-confirm .input-row { margin-top: 4px; }
+.bio-confirm input { flex: 1; min-width: 0; }
 
 /* The app pane has to be a containing block for the settings overlay. */
 .split { position: relative; }

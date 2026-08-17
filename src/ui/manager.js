@@ -324,22 +324,52 @@ $('s-bio-btn').addEventListener('click', async () => {
   // Enrolment needs the master password again, and genuinely so: the vault key
   // is a non-extractable CryptoKey once unlocked, so a second wrapping cannot
   // be made without re-deriving it. See enrolBiometric in core/vault.js.
-  const password = prompt(
-    `Confirm your master password to allow ${bioName()} to unlock this vault on this machine.`,
-  );
+  $('s-bio-form').hidden = false;
+  $('s-bio-error').textContent = '';
+  $('s-bio-btn').hidden = true;
+  $('s-bio-pw').focus();
+});
+
+const cancelBioForm = () => {
+  $('s-bio-form').hidden = true;
+  $('s-bio-pw').value = '';
+  $('s-bio-error').textContent = '';
+  $('s-bio-btn').hidden = false;
+};
+
+$('s-bio-cancel').addEventListener('click', cancelBioForm);
+
+$('s-bio-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const password = $('s-bio-pw').value;
   if (!password) return;
 
+  // Argon2 at 128 MiB blocks for a moment. Say so rather than looking dead.
+  $('s-bio-error').textContent = 'Deriving key…';
   const reply = await askBackground(MSG.BIO_ENROL, { password });
-  await refreshBiometrics();
+  $('s-bio-pw').value = '';
+
   if (reply?.ok) {
+    cancelBioForm();
+    await refreshBiometrics();
     say(`${bioName()} will now unlock this vault on this machine.`);
-  } else if (reply?.reason === 'bad-password') {
-    say('That is not the master password.');
-  } else if (reply?.reason === 'cancelled') {
-    /* changed their mind at the OS prompt */
-  } else {
-    say(`Could not turn on ${bioName()}.`);
+    return;
   }
+
+  await refreshBiometrics();
+  $('s-bio-btn').hidden = true; // the form stays up so it can be tried again
+  const said = {
+    'bad-password': 'That is not the master password.',
+    unavailable: 'This machine reports no enrolled fingerprint.',
+    cancelled: 'Cancelled.',
+    'no-host': 'The helper is not installed. Run hosts/install.sh, then restart the browser.',
+  };
+  // `detail` is whatever the host said went wrong — an OSStatus, usually. It is
+  // not pretty, and it is the only thing that distinguishes one keystore
+  // failure from another, so it is shown rather than swallowed.
+  $('s-bio-error').textContent =
+    (said[reply?.reason] ?? `Could not turn it on (${reply?.reason ?? 'error'}).`) +
+    (reply?.detail ? ` ${reply.detail}` : '');
 });
 
 function setGate(mode) {
