@@ -285,3 +285,33 @@ input:focus, textarea:focus {
   font-size: 12px;
   letter-spacing: 1px;
 }
+
+/* ---- narrow: the sidebar, and any window someone has squashed --------------
+ *
+ * The two-pane split assumes a wide window. In a sidebar the list keeps its
+ * 300px and the detail pane is left with whatever remains, which is nothing —
+ * so below this width the panes stack instead of sitting side by side.
+ */
+@media (max-width: 720px) {
+  .split { flex-direction: column; }
+
+  .list-pane {
+    width: auto;
+    max-height: 45vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bar { flex-wrap: wrap; }
+  .search { max-width: none; flex: 1 1 120px; order: 3; }
+
+  .detail-pane { padding: 16px; }
+
+  /* Label above value rather than beside it; a 90px label column against a
+     200px pane leaves no room for a password. */
+  .row { flex-wrap: wrap; gap: 2px 10px; }
+  .row .label { width: 100%; }
+
+  .meta { grid-template-columns: 1fr; gap: 0 0; }
+  .meta dt { margin-top: 6px; }
+}

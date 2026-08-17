@@ -28,10 +28,15 @@ async function refresh() {
   $('fatal').hidden = true;
   $('locked').hidden = !state.locked;
   $('unlocked').hidden = state.locked;
+
+  // With no vault there is nothing to unlock, so the form is replaced rather
+  // than merely annotated — a password box above the words "no vault on this
+  // machine" is a question with no answer.
   $('no-vault').hidden = state.hasVault;
+  $('unlock-form').hidden = !state.hasVault;
 
   if (state.locked) {
-    $('pw').focus();
+    if (state.hasVault) $('pw').focus();
     return;
   }
 
@@ -162,9 +167,24 @@ $('sync-btn').addEventListener('click', async () => {
   await refresh();
 });
 
-$('manage-btn').addEventListener('click', () => {
+function openManager() {
   browser.runtime.openOptionsPage();
   window.close();
+}
+
+$('manage-btn').addEventListener('click', openManager);
+$('create-btn').addEventListener('click', openManager);
+
+// The sidebar is easy to close and, in Zen, not obvious to reopen — there is no
+// menu entry where a Firefox user would look for one. Opening it needs a user
+// gesture, which this click is.
+$('sidebar-btn').addEventListener('click', async () => {
+  try {
+    await browser.sidebarAction.open();
+    window.close();
+  } catch {
+    say('Could not open the sidebar.');
+  }
 });
 
 refresh();

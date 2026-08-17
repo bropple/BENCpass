@@ -22,7 +22,13 @@
     <p class="error" id="unlock-error" hidden></p>
     <button class="btn btn-primary" type="submit" id="unlock-btn">Unlock</button>
   </form>
-  <p class="note" id="no-vault" hidden>No vault on this machine yet.</p>
+
+  <!-- Shown instead of the form when there is nothing to unlock. Asking for a
+       password to a vault that does not exist is a dead end. -->
+  <div id="no-vault" hidden>
+    <p class="note">No vault on this machine yet.</p>
+    <button class="btn btn-primary" id="create-btn">Create a vault</button>
+  </div>
 </div>
 
 <div id="unlocked" hidden>
@@ -45,12 +51,14 @@
   <div id="list"></div>
   <p class="empty" id="empty" hidden>Nothing for this site.</p>
 
-  <footer class="foot">
-    <button class="link" id="manage-btn">Open manager</button>
-    <span class="spacer"></span>
-    <span id="status"></span>
-  </footer>
 </div>
+
+<footer class="foot">
+  <button class="link" id="manage-btn">Manager</button>
+  <button class="link" id="sidebar-btn">Sidebar</button>
+  <span class="spacer"></span>
+  <span id="status"></span>
+</footer>
 
 <script type="module" src="popup.js"></script>
 </body>

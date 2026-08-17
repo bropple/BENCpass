@@ -65,6 +65,9 @@ if [ "${1:-}" = "shot" ]; then
   shot 12-generated  '?open&new&gen'
   shot 13-search     '?open&search=example&select=0'
   shot 14-no-match   '?open&search=nothing+matches+this'
+  # Sidebar width, where the two-pane split has to stack or the detail pane
+  # is squeezed to nothing.
+  shot 15-narrow     '?open&select=0'                400,900
   exit 0
 fi
 
