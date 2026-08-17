@@ -26,3 +26,8 @@ server/data/
 
 # self-test output
 /tmp/bencpass-selftest.json
+
+# built native hosts
+hosts/macos/bencpass-auth
+hosts/linux/bencpass-auth
+hosts/windows/bin/

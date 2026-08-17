@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { Vault, VaultLockedError } from '../src/core/vault.js';
 import { MemoryStorage } from '../src/core/storage.js';
-import { deriveMasterKey, unwrapVaultKey } from '../src/core/crypto.js';
+import { deriveMasterKey, unwrapVaultKey, randomBytes } from '../src/core/crypto.js';
 import { fromB64 } from '../src/core/bytes.js';
 
 const FAST = { name: 'argon2id', memoryKiB: 1024, iterations: 1, parallelism: 1 };
@@ -287,4 +287,104 @@ test('search reaches address fields, and can be limited by type', async () => {
   assert.equal(v.search('springfield').length, 2); // a url and a city
   assert.equal(v.search('springfield', 'address').length, 1);
   assert.equal(v.search('', 'address').length, 1);
+});
+
+// ---- the second wrapping ----------------------------------------------------
+//
+// One vault key, two independent wrappings: the master password, and a random
+// device secret an operating system holds behind a fingerprint. The tests that
+// matter are the ones about independence — that neither wrapping weakens the
+// other, and that dropping one is a local act.
+
+test('a device secret opens the same vault as the password', async () => {
+  const v = await Vault.create({ password: 'correct horse battery staple' });
+  const id = await v.add({ title: 'Router', username: 'admin', password: 'hunter2' });
+
+  const secret = randomBytes(32);
+  await v.enrolBiometric('correct horse battery staple', secret);
+
+  const reopened = Vault.load(JSON.parse(JSON.stringify(v.toJSON())));
+  assert.equal(reopened.locked, true);
+  await reopened.unlockWithBiometricSecret(secret);
+  assert.equal(reopened.get(id).password, 'hunter2');
+});
+
+test('the password still works after enrolling, and vice versa', async () => {
+  const v = await Vault.create({ password: 'pw' });
+  await v.add({ title: 'x', password: 'secret' });
+  const secret = randomBytes(32);
+  await v.enrolBiometric('pw', secret);
+
+  const json = JSON.parse(JSON.stringify(v.toJSON()));
+  const byPassword = Vault.load(json);
+  await byPassword.unlock('pw');
+  assert.equal(byPassword.list()[0].password, 'secret');
+
+  const bySecret = Vault.load(json);
+  await bySecret.unlockWithBiometricSecret(secret);
+  assert.equal(bySecret.list()[0].password, 'secret');
+});
+
+test('enrolling needs the real master password', async () => {
+  const v = await Vault.create({ password: 'pw' });
+  await assert.rejects(() => v.enrolBiometric('not the password', randomBytes(32)), {
+    code: 'unwrap-failed',
+  });
+  assert.equal(v.hasBiometric, false);
+});
+
+test('a wrong device secret is refused exactly as a wrong password is', async () => {
+  const v = await Vault.create({ password: 'pw' });
+  await v.enrolBiometric('pw', randomBytes(32));
+  const reopened = Vault.load(JSON.parse(JSON.stringify(v.toJSON())));
+  await assert.rejects(() => reopened.unlockWithBiometricSecret(randomBytes(32)), {
+    code: 'unwrap-failed',
+  });
+});
+
+test('the device secret has to be a full-length key', async () => {
+  const v = await Vault.create({ password: 'pw' });
+  await assert.rejects(() => v.enrolBiometric('pw', randomBytes(16)), /32 bytes/);
+  await assert.rejects(() => v.enrolBiometric('pw', undefined), /32 bytes/);
+});
+
+test('forgetting is local: the password wrapping is untouched', async () => {
+  const v = await Vault.create({ password: 'pw' });
+  await v.add({ title: 'x', password: 'secret' });
+  const secret = randomBytes(32);
+  await v.enrolBiometric('pw', secret);
+  assert.equal(v.hasBiometric, true);
+
+  v.forgetBiometric();
+  assert.equal(v.hasBiometric, false);
+
+  const reopened = Vault.load(JSON.parse(JSON.stringify(v.toJSON())));
+  await reopened.unlock('pw');
+  assert.equal(reopened.list()[0].password, 'secret');
+  // And the secret is now useless, which is what makes forgetting cheap.
+  await assert.rejects(
+    () => Vault.load(JSON.parse(JSON.stringify(v.toJSON()))).unlockWithBiometricSecret(secret),
+    /no biometric wrapping/,
+  );
+});
+
+test('a vault with no second wrapping says so rather than guessing', async () => {
+  const v = await Vault.create({ password: 'pw' });
+  assert.equal(v.hasBiometric, false);
+  await assert.rejects(() => v.unlockWithBiometricSecret(randomBytes(32)), /no biometric wrapping/);
+});
+
+test('the two wrappings are bound to their own names', async () => {
+  // The AAD carries the wrapper name, so a blob moved from one slot to the
+  // other fails to decrypt. Without that a server or a tampered file could
+  // present the password wrapping as the biometric one.
+  const v = await Vault.create({ password: 'pw' });
+  await v.enrolBiometric('pw', randomBytes(32));
+
+  const json = JSON.parse(JSON.stringify(v.toJSON()));
+  json.meta.wraps.biometric = { ...json.meta.wraps.password, wrapper: 'biometric' };
+  const tampered = Vault.load(json);
+  await assert.rejects(() => tampered.unlockWithBiometricSecret(randomBytes(32)), {
+    code: 'unwrap-failed',
+  });
 });

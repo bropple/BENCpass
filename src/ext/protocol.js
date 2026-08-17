@@ -44,6 +44,12 @@ export const MSG = Object.freeze({
   LOCK: 'lock',
   SEARCH: 'search',
   SYNC: 'sync',
+
+  // manager -> background, for the native host that guards the device secret
+  BIO_STATE: 'bio-state', // "is a fingerprint an option on this machine?"
+  BIO_ENROL: 'bio-enrol', // "wrap the vault key for the keystore"
+  BIO_UNLOCK: 'bio-unlock', // "ask the keystore, then open the vault"
+  BIO_FORGET: 'bio-forget', // "drop the second wrapping on this machine"
 });
 
 /**

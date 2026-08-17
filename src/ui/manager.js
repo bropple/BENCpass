@@ -9,6 +9,7 @@ import { Vault } from '../core/vault.js';
 import { pickStorage } from '../core/storage.js';
 import { generate, entropyBits } from '../core/generate.js';
 import { ADDRESS_SCHEMA, countryOptions, countryName, splitName } from '../core/address.js';
+import { MSG } from '../ext/protocol.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -173,7 +174,103 @@ async function boot() {
     return;
   }
   setGate('unlock');
+  refreshBiometrics();
 }
+
+// ---- biometric unlock -------------------------------------------------------
+//
+// Entirely a background concern — it owns the vault and it is the only thing
+// that can reach the native host — so this page only asks and reports. Outside
+// the extension (the preview harness) there is no background page, and none of
+// it appears.
+
+const bio = { available: false, enrolled: false, biometrics: 'none' };
+
+const askBackground = async (type, extra = {}) => {
+  if (!vaultHost?.shared) return null;
+  try {
+    return await browser.runtime.sendMessage({ type, ...extra });
+  } catch {
+    return null;
+  }
+};
+
+/** What to call it, in the words the platform uses for itself. */
+const bioName = () =>
+  bio.biometrics === 'touchid' ? 'Touch ID' : bio.biometrics === 'hello' ? 'Windows Hello' : '';
+
+async function refreshBiometrics() {
+  const reply = await askBackground(MSG.BIO_STATE);
+  Object.assign(bio, {
+    available: Boolean(reply?.available),
+    enrolled: Boolean(reply?.enrolled),
+    biometrics: reply?.biometrics ?? 'none',
+  });
+
+  // The gate button appears only when all three are true: a host is installed,
+  // the machine can take a fingerprint today, and this vault has the second
+  // wrapping. Any less and it is a button that fails.
+  const canUnlock = bio.available && bio.enrolled;
+  $('gate-bio').hidden = !canUnlock;
+  $('gate-bio').textContent = `Unlock with ${bioName()}`;
+
+  // The footer control is shown whenever a host exists, since that is where
+  // turning it on lives.
+  $('foot-bio').hidden = !bio.available;
+  $('foot-bio-text').textContent = bio.enrolled ? `${bioName()} on` : `${bioName()} off`;
+  $('bio-btn').textContent = bio.enrolled ? 'Turn off' : 'Turn on';
+}
+
+$('gate-bio').addEventListener('click', async () => {
+  const err = $('gate-error');
+  err.hidden = true;
+
+  const reply = await askBackground(MSG.BIO_UNLOCK);
+  if (reply?.ok) {
+    state.vault = vaultHost.vault;
+    enterApp();
+    return;
+  }
+
+  // `cancelled` is someone changing their mind, not a fault, and saying
+  // anything about it would be noise.
+  if (reply?.reason === 'cancelled') return;
+  err.textContent =
+    reply?.reason === 'stale-secret'
+      ? `${bioName()} no longer matches this vault, so it has been turned off. Unlock with your master password and turn it on again.`
+      : `${bioName()} is not available. Use your master password.`;
+  err.hidden = false;
+  refreshBiometrics();
+});
+
+$('bio-btn').addEventListener('click', async () => {
+  if (bio.enrolled) {
+    await askBackground(MSG.BIO_FORGET);
+    await refreshBiometrics();
+    say(`${bioName()} turned off on this machine.`);
+    return;
+  }
+
+  // Enrolment needs the master password again, and genuinely so: the vault key
+  // is a non-extractable CryptoKey once unlocked, so a second wrapping cannot
+  // be made without re-deriving it. See enrolBiometric in core/vault.js.
+  const password = prompt(
+    `Confirm your master password to allow ${bioName()} to unlock this vault on this machine.`,
+  );
+  if (!password) return;
+
+  const reply = await askBackground(MSG.BIO_ENROL, { password });
+  await refreshBiometrics();
+  if (reply?.ok) {
+    say(`${bioName()} will now unlock this vault on this machine.`);
+  } else if (reply?.reason === 'bad-password') {
+    say('That is not the master password.');
+  } else if (reply?.reason === 'cancelled') {
+    /* changed their mind at the OS prompt */
+  } else {
+    say(`Could not turn on ${bioName()}.`);
+  }
+});
 
 function setGate(mode) {
   const setup = mode === 'setup';
@@ -247,6 +344,7 @@ function enterApp() {
   $('app').hidden = false;
   bumpAutolock();
   render();
+  refreshBiometrics();
   $('search').focus();
 }
 

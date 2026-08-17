@@ -28,7 +28,7 @@ clients.
 | ✅ Origin matching against the Public Suffix List | `src/core/match.js` |
 | ✅ Form-field classification, logins and addresses | `src/core/fields.js` |
 | ✅ Address model: every WHATWG token, country and state dropdowns | `src/core/address.js` |
-| ⬜ Native host: Touch ID / Windows Hello | — |
+| 🔶 Native host: Touch ID (macOS) — Windows Hello still to come | `hosts/` |
 | ⬜ Import from Firefox, recovery kit | — |
 
 ## Layout
@@ -45,7 +45,7 @@ test/         Node tests, including integration tests against the real server
 ## Running things
 
 ```sh
-npm install && npm test     # 169 tests; the sync ones build and run the Go server
+npm install && npm test     # 177 tests; the sync ones build and run the Go server
 cd server && go test ./...  # 15 tests
 
 tools/selftest.sh           # drive the extension in a real browser, unattended
@@ -269,3 +269,46 @@ internet.
 MIT — see [LICENSE](LICENSE). Third-party components and their licences are in
 [NOTICE](NOTICE); the bundled fonts are OFL and travel with any build that
 embeds them.
+
+## Biometric unlock
+
+Optional, and per machine. Without it BENCpass asks for the master password,
+which is what it does today and will always keep doing — the fingerprint is a
+shortcut, never the only key.
+
+```sh
+hosts/install.sh            # build the host and register it, then restart the browser
+hosts/install.sh uninstall  # remove the registration
+```
+
+Then turn it on in the manager. You are asked for the master password once, and
+that is not a formality: the vault key lives in a non-extractable `CryptoKey`
+once unlocked, so a second wrapping genuinely cannot be made without
+re-deriving it.
+
+**How it fits together.** The vault key is wrapped twice, under two independent
+secrets — the master password, and a random 32-byte device secret the operating
+system holds behind a fingerprint. Neither wrapping can produce the other.
+Turning it off drops the second wrapping locally: nothing is re-encrypted, no
+other machine is affected, and the server never knew about it.
+
+The native host is the least interesting component in the system, on purpose.
+It never sees the master password, the vault key, or a record — it is handed 32
+random bytes it cannot interpret and asked for them back later. See
+`hosts/PROTOCOL.md` for the wire format and the rules a host has to follow.
+
+| | |
+|---|---|
+| macOS | Touch ID, via `LocalAuthentication` and a Keychain item with `.biometryCurrentSet` — so changing your enrolled fingerprints destroys the secret |
+| Windows | not yet |
+| Linux | deliberately not. There is no equivalent to put in front of the secret: the desktop keyrings unlock with your login password, which would make this a way into the vault *without* a password rather than a stronger one |
+
+The macOS host uses the file-based keychain rather than the data-protection
+one. The latter requires a `keychain-access-groups` entitlement backed by a real
+team identifier, which a locally built command-line tool cannot have; it fails
+with `errSecMissingEntitlement`. The file-based keychain honours the same
+`SecAccessControl`, which is the part that matters.
+
+`hosts/install.sh` ad-hoc signs the binary (`codesign --sign -`). That is not
+for distribution — it gives macOS a stable identity to attribute the Touch ID
+prompt to, so a rebuild does not invalidate the stored secret.

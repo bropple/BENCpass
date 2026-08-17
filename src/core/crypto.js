@@ -41,7 +41,7 @@ export const DEFAULT_KDF = Object.freeze({
 });
 
 const SALT_LEN = 16;
-const KEY_LEN = 32; // AES-256
+export const KEY_LEN = 32; // AES-256
 const NONCE_LEN = 12; // GCM standard; anything else costs an extra GHASH pass
 
 export function randomBytes(n) {

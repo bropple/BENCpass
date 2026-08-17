@@ -19,6 +19,8 @@ import {
   addressSummary,
 } from '../core/address.js';
 import { generate } from '../core/generate.js';
+import { randomBytes } from '../core/crypto.js';
+import * as native from './native.js';
 import { SyncClient, syncOnce, loadSyncState, dumpSyncState } from '../core/sync.js';
 import { MSG, publicCandidate, publicAddress, isMessage, asString, asId } from './protocol.js';
 
@@ -30,7 +32,14 @@ const store = new WebExtStorage();
 const settingsStore = { key: 'bencpass.settings' };
 
 let vault = null;
-let settings = { endpoint: '', deviceId: '', deviceKey: '', autolockMs: AUTOLOCK_MS, allowInsecure: false };
+let settings = {
+  endpoint: '',
+  deviceId: '',
+  deviceKey: '',
+  autolockMs: AUTOLOCK_MS,
+  allowInsecure: false,
+  biometricId: '', // which secret in the OS keystore is this vault's
+};
 let syncState = loadSyncState(null);
 let autolockTimer = null;
 let autolockAt = 0; // when the vault will shut, for anything that wants to show it
@@ -246,6 +255,14 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleSync();
     case MSG.NOTICE_STATE:
       return handleNoticeState(msg, sender);
+    case MSG.BIO_STATE:
+      return handleBioState();
+    case MSG.BIO_ENROL:
+      return handleBioEnrol(msg);
+    case MSG.BIO_UNLOCK:
+      return handleBioUnlock();
+    case MSG.BIO_FORGET:
+      return handleBioForget();
     case MSG.SAVE:
       return handleSave(msg, sender);
     case MSG.DISCARD:
@@ -817,6 +834,118 @@ function captureAddress(msg, origin) {
  */
 const suggestAddressName = (a) =>
   asString(a['address-level2'] || a['address-line1'] || '', 60).trim();
+
+// ---- biometric unlock -------------------------------------------------------
+//
+// Two independent wrappings of one vault key: the master password, and a random
+// device secret the operating system holds behind a fingerprint. See the
+// second-wrapping section of core/vault.js for the crypto and hosts/PROTOCOL.md
+// for what the native host is and is not trusted with.
+//
+// Every one of these handlers has to survive there being no host at all, which
+// is the normal case. Nothing here changes how the password path behaves.
+
+/** Which secret in the keystore belongs to this vault on this machine. */
+function biometricId() {
+  if (!settings.biometricId) {
+    settings.biometricId = newSessionId();
+  }
+  return settings.biometricId;
+}
+
+async function handleBioState() {
+  const enrolled = Boolean(vault?.hasBiometric);
+  const hello = await native.capabilities();
+
+  return {
+    // Is there a host, and can it do anything today? A Mac with Touch ID
+    // switched off answers 'none' and is treated as having no host at all —
+    // offering a button that cannot work is worse than offering nothing.
+    available: Boolean(hello.ok) && hello.biometrics !== 'none',
+    biometrics: hello.ok ? hello.biometrics : 'none',
+    platform: hello.ok ? hello.platform : '',
+    reason: hello.ok ? '' : hello.reason,
+    enrolled,
+  };
+}
+
+/**
+ * Wrap the vault key for the keystore.
+ *
+ * The master password is asked for again here rather than reusing the unlocked
+ * session, and that is the point: the vault key lives in a non-extractable
+ * CryptoKey, so a second wrapping genuinely cannot be made without re-deriving
+ * it. Granting a fingerprint the same power over the vault should cost the
+ * password once.
+ */
+async function handleBioEnrol(msg) {
+  if (!vault) return { ok: false, reason: 'no-vault' };
+
+  const hello = await native.capabilities();
+  if (!hello.ok || hello.biometrics === 'none') {
+    return { ok: false, reason: hello.ok ? 'unavailable' : hello.reason };
+  }
+
+  const password = asString(msg.password, 1024);
+  if (!password) return { ok: false, reason: 'no-password' };
+
+  const secret = randomBytes(32);
+  try {
+    await vault.enrolBiometric(password, secret);
+  } catch (err) {
+    // Wrong password, or a damaged vault. Same answer either way, for the same
+    // reason the gate gives one — see unwrapVaultKey.
+    return { ok: false, reason: err?.code === 'unwrap-failed' ? 'bad-password' : 'error' };
+  }
+
+  const stored = await native.store(biometricId(), secret);
+  if (!stored.ok) {
+    // The wrapping exists but nothing can open it. Undo it rather than leave a
+    // vault claiming a biometric unlock it cannot perform.
+    vault.forgetBiometric();
+    return { ok: false, reason: stored.reason ?? 'error' };
+  }
+
+  await persistVault();
+  await persistSettings();
+  return { ok: true };
+}
+
+async function handleBioUnlock() {
+  if (!vault) return { ok: false, reason: 'no-vault' };
+  if (!vault.locked) return { ok: true };
+  if (!vault.hasBiometric) return { ok: false, reason: 'not-enrolled' };
+
+  const got = await native.retrieve(biometricId(), 'Unlock your BENCpass vault');
+  if (!got.ok) return { ok: false, reason: got.reason ?? 'error' };
+
+  try {
+    await vault.unlockWithBiometricSecret(got.secret);
+  } catch {
+    // The keystore gave back something that does not open this vault. The
+    // honest reading is that the two have drifted apart — a vault restored from
+    // elsewhere, or a secret from a previous enrolment — and the way out is to
+    // enrol again, so the stale wrapping goes.
+    vault.forgetBiometric();
+    await persistVault();
+    return { ok: false, reason: 'stale-secret' };
+  }
+
+  bumpAutolock();
+  paintBadge();
+  broadcastLockState();
+  return { ok: true };
+}
+
+async function handleBioForget() {
+  if (!vault) return { ok: false, reason: 'no-vault' };
+  vault.forgetBiometric();
+  await persistVault();
+  // Best effort: a secret whose wrapping is gone opens nothing, so failing to
+  // remove it from the keystore leaves nothing exposed.
+  await native.forget(biometricId());
+  return { ok: true };
+}
 
 const CAPTURE_NOTICE = 'bencpass-capture';
 

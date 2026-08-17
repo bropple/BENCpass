@@ -344,3 +344,8 @@ select { color: var(--text); font: inherit; }
   .meta { grid-template-columns: 1fr; gap: 0 0; }
   .meta dt { margin-top: 6px; }
 }
+
+/* Biometric unlock. The gate button only exists where a native host is
+   installed and this vault carries the second wrapping; see hosts/PROTOCOL.md. */
+.gate-bio { width: 100%; margin-top: 10px; }
+.foot-bio { display: flex; align-items: center; gap: 8px; }

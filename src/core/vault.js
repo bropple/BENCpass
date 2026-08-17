@@ -7,6 +7,7 @@
 import {
   FORMAT,
   DEFAULT_KDF,
+  KEY_LEN,
   newSalt,
   newVaultKey,
   deriveMasterKey,
@@ -118,6 +119,63 @@ export class Vault {
   lock() {
     this.#key = null;
     this.#plain = new Map();
+  }
+
+  // ---- the second wrapping ---------------------------------------------------
+  //
+  // The vault key is wrapped twice, under two independent secrets: the master
+  // password, and a random 32-byte device secret the operating system's keystore
+  // holds behind a fingerprint. Neither wrapping can produce the other, and
+  // removing one leaves the other untouched — which is what makes "turn Touch ID
+  // off on this laptop" a local act rather than a re-encryption of the vault.
+  //
+  // The host never sees the vault key or the master password. It keeps a random
+  // string it cannot interpret, and hands it back when the OS says the right
+  // person asked. Everything cryptographic stays in here.
+
+  /** Is there a second wrapping on this machine's copy? */
+  get hasBiometric() {
+    return Boolean(this.meta.wraps?.biometric);
+  }
+
+  /**
+   * Add the second wrapping.
+   *
+   * The master password is required and that is not a formality: the vault key
+   * lives in a non-extractable CryptoKey once unlocked, so its bytes cannot be
+   * read back out to wrap them again. They have to be re-derived, which means
+   * proving you know the password — exactly the right price for granting a
+   * fingerprint the same power over the vault.
+   */
+  async enrolBiometric(password, secretBytes) {
+    if (!password) throw new Error('a master password is required');
+    if (secretBytes?.length !== KEY_LEN) {
+      throw new Error(`device secret must be ${KEY_LEN} bytes`);
+    }
+
+    const { kdf } = this.meta;
+    const masterKey = await deriveMasterKey(password, fromB64(kdf.salt), kdf);
+    const vaultKeyBytes = await unwrapVaultKey(this.meta.wraps.password, masterKey);
+    this.meta.wraps.biometric = await wrapVaultKey(vaultKeyBytes, secretBytes, 'biometric');
+  }
+
+  /** Unlock from the device secret the OS keystore just released. */
+  async unlockWithBiometricSecret(secretBytes) {
+    if (!this.hasBiometric) throw new Error('this vault has no biometric wrapping');
+    const vaultKeyBytes = await unwrapVaultKey(this.meta.wraps.biometric, secretBytes);
+    await this.unlockWithVaultKey(vaultKeyBytes);
+  }
+
+  /**
+   * Drop the second wrapping.
+   *
+   * Local and immediate: the vault key does not change, so every other machine
+   * and the server are unaffected, and nothing has to be re-encrypted. Whoever
+   * calls this is also responsible for telling the host to forget its secret —
+   * though a secret whose wrapping is gone opens nothing.
+   */
+  forgetBiometric() {
+    this.meta.wraps.biometric = null;
   }
 
   #require() {

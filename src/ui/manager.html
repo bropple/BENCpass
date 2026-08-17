@@ -40,6 +40,11 @@
       <button type="submit" class="btn btn-primary" id="gate-go">Unlock</button>
     </form>
 
+    <!-- Only when a native host is installed AND this vault has the second
+         wrapping AND the machine can actually take a fingerprint right now.
+         Offering it otherwise is a button that fails. -->
+    <button type="button" class="btn gate-bio" id="gate-bio" hidden>Unlock with Touch ID</button>
+
     <p class="gate-note" id="gate-note"></p>
   </div>
 </div>
@@ -186,6 +191,14 @@
 
   <footer class="foot">
     <span id="foot-count"></span>
+    <span class="bar-spacer"></span>
+    <!-- Biometric unlock is a per-machine setting, so it lives where you can
+         see which machine you are on rather than in a settings page shared
+         between them. Hidden entirely where no host is installed. -->
+    <span class="foot-bio" id="foot-bio" hidden>
+      <span id="foot-bio-text"></span>
+      <button type="button" class="btn btn-sm" id="bio-btn"></button>
+    </span>
     <span class="bar-spacer"></span>
     <span id="foot-lock"></span>
   </footer>
