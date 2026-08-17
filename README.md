@@ -47,8 +47,9 @@ test/         Node tests, including integration tests against the real server
 npm install && npm test     # 118 tests; the sync ones build and run the Go server
 cd server && go test ./...  # 15 tests
 
-tools/run-extension.sh      # load into a scratch Zen profile, open the test page
-tools\run-extension.ps1     # the same, on Windows
+tools/run-extension.sh      # load into a test profile, open the form-shapes page
+tools/run-extension.sh fresh   # ...discarding the previous test vault
+tools\run-extension.ps1     # the same on Windows; -Fresh to discard
 npx web-ext lint --source-dir=src --self-hosted
 npx web-ext build --source-dir=src --artifacts-dir=dist/ext
 
@@ -59,6 +60,12 @@ cd server && go run . -dir ./data   # prints a bootstrap enrolment code
 
 `npm test` skips the integration tests if no Go toolchain is present, and says
 so rather than passing quietly.
+
+The test browser uses a dedicated profile at `.bencpass-profile/`, kept between
+runs so the vault survives — recreating it every launch makes autofill
+essentially untestable. Updates are disabled inside it, because a second
+instance would otherwise stage an update to the shared installation and the
+browser you actually use would then demand a restart.
 
 ### `npm install` reports high-severity vulnerabilities
 

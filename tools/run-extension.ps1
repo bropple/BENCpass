@@ -8,9 +8,14 @@
   of the shell script survives the trip: `trap`, `command -v`, backgrounding with
   `&` and the browser's location are all different here.
 
-  A temporary profile, deliberately: the extension is installed unsigned and
-  temporarily, so nothing touches the browser you actually use, and the vault
-  created during testing is thrown away with the profile.
+  A dedicated profile under .bencpass-profile\, kept between runs so the vault
+  survives; -Fresh wipes it. The extension is still installed unsigned and
+  temporarily, so nothing touches the browser you actually use.
+
+  Updates are disabled in that profile. A second browser instance would
+  otherwise check for, stage and apply an update to the shared installation,
+  and the browser you actually use then notices its own files changing
+  underneath it and demands a restart.
 
   The test page is served over http://127.0.0.1, which BENCpass treats as a
   private host — so filling is allowed without a certificate and the
@@ -22,6 +27,9 @@
 
 .PARAMETER Port
   Port for the local static server. Default 8731.
+
+.PARAMETER Fresh
+  Delete the test profile before starting, discarding the vault in it.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools\run-extension.ps1
@@ -37,7 +45,8 @@
 [CmdletBinding()]
 param(
     [string] $Browser = $env:BENCPASS_BROWSER,
-    [int]    $Port = 8731
+    [int]    $Port = 8731,
+    [switch] $Fresh
 )
 
 $ErrorActionPreference = 'Stop'
@@ -126,6 +135,32 @@ elseif (-not (Test-Path $Browser)) {
 $url = "http://127.0.0.1:$Port/tools/testpage/index.html"
 $server = $null
 
+$profileDir = Join-Path -Path $root -ChildPath '.bencpass-profile'
+if ($Fresh -and (Test-Path $profileDir)) {
+    Remove-Item -Recurse -Force $profileDir
+    Write-Host "wiped $profileDir"
+}
+
+# Updates off, and thoroughly -- this is what stops the running browser being
+# nagged to restart. The rest silence first-run behaviour a test profile has no
+# use for.
+$prefs = @(
+    'app.update.auto=false',
+    'app.update.enabled=false',
+    'app.update.checkInstallTime=false',
+    'app.update.staging.enabled=false',
+    'app.update.service.enabled=false',
+    'app.update.background.scheduling.enabled=false',
+    'app.update.notifyDuringDownload=false',
+    'extensions.update.enabled=false',
+    'extensions.update.autoUpdateDefault=false',
+    'browser.shell.checkDefaultBrowser=false',
+    'browser.startup.homepage_override.mstone=ignore',
+    'browser.aboutwelcome.enabled=false',
+    'datareporting.policy.dataSubmissionEnabled=false',
+    'toolkit.telemetry.reportingpolicy.firstRun=false'
+)
+
 try {
     # Hidden rather than minimised: the static server has no output worth
     # watching, and a stray console window outliving a Ctrl-C is a nuisance.
@@ -150,13 +185,19 @@ try {
 
     # Blocks until the browser is closed. Argument array rather than one string,
     # so a path with spaces — which is the normal case here — survives.
-    & $npx @(
+    $webExtArgs = @(
         'web-ext', 'run',
         "--source-dir=$srcDir",
         "--firefox=$Browser",
+        "--firefox-profile=$profileDir",
+        '--profile-create-if-missing',
+        '--keep-profile-changes',
         '--start-url', $url,
         '--browser-console'
     )
+    foreach ($pref in $prefs) { $webExtArgs += @('--pref', $pref) }
+
+    & $npx @webExtArgs
 }
 finally {
     if ($server -and -not $server.HasExited) {

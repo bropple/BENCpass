@@ -19,3 +19,6 @@ dist/
 # stray go build output
 server/server
 server/data/
+
+# test browser profile, kept between runs
+.bencpass-profile/
