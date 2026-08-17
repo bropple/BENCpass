@@ -64,6 +64,30 @@ const SAMPLES = [
     timesUsed: 8,
   },
   {
+    type: 'address',
+    title: 'Home',
+    name: 'Ben Ropple',
+    'address-line1': '1 Pentagon Way',
+    'address-level2': 'Springfield',
+    'address-level1': 'Berkshire',
+    'postal-code': 'RG1 4QX',
+    country: 'GB',
+    tel: '+44 118 496 0000',
+    email: 'ben@ropple.net',
+    created: now - 300 * DAY,
+  },
+  {
+    type: 'address',
+    title: 'Work',
+    name: 'Ben Ropple',
+    organization: 'BENCO Holdings',
+    'address-line1': '4 Phosphor Street',
+    'address-level2': 'Reading',
+    'postal-code': 'RG1 1AA',
+    country: 'GB',
+    created: now - 120 * DAY,
+  },
+  {
     title: 'Something imported with a bad clock',
     username: 'legacy',
     password: 'imported-value',
@@ -103,6 +127,13 @@ if (q.has('open') || q.has('wrong')) {
       $('gate-pw').value = q.has('wrong') ? 'not the master password' : PASSWORD;
       $('gate-form').requestSubmit();
     },
+  );
+}
+
+if (q.has('section')) {
+  when(
+    () => document.querySelector(`.seg-btn[data-section="${q.get('section')}"]`),
+    () => document.querySelector(`.seg-btn[data-section="${q.get('section')}"]`).click(),
   );
 }
 

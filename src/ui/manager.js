@@ -78,8 +78,30 @@ async function makeVaultHost() {
   };
 }
 
+/**
+ * The address fields, in the order a person fills a form.
+ *
+ * Keys are the WHATWG autofill tokens, the same ones the record stores and the
+ * fill code looks up — so this list is the only place the field set is written
+ * down for the UI, and it cannot drift from the model.
+ */
+const ADDRESS_FIELDS = [
+  ['name', 'Full name'],
+  ['organization', 'Company'],
+  ['address-line1', 'Address'],
+  ['address-line2', 'Address line 2'],
+  ['address-level2', 'City'],
+  ['address-level1', 'State / Province'],
+  ['postal-code', 'Postcode'],
+  ['country', 'Country (ISO code)'],
+  ['tel', 'Phone'],
+  ['email', 'Email'],
+];
+
 const state = {
   vault: null,
+  section: 'login', // which of the two lists is on screen
+  editingType: 'login',
   selected: null,
   editing: null, // null | 'new' | <id>
   revealed: false, // the detail view's password
@@ -262,19 +284,23 @@ const persist = () => vaultHost.persist();
 function render() {
   renderList();
   renderDetail();
-  const n = state.vault.list().length;
-  $('foot-count').textContent = `${n} ${n === 1 ? 'entry' : 'entries'}`;
+  const n = state.vault.list(state.section).length;
+  const noun = state.section === 'address' ? 'address' : 'entry';
+  const plural = state.section === 'address' ? 'addresses' : 'entries';
+  $('foot-count').textContent = `${n} ${n === 1 ? noun : plural}`;
 }
 
 function renderList() {
   const items = state.vault
-    .search($('search').value)
+    .search($('search').value, state.section)
     .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
 
   $('list-empty').hidden = items.length > 0;
   $('list-empty').textContent = $('search').value.trim()
     ? 'Nothing matches.'
-    : 'No entries.';
+    : state.section === 'address'
+      ? 'No addresses.'
+      : 'No entries.';
 
   $('list').replaceChildren(
     ...items.map((r) => {
@@ -288,7 +314,10 @@ function renderList() {
 
       const sub = document.createElement('span');
       sub.className = 'li-sub';
-      sub.textContent = r.username || host(r.urls?.[0]) || '—';
+      sub.textContent =
+        r.type === 'address'
+          ? [r['address-line1'], r['address-level2']].filter(Boolean).join(', ') || '—'
+          : r.username || host(r.urls?.[0]) || '—';
 
       li.append(title, sub);
       li.addEventListener('click', () => select(r.id));
@@ -321,6 +350,17 @@ function renderDetail() {
   if (editing || !r) return;
 
   $('d-title').textContent = r.title || '(untitled)';
+
+  const isAddress = r.type === 'address';
+  $('d-login').hidden = isAddress;
+  $('d-address').hidden = !isAddress;
+
+  if (isAddress) {
+    renderAddressDetail(r);
+    renderMeta(r);
+    return;
+  }
+
   $('d-username').textContent = r.username || '—';
   $('d-password').textContent = state.revealed ? r.password : '•'.repeat(12);
   $('reveal-btn').textContent = state.revealed ? 'Hide' : 'Reveal';
@@ -331,6 +371,46 @@ function renderDetail() {
   $('d-notes').textContent = r.notes ?? '';
 
   renderMeta(r);
+}
+
+function renderAddressDetail(r) {
+  const box = $('d-address');
+  box.replaceChildren();
+
+  for (const [key, label] of ADDRESS_FIELDS) {
+    if (!r[key]) continue;
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const name = document.createElement('span');
+    name.className = 'label';
+    name.textContent = label;
+
+    const value = document.createElement('span');
+    value.className = 'value';
+    value.textContent = r[key];
+
+    const copy = document.createElement('button');
+    copy.className = 'btn btn-sm';
+    copy.textContent = 'Copy';
+    copy.addEventListener('click', () => copyText(r[key], label));
+
+    row.append(name, value, copy);
+    box.append(row);
+  }
+
+  if (r.notes) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const name = document.createElement('span');
+    name.className = 'label';
+    name.textContent = 'Notes';
+    const value = document.createElement('span');
+    value.className = 'value wrap';
+    value.textContent = r.notes;
+    row.append(name, value);
+    box.append(row);
+  }
 }
 
 function renderMeta(r) {
@@ -347,6 +427,17 @@ function renderMeta(r) {
   };
 
   add('Created', date(r.created));
+
+  if (r.type === 'address') {
+    add('Updated', date(r.updated));
+    if (r.claimedTime) {
+      const note = document.createElement('span');
+      note.className = 'age-warn';
+      note.textContent = `source claimed ${date(r.claimedTime)}`;
+      add('Imported', note);
+    }
+    return;
+  }
 
   // The whole reason `passwordChanged` is kept separate from `updated`: only
   // this can answer the question, and only if renaming an entry never touched it.
@@ -390,6 +481,19 @@ function host(url) {
 
 $('search').addEventListener('input', renderList);
 
+for (const btn of document.querySelectorAll('.seg-btn')) {
+  btn.addEventListener('click', () => {
+    if (state.section === btn.dataset.section) return;
+    state.section = btn.dataset.section;
+    state.selected = null;
+    state.editing = null;
+    for (const b of document.querySelectorAll('.seg-btn')) {
+      b.setAttribute('aria-selected', String(b === btn));
+    }
+    render();
+  });
+}
+
 // ---- copying ---------------------------------------------------------------
 
 for (const btn of document.querySelectorAll('[data-copy]')) {
@@ -399,19 +503,24 @@ for (const btn of document.querySelectorAll('[data-copy]')) {
 async function copy(field) {
   const r = state.vault.get(state.selected);
   if (!r?.[field]) return;
+  await copyText(r[field], field, field === 'password');
+}
 
+/** Shared by the login rows and the address rows. */
+async function copyText(text, label, isSecret = false) {
+  if (!text) return;
   try {
-    await navigator.clipboard.writeText(r[field]);
+    await navigator.clipboard.writeText(text);
   } catch {
     say('Clipboard refused.');
     return;
   }
 
-  if (field === 'password') {
+  if (isSecret && state.selected) {
     state.vault.touchUsed(state.selected).then(persist).then(render);
   }
 
-  say(`${field} copied — clears in ${CLIPBOARD_MS / 1000}s`);
+  say(`${label} copied — clears in ${CLIPBOARD_MS / 1000}s`);
 
   clearTimeout(clipboardTimer);
   clipboardTimer = setTimeout(async () => {
@@ -474,13 +583,31 @@ $('cancel-btn').addEventListener('click', () => { state.editing = null; render()
 function openEditor(which) {
   state.editing = which;
   const r = which === 'new' ? null : state.vault.get(which);
+  const type = r?.type ?? state.section;
+  state.editingType = type;
 
-  $('edit-heading').textContent = r ? 'Edit entry' : 'New entry';
+  const isAddress = type === 'address';
+  $('e-login').hidden = isAddress;
+  $('e-address').hidden = !isAddress;
+
+  $('edit-heading').textContent = r
+    ? isAddress
+      ? 'Edit address'
+      : 'Edit entry'
+    : isAddress
+      ? 'New address'
+      : 'New entry';
+
   $('e-title').value = r?.title ?? '';
-  $('e-username').value = r?.username ?? '';
-  $('e-password').value = r?.password ?? '';
-  $('e-urls').value = (r?.urls ?? []).join('\n');
   $('e-notes').value = r?.notes ?? '';
+
+  if (isAddress) {
+    buildAddressEditor(r);
+  } else {
+    $('e-username').value = r?.username ?? '';
+    $('e-password').value = r?.password ?? '';
+    $('e-urls').value = (r?.urls ?? []).join('\n');
+  }
 
   // Opening the editor never puts an existing password on screen by itself.
   clearTimeout(revealTimer);
@@ -491,15 +618,54 @@ function openEditor(which) {
   $('e-title').focus();
 }
 
+/** The address inputs are generated from ADDRESS_FIELDS rather than written out. */
+function buildAddressEditor(record) {
+  const box = $('e-address');
+  box.replaceChildren();
+
+  for (const [key, label] of ADDRESS_FIELDS) {
+    const wrap = document.createElement('label');
+    wrap.className = 'field';
+
+    const name = document.createElement('span');
+    name.className = 'label';
+    name.textContent = label;
+
+    const input = document.createElement('input');
+    input.type = key === 'email' ? 'email' : key === 'tel' ? 'tel' : 'text';
+    input.dataset.addressKey = key;
+    input.value = record?.[key] ?? '';
+    input.autocomplete = 'off';
+
+    wrap.append(name, input);
+    box.append(wrap);
+  }
+}
+
 $('edit-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const fields = {
-    title: $('e-title').value.trim(),
-    username: $('e-username').value,
-    password: $('e-password').value,
-    urls: $('e-urls').value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
-    notes: $('e-notes').value,
-  };
+
+  const fields =
+    state.editingType === 'address'
+      ? {
+          type: 'address',
+          title: $('e-title').value.trim(),
+          notes: $('e-notes').value,
+          ...Object.fromEntries(
+            [...$('e-address').querySelectorAll('[data-address-key]')].map((i) => [
+              i.dataset.addressKey,
+              i.value.trim(),
+            ]),
+          ),
+        }
+      : {
+          type: 'login',
+          title: $('e-title').value.trim(),
+          username: $('e-username').value,
+          password: $('e-password').value,
+          urls: $('e-urls').value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
+          notes: $('e-notes').value,
+        };
 
   if (state.editing === 'new') {
     state.selected = await state.vault.add(fields);

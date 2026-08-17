@@ -56,6 +56,13 @@
     </svg>
     <span class="bar-mark">BENCPASS</span>
 
+    <!-- Logins and addresses are different kinds of thing that happen to share
+         a vault. Mixing them in one list makes both harder to scan. -->
+    <div class="seg" id="sections" role="tablist">
+      <button class="seg-btn" data-section="login" role="tab" aria-selected="true">Logins</button>
+      <button class="seg-btn" data-section="address" role="tab" aria-selected="false">Addresses</button>
+    </div>
+
     <input type="search" id="search" class="search" placeholder="Search" autocomplete="off">
 
     <span class="bar-spacer"></span>
@@ -76,6 +83,11 @@
       <article class="detail" id="detail-view" hidden>
         <h2 class="detail-title" id="d-title"></h2>
 
+        <!-- Address rows are built in JS from the record's own keys, so the
+             field list lives in one place rather than two. -->
+        <div id="d-address" hidden></div>
+
+        <div id="d-login">
         <div class="row">
           <span class="label">Username</span>
           <span class="value" id="d-username"></span>
@@ -98,6 +110,7 @@
           <span class="label">Notes</span>
           <span class="value wrap" id="d-notes"></span>
         </div>
+        </div>
 
         <hr class="rule">
 
@@ -118,6 +131,9 @@
           <input type="text" id="e-title" required>
         </label>
 
+        <div id="e-address" hidden></div>
+
+        <div id="e-login">
         <label class="field">
           <span class="label">Username</span>
           <input type="text" id="e-username" autocomplete="off">
@@ -153,6 +169,7 @@
           <span class="label">URLs</span>
           <input type="text" id="e-urls" placeholder="one per line, or comma separated">
         </label>
+        </div>
 
         <label class="field">
           <span class="label">Notes</span>
