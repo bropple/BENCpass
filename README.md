@@ -54,7 +54,7 @@ a stray page ends up inside a packaged extension.
 ## Running things
 
 ```sh
-npm install && npm test     # 183 tests; the sync ones build and run the Go server
+npm install && npm test     # 187 tests; the sync ones build and run the Go server
 cd server && go test ./...  # 15 tests
 
 tools/selftest.sh           # drive the extension in a real browser, unattended

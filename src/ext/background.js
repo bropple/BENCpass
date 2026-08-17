@@ -47,6 +47,8 @@ let settings = {
   autolockMs: AUTOLOCK_MS,
   allowInsecure: false,
   biometricId: '', // which secret in the OS keystore is this vault's
+  syncPreferred: '', // the server address that answered last
+  syncPreferredAt: 0, // and when, so the preference can go stale
 };
 let syncState = loadSyncState(null);
 let autolockTimer = null;
@@ -1229,14 +1231,32 @@ async function handleSearch(msg, sender) {
 
 // ---- sync ------------------------------------------------------------------
 
+/**
+ * How long a working address stays the one tried first.
+ *
+ * The preference has to expire, or a laptop that synced once over Tailscale
+ * would keep using it after coming home — correct, but slower, and it would
+ * never notice the LAN had come back. It also has to last longer than the sync
+ * interval, or it expires before it is ever used and nothing is remembered at
+ * all. Fifteen minutes against a five-minute interval: two syncs go straight to
+ * the address that works, the third re-checks.
+ */
+const PREFERRED_TTL_MS = 15 * 60 * 1000;
+
 function client() {
   if (!settings.endpoint || !settings.deviceId || !settings.deviceKey) return null;
+
+  const fresh = Date.now() - (settings.syncPreferredAt ?? 0) < PREFERRED_TTL_MS;
   return new SyncClient({
-    // Both routes to the one server, in the order to try them. The client
-    // remembers which answered, so the usual case is a single request.
+    // Both routes to the one server, in the order to try them.
     endpoints: [settings.endpoint, settings.fallbackEndpoint],
     deviceId: settings.deviceId,
     key: Uint8Array.from(atob(settings.deviceKey), (c) => c.charCodeAt(0)),
+    // Carried across syncs, not just within one. Without this every sync
+    // reopened with a connection to a LAN address that is not there when you
+    // are out, and waited out the TCP timeout before trying the route that
+    // works — every five minutes, all day.
+    preferred: fresh ? settings.syncPreferred : '',
   });
 }
 
@@ -1247,6 +1267,8 @@ async function handleSync() {
     const result = await syncOnce(vault, c, syncState);
     lastSyncAt = Date.now();
     lastSyncVia = c.endpoint;
+    settings.syncPreferred = c.endpoint;
+    settings.syncPreferredAt = lastSyncAt;
     await persistVault();
     await persistSettings();
     return { ok: true, ...result, conflicts: result.conflicts.length };

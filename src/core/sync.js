@@ -59,16 +59,31 @@ export class SyncClient {
    * server. Two different servers here would be two different vaults taking
    * turns, and the merge would treat every switch as an enormous conflict.
    */
-  constructor({ endpoint, endpoints, deviceId, key, fetch: f = globalThis.fetch }) {
+  constructor({
+    endpoint,
+    endpoints,
+    deviceId,
+    key,
+    fetch: f = globalThis.fetch,
+    preferred = '',
+    probeTimeoutMs = 4000,
+  }) {
     const strip = (e) => String(e).replace(/\/+$/, '');
     this.endpoints = (endpoints ?? [endpoint]).filter(Boolean).map(strip);
     if (!this.endpoints.length) throw new SyncError('no endpoint configured', 'config');
     this.deviceId = deviceId;
     this.key = key;
     this.fetch = f;
-    // Which address answered last. Tried first next time, so the common case
-    // is one request to one address rather than a failure and a retry.
-    this.preferred = 0;
+    this.probeTimeoutMs = probeTimeoutMs;
+
+    // Which address answered last. Tried first, so the common case is one
+    // request to one address rather than a failure and a retry.
+    //
+    // Seeded by name rather than by index, because the caller persists it
+    // across sessions and the list can be edited in between — an index would
+    // silently come to mean the other server.
+    const at = this.endpoints.indexOf(strip(preferred ?? ''));
+    this.preferred = at === -1 ? 0 : at;
   }
 
   /** The address currently believed to work. */
@@ -91,9 +106,22 @@ export class SyncClient {
     ];
     const failures = [];
 
-    for (const base of order) {
+    for (const [i, base] of order.entries()) {
+      const last = i === order.length - 1;
       try {
-        const resp = await this.fetch(base + path, init);
+        // Every attempt but the last is time-boxed. A LAN address on a foreign
+        // network does not refuse — there is nothing there to refuse, so the
+        // packets go nowhere and the connection waits out the operating
+        // system's TCP timeout, which is tens of seconds. That is the whole
+        // cost of being away from home, paid on every sync.
+        //
+        // The last attempt gets as long as it needs: by then there is nothing
+        // to fall back to, and a real sync of a large vault over a slow link is
+        // not a failure.
+        const resp = await this.fetch(base + path, {
+          ...init,
+          signal: last ? init?.signal : AbortSignal.timeout(this.probeTimeoutMs),
+        });
         this.preferred = this.endpoints.indexOf(base);
         return resp;
       } catch (err) {

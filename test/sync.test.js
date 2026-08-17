@@ -317,11 +317,19 @@ test('pointing a vault at a server holding a different one says so', { ...skip }
 
 const stubFetch = (behaviour) => {
   const seen = [];
-  const f = async (url, init) => {
+  const f = (url, init) => {
     seen.push(url);
     const outcome = behaviour(url);
-    if (outcome instanceof Error) throw outcome;
-    return outcome;
+    if (outcome instanceof Error) return Promise.reject(outcome);
+    // A promise that never settles stands in for an address that blackholes —
+    // the case the probe timeout exists for. Honouring the signal is what makes
+    // that testable rather than a hang.
+    if (outcome === 'hang') {
+      return new Promise((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('TimeoutError')));
+      });
+    }
+    return Promise.resolve(outcome);
   };
   f.seen = seen;
   return f;
@@ -417,4 +425,68 @@ test('one address still works, and a trailing slash is not a second server', asy
 
 test('a client with no address at all refuses to be built', () => {
   assert.throws(() => new SyncClient({ endpoints: ['', null], deviceId: 'd', key: new Uint8Array(32) }));
+});
+
+test('an address that hangs is abandoned rather than waited out', async () => {
+  // A LAN address on a foreign network does not refuse; there is nothing there
+  // to refuse. Without a bound on the attempt this is a TCP timeout every sync.
+  const fetch = stubFetch((url) => (url.startsWith('http://lan') ? 'hang' : okResponse({})));
+  const client = new SyncClient({
+    endpoints: ['http://lan:8788', 'https://tail.ts.net'],
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+    probeTimeoutMs: 20,
+  });
+
+  const started = Date.now();
+  const { status } = await client.request('GET', '/v1/changes?since=0');
+  assert.equal(status, 200);
+  assert.ok(Date.now() - started < 1000, 'should give up on the first address quickly');
+  assert.equal(client.endpoint, 'https://tail.ts.net');
+});
+
+test('the last address is not time-boxed, having nothing to fall back to', async () => {
+  // A large vault over a slow link is a slow sync, not a failure.
+  const fetch = stubFetch(() => new Promise((r) => setTimeout(() => r(okResponse({})), 60)));
+  const client = new SyncClient({
+    endpoint: 'https://only.example',
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+    probeTimeoutMs: 5,
+  });
+  const { status } = await client.request('GET', '/v1/changes?since=0');
+  assert.equal(status, 200);
+});
+
+test('a remembered address is tried first, and is matched by name not position', async () => {
+  const fetch = stubFetch(() => okResponse({}));
+  const client = new SyncClient({
+    endpoints: ['http://lan:8788', 'https://tail.ts.net'],
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+    // As it would come back out of storage — with a trailing slash, because a
+    // person typed it that way once.
+    preferred: 'https://tail.ts.net/',
+  });
+  await client.request('GET', '/v1/changes?since=0');
+  assert.equal(fetch.seen.length, 1);
+  assert.ok(fetch.seen[0].startsWith('https://tail.ts.net'));
+});
+
+test('a remembered address that is no longer configured is ignored', async () => {
+  // The list can be edited between sessions. A stale preference must not pin
+  // anything, and must not throw.
+  const fetch = stubFetch(() => okResponse({}));
+  const client = new SyncClient({
+    endpoints: ['http://lan:8788'],
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+    preferred: 'https://gone.example',
+  });
+  await client.request('GET', '/v1/changes?since=0');
+  assert.ok(fetch.seen[0].startsWith('http://lan:8788'));
 });
