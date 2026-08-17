@@ -96,19 +96,25 @@ moves fast for no benefit here. **Open a new terminal afterwards**: winget
 updates PATH but the shell you ran it from will not see the change, which looks
 exactly like the install having failed.
 
-Then use the batch wrapper, which sidesteps the execution policy entirely:
+Then:
 
 ```
-tools\run-extension.cmd
-tools\run-extension.cmd -Browser "C:\Path\To\zen.exe"
+.\tools\run-extension.ps1
+.\tools\run-extension.ps1 -Browser "C:\Path\To\zen.exe"
 ```
 
-A `.cmd` file is not governed by the execution policy, and the `-ExecutionPolicy
-Bypass` it passes applies only to the child process — nothing on the machine is
-reconfigured.
+On a default `RemoteSigned` policy that is all it takes, provided the files were
+cloned rather than extracted from a ZIP — see below.
 
-If PowerShell still refuses, find out which scope is responsible before changing
-anything:
+`tools\run-extension.cmd` is the same thing behind a batch wrapper. It is not
+the recommended path and adds nothing on a working setup; it exists because a
+`.cmd` is not governed by the execution policy at all, so it still runs on a
+machine where the `.ps1` will not. It also prefers `pwsh` when both PowerShells
+are installed, and survives a double-click from Explorer, where a `.ps1` opens
+in Notepad instead.
+
+If PowerShell refuses the `.ps1`, find out which scope is responsible before
+changing anything:
 
 ```
 Get-ExecutionPolicy -List
