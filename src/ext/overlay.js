@@ -106,6 +106,20 @@ async function render() {
     return;
   }
 
+  if (kind === 'signup') {
+    $('head').textContent = 'New password';
+    list.append(
+      row({
+        title: 'Generate a password',
+        sub: '20 characters, saved when you submit',
+        className: 'gen',
+        onPick: () => browser.runtime.sendMessage({ type: MSG.GENERATE, sessionId }),
+      }),
+    );
+    list.querySelector('button')?.focus();
+    return;
+  }
+
   if (!candidates.length) {
     const p = document.createElement('p');
     p.className = 'empty';

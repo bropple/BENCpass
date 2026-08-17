@@ -45,6 +45,11 @@ async function boot() {
     syncState = loadSyncState(s.syncState);
   }
   paintBadge();
+
+  // Firefox opens the sidebar by itself when an extension with a sidebar_action
+  // is installed, which on every reload means a panel nobody asked for sitting
+  // in front of the page. Closing needs no user gesture, unlike opening.
+  browser.sidebarAction?.close?.().catch?.(() => {});
 }
 
 const persistVault = () => store.write(vault.toJSON());
@@ -265,6 +270,25 @@ async function handleCandidates(msg, sender) {
 
   const wantAddresses = msg.kind === 'address';
 
+  // A new-password box is offered a generated password and nothing else. The
+  // stored pool is deliberately absent: this is the one moment where reuse
+  // costs nothing to avoid, and filling an old password into a "choose a
+  // password" field is how one leaked credential becomes several.
+  if (msg.kind === 'signup') {
+    const sessionId = newSessionId();
+    sessions.set(sessionId, {
+      created: Date.now(),
+      tabId: origin.tabId,
+      frameId: origin.frameId,
+      frameHost: origin.frameHost,
+      pageHost: origin.pageHost,
+      frameProtocol: origin.frameProtocol,
+      kind: 'signup',
+      ids: [],
+    });
+    return { locked: false, sessionId, candidates: [{ id: 'generate' }] };
+  }
+
   // An address has no host to match, but the frame and transport checks are the
   // same ones a credential gets. ARCHITECTURE.md §3 says so; the first cut of
   // this branch exempted them, which would have handed a home address to any
@@ -344,6 +368,7 @@ async function handleSession(msg, sender) {
   if (session.kind === 'locked' || !vault || vault.locked) {
     return { kind: 'locked', candidates: [] };
   }
+  if (session.kind === 'signup') return { kind: 'signup', candidates: [] };
 
   const byId = new Map(vault.list().map((r) => [r.id, r]));
   const records = session.ids.map((id) => byId.get(id)).filter(Boolean);
@@ -634,22 +659,35 @@ const CAPTURE_NOTICE = 'bencpass-capture';
  */
 function announceCapture(host, username, isUpdate) {
   const who = username || 'this login';
-  browser.notifications
-    .create(CAPTURE_NOTICE, {
+
+  if (!browser.notifications?.create) {
+    console.warn('BENCpass: browser.notifications is unavailable; badge only');
+    return;
+  }
+
+  // try/catch as well as .catch(): if the API is missing or the arguments are
+  // rejected, create() throws synchronously and a promise catch never sees it —
+  // which is how this managed to fail without saying anything at all.
+  try {
+    browser.notifications
+      .create(CAPTURE_NOTICE, {
       type: 'basic',
       iconUrl: browser.runtime.getURL('ext/icons/64.png'),
       title: isUpdate ? 'BENCpass — update password?' : 'BENCpass — save login?',
-      message: isUpdate
-        ? `The password for ${who} on ${host} has changed. Open BENCpass to update it.`
-        : `Save ${who} for ${host}? Open BENCpass to keep it.`,
-    })
-    .catch((err) => {
-      // Not swallowed. Windows in particular can refuse these outright — the
-      // OS notification setting for the browser, or Focus Assist — and the
-      // failure is then completely silent, which is indistinguishable from the
-      // code never having run. The badge still stands either way.
-      console.warn('BENCpass: could not show the save notification', err);
-    });
+        message: isUpdate
+          ? `The password for ${who} on ${host} has changed. Open BENCpass to update it.`
+          : `Save ${who} for ${host}? Open BENCpass to keep it.`,
+      })
+      .then(() => console.info('BENCpass: save notification shown'))
+      .catch((err) => {
+        // Windows can refuse these outright — the OS notification setting for
+        // the browser, or Focus Assist — and the refusal is silent, which is
+        // indistinguishable from the code never having run.
+        console.warn('BENCpass: notification refused', err?.message ?? err);
+      });
+  } catch (err) {
+    console.warn('BENCpass: notification threw', err?.message ?? err);
+  }
 }
 
 const clearCaptureNotice = () =>
@@ -751,6 +789,35 @@ browser.tabs.onRemoved.addListener((tabId) => {
   pendingCaptures.delete(tabId);
   unlockReturns.delete(tabId);
   paintBadge();
+});
+
+/**
+ * A generated password from the right-click menu, the way Firefox offers one.
+ *
+ * The `password` context means it only appears on password boxes, so it is not
+ * clutter on every text field. `targetElementId` identifies the exact element
+ * that was clicked; the content script resolves it with menus.getTargetElement,
+ * which avoids guessing from focus — the right-click may not have moved it.
+ */
+browser.menus.create({
+  id: 'bencpass-generate',
+  title: 'Generate a password (BENCpass)',
+  contexts: ['password'],
+});
+
+browser.menus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId !== 'bencpass-generate' || !tab?.id) return;
+  await browser.tabs
+    .sendMessage(
+      tab.id,
+      {
+        type: MSG.FILL_TARGET,
+        targetElementId: info.targetElementId,
+        values: { password: generate({ length: 20 }) },
+      },
+      { frameId: info.frameId ?? 0 },
+    )
+    .catch(() => {});
 });
 
 browser.commands.onCommand.addListener(async (command) => {

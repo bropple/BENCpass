@@ -19,6 +19,7 @@
     CANDIDATES: 'candidates',
     CAPTURE: 'capture',
     FILL: 'fill',
+    FILL_TARGET: 'fill-target',
     DISMISS: 'dismiss',
     LOCKSTATE: 'lockstate',
   };
@@ -171,11 +172,16 @@
     // form left every login below the first one unmarked.
     const targets = new Map(); // element -> which menu it opens
     for (const g of groups) {
-      for (const i of [g.login.username, g.login.password, g.login.newPassword]) {
+      for (const i of [g.login.username, g.login.password]) {
         if (i === null || i === undefined) continue;
         const el = fields[i];
         if (el) targets.set(el, 'login');
       }
+      // A box asking the user to choose a new password gets its own menu, which
+      // offers to generate one and nothing else. Offering the existing pool
+      // there invites reuse at the exact moment a fresh password is free.
+      const fresh = fields[g.login.newPassword];
+      if (fresh) targets.set(fresh, 'signup');
       // Address fields get an anchor too. Without one there was no way to ask
       // for an address at all — the menu existed and nothing ever opened it.
       for (const { index } of g.address ?? []) {
@@ -195,7 +201,14 @@
    * a page can fingerprint the extension by. The shapes carry inline styles
    * because the wrapper's `all: initial` resets `fill`, and fill inherits.
    */
-  function gonMark(isLocked) {
+  /**
+   * P. Gon, drawn rather than loaded.
+   *
+   * Addresses get the darker of his two canonical colours — his own edge tone
+   * rather than his fill — so a login anchor and an address anchor are not the
+   * same mark. Same character, quieter role, no new colour introduced.
+   */
+  function gonMark(isLocked, kind) {
     const svg = document.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('viewBox', '0 0 200 200');
     svg.setAttribute('width', '18');
@@ -203,7 +216,12 @@
 
     const body = document.createElementNS(SVG_NS, 'path');
     body.setAttribute('d', 'M 100,16 L 179.89,74.04 L 149.37,167.96 L 50.63,167.96 L 20.11,74.04 Z');
-    body.setAttribute('style', 'fill:#3d7dbf;stroke:#254d75;stroke-width:8');
+    body.setAttribute(
+      'style',
+      kind === 'address'
+        ? 'fill:#254d75;stroke:#3d7dbf;stroke-width:8'
+        : 'fill:#3d7dbf;stroke:#254d75;stroke-width:8',
+    );
 
     const visor = document.createElementNS(SVG_NS, 'rect');
     visor.setAttribute('x', '53.8');
@@ -233,8 +251,13 @@
     dot.style.cssText =
       'all: initial; position: absolute; width: 18px; height: 18px; cursor: pointer;' +
       'z-index: 2147483646; line-height: 0;';
-    dot.title = 'BENCpass';
-    dot.append(gonMark(locked));
+    dot.title =
+      kind === 'address'
+        ? 'BENCpass — addresses'
+        : kind === 'signup'
+          ? 'BENCpass — generate a password'
+          : 'BENCpass';
+    dot.append(gonMark(locked, kind));
 
     dot.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -445,6 +468,15 @@
       fill(msg.kind, msg.values ?? {});
       closeMenu();
       return Promise.resolve({ ok: true });
+    }
+    if (msg?.type === MSG.FILL_TARGET) {
+      // getTargetElement resolves the element the context menu was opened on,
+      // which is not necessarily the focused one — right-clicking does not
+      // always move focus, and guessing from document.activeElement fills the
+      // wrong box on a form with several.
+      const el = browser.menus?.getTargetElement?.(msg.targetElementId);
+      if (el) setValue(el, msg.values?.password ?? '');
+      return Promise.resolve({ ok: Boolean(el) });
     }
     if (msg?.type === MSG.LOCKSTATE) {
       locked = Boolean(msg.locked);
