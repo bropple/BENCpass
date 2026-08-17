@@ -451,6 +451,11 @@ async function chooseForActiveTab(recordId) {
 async function handleOpenManager(msg, sender) {
   if (!isExtensionPage(sender)) return { ok: false };
 
+  // The overlay reports here because its own console output goes to the page's
+  // devtools, not the extension's inspector.
+  console.info('BENCpass: popup from the overlay ->', asString(msg?.popup, 200));
+  if (msg?.needsTab === false) return { ok: true, via: 'popup' };
+
   const url = browser.runtime.getURL('ui/manager.html');
 
   // Reuse a manager tab if one is already open, rather than stacking them up.

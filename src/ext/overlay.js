@@ -89,7 +89,27 @@ async function render() {
           // to this page.
           //
           // Still not a password box in the page: see the note above.
-          await browser.runtime.sendMessage({ type: MSG.OPEN_MANAGER });
+          // One thing not yet actually measured: whether this document even
+          // has browserAction. sidebarAction turned out to be absent here
+          // rather than merely refusing, and the two were never told apart for
+          // openPopup — it was assumed to be failing for want of a toolbar to
+          // anchor to. If the popup does open, it is the better landing: it
+          // unlocks in place and carries its own Sidebar button.
+          let popup = 'unavailable';
+          try {
+            if (browser.browserAction?.openPopup) {
+              await browser.browserAction.openPopup();
+              popup = 'opened';
+            }
+          } catch (err) {
+            popup = `refused: ${err?.message ?? err}`;
+          }
+
+          await browser.runtime.sendMessage({
+            type: MSG.OPEN_MANAGER,
+            popup,
+            needsTab: popup !== 'opened',
+          });
         },
       }),
     );
