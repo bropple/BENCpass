@@ -32,7 +32,9 @@ func readExactly(_ count: Int) -> Data? {
 
 func readMessage() -> [String: Any]? {
     guard let header = readExactly(4) else { return nil }
-    let length = header.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+    // Little-endian because the protocol says so, not because every Mac happens
+    // to be. Spelling it out costs nothing and cannot be wrong later.
+    let length = UInt32(littleEndian: header.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
     // Firefox will not send more than 1 MB, and neither will BENCpass — the
     // largest message this host ever sees is a base64 32-byte secret. A bound
     // here means a corrupt header cannot ask for an enormous allocation.
@@ -42,8 +44,7 @@ func readMessage() -> [String: Any]? {
 
 func writeMessage(_ object: [String: Any]) {
     guard let body = try? JSONSerialization.data(withJSONObject: object) else { return }
-    var length = UInt32(body.count).littleEndian
-    var out = Data(bytes: &length, count: 4)
+    var out = withUnsafeBytes(of: UInt32(body.count).littleEndian) { Data($0) }
     out.append(body)
     FileHandle.standardOutput.write(out)
 }
@@ -68,40 +69,51 @@ func biometricsAvailable() -> Bool {
     return context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
 }
 
+/// Why a prompt did not produce an authenticated context.
+///
+/// An enum rather than a bare string because `Result`'s failure type has to
+/// conform to `Error`, and `String` does not. The raw values are the `reason`
+/// strings in ../PROTOCOL.md, so the wire format stays readable from here.
+enum AuthFailure: String, Error {
+    case cancelled
+    case unavailable
+}
+
 /// Raise the prompt and return a context already carrying the result.
 ///
 /// Done explicitly rather than leaving the Keychain to prompt on our behalf, so
 /// that the wording comes from BENCpass and matches the rest of its interface.
 /// Passing the authenticated context to `SecItemCopyMatching` below is what
 /// stops it asking a second time.
-func authenticate(_ reason: String) -> Result<LAContext, String> {
+func authenticate(_ reason: String) -> Result<LAContext, AuthFailure> {
     let context = LAContext()
     context.localizedCancelTitle = "Cancel"
 
     var error: NSError?
     guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
-        return .failure("unavailable")
+        return .failure(.unavailable)
     }
 
     // evaluatePolicy is asynchronous and this is a one-shot command-line tool
     // with no run loop, so the semaphore is the whole concurrency design.
     let waiter = DispatchSemaphore(value: 0)
-    var outcome: Result<LAContext, String> = .failure("cancelled")
+    var outcome: Result<LAContext, AuthFailure> = .failure(.cancelled)
 
     context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) {
         success, err in
         if success {
             outcome = .success(context)
-        } else {
-            let code = (err as? LAError)?.code
+        } else if let err = err, let laError = err as? LAError {
             // Everything that is not a real fault is the same thing to the
             // caller: the person did not authenticate.
-            switch code {
+            switch laError.code {
             case .biometryNotAvailable, .biometryNotEnrolled, .biometryLockout:
-                outcome = .failure("unavailable")
+                outcome = .failure(.unavailable)
             default:
-                outcome = .failure("cancelled")
+                outcome = .failure(.cancelled)
             }
+        } else {
+            outcome = .failure(.cancelled)
         }
         waiter.signal()
     }
@@ -163,7 +175,7 @@ func store(id: String, secret: Data) -> [String: Any] {
 func retrieve(id: String, prompt: String) -> [String: Any] {
     switch authenticate(prompt) {
     case .failure(let reason):
-        return fail(reason)
+        return fail(reason.rawValue)
     case .success(let context):
         var get = query(id)
         get[kSecReturnData as String] = true
