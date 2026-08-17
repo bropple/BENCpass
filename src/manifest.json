@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "BENCpass",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Self-hosted, end-to-end encrypted password manager.",
   "author": "BENCO Holdings",
   "browser_specific_settings": {

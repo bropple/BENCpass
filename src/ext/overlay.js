@@ -68,14 +68,24 @@ async function render() {
         sub: 'Opens the manager in a tab',
         className: 'gen',
         onPick: async () => {
-          // Opens the manager rather than the toolbar popup, because
-          // browserAction.openPopup() has no button to hang off when the
-          // browser chrome is hidden — which Zen's compact mode does by
-          // default. It resolves and shows nothing, so even a catch cannot
-          // tell that it failed. A tab is unambiguous.
+          // Two tiers, because the obvious calls here can fail without saying
+          // so. browserAction.openPopup() has no button to hang off when the
+          // chrome is hidden, which Zen's compact mode does by default; it
+          // resolves and shows nothing, so not even a catch can tell.
+          //
+          // The sidebar is tried first because it keeps the page in view. If it
+          // refuses — opening it needs a user gesture, and a click inside a
+          // frame embedded in a page may not count as one — the background
+          // opens a tab, which needs no gesture and cannot quietly do nothing.
           //
           // Still not a password box in the page: see the note above.
-          await browser.runtime.openOptionsPage();
+          try {
+            await browser.sidebarAction.open();
+            return;
+          } catch (err) {
+            console.warn('BENCpass: sidebar refused, falling back to a tab', err);
+          }
+          await browser.runtime.sendMessage({ type: MSG.OPEN_MANAGER });
         },
       }),
     );

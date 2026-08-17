@@ -220,6 +220,8 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleDiscard();
     case MSG.CLOSE:
       return handleClose(msg, sender);
+    case MSG.OPEN_MANAGER:
+      return handleOpenManager(sender);
     default:
       return;
   }
@@ -433,6 +435,30 @@ async function chooseForActiveTab(recordId) {
 
   await vault.touchUsed(recordId).then(persistVault).catch(() => {});
   bumpAutolock();
+  return { ok: true };
+}
+
+/**
+ * Put the manager somewhere visible.
+ *
+ * tabs.create is the floor of this whole arrangement: it needs no user gesture,
+ * has nothing to anchor to, and cannot resolve while doing nothing — which is
+ * how both openPopup() and openOptionsPage() managed to fail silently from an
+ * overlay frame.
+ */
+async function handleOpenManager(sender) {
+  if (!isExtensionPage(sender)) return { ok: false };
+  const url = browser.runtime.getURL('ui/manager.html');
+
+  // Reuse a manager tab if one is already open, rather than stacking them up.
+  const existing = (await browser.tabs.query({ url }).catch(() => []))[0];
+  if (existing) {
+    await browser.tabs.update(existing.id, { active: true });
+    await browser.windows.update(existing.windowId, { focused: true }).catch(() => {});
+    return { ok: true };
+  }
+
+  await browser.tabs.create({ url });
   return { ok: true };
 }
 
