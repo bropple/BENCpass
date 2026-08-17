@@ -172,10 +172,16 @@
     // form left every login below the first one unmarked.
     const targets = new Map(); // element -> which menu it opens
     for (const g of groups) {
-      for (const i of [g.login.username, g.login.password]) {
-        if (i === null || i === undefined) continue;
-        const el = fields[i];
-        if (el) targets.set(el, 'login');
+      // Only when there is a current-password box to fill. In a sign-up group
+      // the username anchor offered the stored pool, and picking an entry wrote
+      // its password into the "choose a password" field — the exact thing the
+      // sign-up menu exists to prevent.
+      if (g.login.password !== null && g.login.password !== undefined) {
+        for (const i of [g.login.username, g.login.password]) {
+          if (i === null || i === undefined) continue;
+          const el = fields[i];
+          if (el) targets.set(el, 'login');
+        }
       }
       // A box asking the user to choose a new password gets its own menu, which
       // offers to generate one and nothing else. Offering the existing pool
@@ -392,11 +398,17 @@
     if (kind === 'generated') {
       const target = at(login.newPassword) ?? at(login.password);
       if (target) setValue(target, values.password);
+      // And the confirmation box, or the form rejects it and the generator has
+      // saved nobody anything.
+      const confirm = at(login.confirmPassword);
+      if (confirm && confirm !== target) setValue(confirm, values.password);
       return;
     }
 
     const user = at(login.username);
-    const pass = at(login.password) ?? at(login.newPassword);
+    // Never newPassword. A stored password belongs in a box asking for the
+    // current one, never in one asking the user to choose a new one.
+    const pass = at(login.password);
     if (user && values.username) setValue(user, values.username);
     if (pass && values.password) setValue(pass, values.password);
     // A username-only step has nowhere to put the password, and must not be
@@ -420,7 +432,7 @@
 
   // ---- capture -------------------------------------------------------------
 
-  const lastSubmitted = { username: '', password: '' };
+  const lastSubmitted = { username: '', password: '', address: null };
 
   function remember() {
     const login = activeGroup?.login ?? groups[0]?.login ?? {};
@@ -428,19 +440,41 @@
     const pass = at(login.password) ?? at(login.newPassword);
     if (user?.value) lastSubmitted.username = user.value;
     if (pass?.value) lastSubmitted.password = pass.value;
+
+    // Addresses are worth keeping too. Typed once into a checkout, they are
+    // otherwise typed again at the next one.
+    const address = {};
+    for (const g of groups) {
+      for (const { index, token } of g.address ?? []) {
+        const el = at(index);
+        if (el?.value?.trim()) address[token] = el.value.trim();
+      }
+    }
+    // Two fields is the floor for calling it an address; a lone email box on a
+    // newsletter form is not one.
+    if (Object.keys(address).length >= 2) lastSubmitted.address = address;
   }
 
   function offerCapture() {
-    if (!lastSubmitted.password) return;
-    browser.runtime
-      .sendMessage({
-        type: MSG.CAPTURE,
-        username: lastSubmitted.username,
-        password: lastSubmitted.password,
-      })
-      .catch(() => {});
+    if (lastSubmitted.password) {
+      browser.runtime
+        .sendMessage({
+          type: MSG.CAPTURE,
+          username: lastSubmitted.username,
+          password: lastSubmitted.password,
+        })
+        .catch(() => {});
+    }
+
+    if (lastSubmitted.address) {
+      browser.runtime
+        .sendMessage({ type: MSG.CAPTURE, kind: 'address', address: lastSubmitted.address })
+        .catch(() => {});
+    }
+
     lastSubmitted.username = '';
     lastSubmitted.password = '';
+    lastSubmitted.address = null;
   }
 
   // A submit event is the clean signal and is often never fired: a great many

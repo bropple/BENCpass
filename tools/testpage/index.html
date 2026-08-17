@@ -88,12 +88,16 @@
 <section>
   <h2>5. Two-step: username now, password next</h2>
   <p class="why">The Microsoft/Google shape.</p>
-  <form>
+  <form id="step-one">
     <label for="e1">Email, phone or Skype</label>
     <input id="e1" name="loginfmt" type="email">
-    <button>Next</button>
+    <button type="button" id="e-next">Next</button>
   </form>
-  <p class="expect">Expect: recognised as a username step; the username fills alone.</p>
+  <div id="step-two"></div>
+  <p class="expect">
+    Expect: recognised as a username step; the username fills alone. Press Next
+    and the password step replaces it, and should get its own anchor.
+  </p>
 </section>
 
 <section>
@@ -133,6 +137,8 @@
     <input id="g3" name="address2">
     <label for="g4">City</label>
     <input id="g4" name="city">
+    <label for="g4b">County / State</label>
+    <input id="g4b" name="state">
     <label for="g5">Postcode</label>
     <input id="g5" name="zip">
     <label for="g6">Discount code</label>

@@ -357,6 +357,7 @@ const describeIndices = (c) => ({
   username: c.username?.index ?? null,
   password: c.password?.index ?? null,
   newPassword: c.newPassword?.index ?? null,
+  confirmPassword: c.confirmPassword?.index ?? null,
   otp: c.otp?.index ?? null,
 });
 
@@ -553,7 +554,9 @@ async function handleSave(sender) {
   const pending = tab ? pendingCaptures.get(tab.id) : null;
   if (!pending) return { ok: false, reason: 'nothing-pending' };
 
-  if (pending.existingId) {
+  if (pending.kind === 'address') {
+    await vault.add({ type: 'address', title: pending.host, ...pending.address });
+  } else if (pending.existingId) {
     // The old password is kept in the record's history by applyPatch, so a
     // capture that turns out to be a typo is recoverable.
     await vault.update(pending.existingId, { password: pending.password });
@@ -581,6 +584,19 @@ async function handleDiscard() {
   paintBadge();
   return { ok: true };
 }
+
+const ADDRESS_KEYS = [
+  'name',
+  'organization',
+  'address-line1',
+  'address-line2',
+  'address-level1',
+  'address-level2',
+  'postal-code',
+  'country',
+  'tel',
+  'email',
+];
 
 const addressValues = (r) =>
   Object.fromEntries(
@@ -627,6 +643,8 @@ async function handleCapture(msg, sender) {
   const origin = originOf(sender);
   if (!origin.frameHost || origin.tabId === null) return { ok: false };
 
+  if (msg.kind === 'address') return captureAddress(msg, origin);
+
   const username = asString(msg.username, 256);
   const password = asString(msg.password, 1024);
   if (!password) return { ok: false };
@@ -634,7 +652,15 @@ async function handleCapture(msg, sender) {
   const existing = matchesFor(vault.list(), origin.frameHost).find(
     (r) => (r.username ?? '') === username,
   );
-  if (existing && existing.password === password) return { ok: false }; // nothing new
+  if (existing && existing.password === password) {
+    // Nothing new — and anything still pending for this tab is now stale. A
+    // leftover offer looks identical to a fresh one, which is how "it asks to
+    // update a password I did not change" happens.
+    pendingCaptures.delete(origin.tabId);
+    clearCaptureNotice();
+    paintBadge();
+    return { ok: false };
+  }
 
   pendingCaptures.set(origin.tabId, {
     host: origin.frameHost,
@@ -646,6 +672,58 @@ async function handleCapture(msg, sender) {
   paintBadge();
   announceCapture(origin.frameHost, username, Boolean(existing));
   return { ok: true };
+}
+
+/**
+ * An address typed into a checkout, offered for keeping.
+ *
+ * Only the WHATWG tokens are taken, and only from a page that already sent a
+ * plausible set of them; anything else in the message is ignored rather than
+ * merged into a record.
+ */
+function captureAddress(msg, origin) {
+  const incoming = {};
+  for (const key of ADDRESS_KEYS) {
+    const value = asString(msg.address?.[key], 256).trim();
+    if (value) incoming[key] = value;
+  }
+  if (Object.keys(incoming).length < 2) return { ok: false };
+
+  // Already stored, if every field we saw matches one on file.
+  const known = addressesFor(vault.list()).some((r) =>
+    Object.entries(incoming).every(([k, v]) => (r[k] ?? '') === v),
+  );
+  if (known) {
+    pendingCaptures.delete(origin.tabId);
+    clearCaptureNotice();
+    paintBadge();
+    return { ok: false };
+  }
+
+  pendingCaptures.set(origin.tabId, {
+    kind: 'address',
+    host: origin.frameHost,
+    address: incoming,
+  });
+  paintBadge();
+  announceAddress(origin.frameHost);
+  return { ok: true };
+}
+
+function announceAddress(host) {
+  if (!browser.notifications?.create) return;
+  try {
+    browser.notifications
+      .create(CAPTURE_NOTICE, {
+        type: 'basic',
+        iconUrl: browser.runtime.getURL('ext/icons/64.png'),
+        title: 'BENCpass — save address?',
+        message: `Keep the address you entered on ${host}?`,
+      })
+      .catch(() => {});
+  } catch {
+    /* reported by the login path already */
+  }
 }
 
 const CAPTURE_NOTICE = 'bencpass-capture';
@@ -715,7 +793,18 @@ async function handleState(sender) {
     host,
     endpoint: settings.endpoint,
     pending: pending
-      ? { host: pending.host, username: pending.username, update: Boolean(pending.existingId) }
+      ? {
+          kind: pending.kind ?? 'login',
+          host: pending.host,
+          username: pending.username,
+          summary:
+            pending.kind === 'address'
+              ? [pending.address['address-line1'], pending.address['address-level2']]
+                  .filter(Boolean)
+                  .join(', ')
+              : '',
+          update: Boolean(pending.existingId),
+        }
       : null,
     candidates:
       vault && !vault.locked && host

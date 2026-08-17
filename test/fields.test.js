@@ -270,3 +270,33 @@ test('fields with no form share one group', () => {
   assert.equal(groups.length, 1);
   assert.equal(groups[0].login.password.name, 'pw');
 });
+
+// ---- confirmation boxes ---------------------------------------------------
+
+test('the confirmation box is identified so a generated password reaches both', () => {
+  const fields = form(
+    { name: 'email', type: 'email' },
+    { name: 'password', type: 'password' },
+    { name: 'password_confirm', type: 'password' },
+  );
+  const r = classifyLoginFields(fields);
+  assert.equal(r.newPassword.name, 'password');
+  assert.equal(r.confirmPassword.name, 'password_confirm');
+});
+
+test('an explicitly marked pair of new-password boxes pairs up', () => {
+  const fields = form(
+    { name: 'old', type: 'password', autocomplete: 'current-password' },
+    { name: 'new', type: 'password', autocomplete: 'new-password' },
+    { name: 'again', type: 'password', autocomplete: 'new-password' },
+  );
+  const r = classifyLoginFields(fields);
+  assert.equal(r.password.name, 'old');
+  assert.equal(r.newPassword.name, 'new');
+  assert.equal(r.confirmPassword.name, 'again');
+});
+
+test('a lone password box has no confirmation', () => {
+  const r = classifyLoginFields(form({ name: 'user' }, { name: 'pw', type: 'password' }));
+  assert.equal(r.confirmPassword, null);
+});

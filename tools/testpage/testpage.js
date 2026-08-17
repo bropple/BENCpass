@@ -28,6 +28,23 @@ for (const id of ['f1', 'f2']) {
   });
 }
 
+// Section 5: the second half of a two-step login. The first page collects the
+// username and the password box only exists after it, which is the shape that
+// defeats a manager expecting both at once.
+document.getElementById('e-next').addEventListener('click', () => {
+  const slot = document.getElementById('step-two');
+  if (slot.querySelector('form')) return;
+  document.getElementById('step-one').hidden = true;
+
+  const form = document.createElement('form');
+  form.innerHTML = `
+    <p>Enter password for <strong>${document.getElementById('e1').value || 'that account'}</strong></p>
+    <label for="e2">Password</label>
+    <input id="e2" name="passwd" type="password" autocomplete="current-password">
+    <button>Sign in</button>`;
+  slot.append(form);
+});
+
 // Section 7: a login form that appears long after load.
 document.getElementById('late').addEventListener('click', () => {
   const slot = document.getElementById('late-slot');

@@ -105,7 +105,13 @@ export function classifyLoginFields(fields) {
   const visible = fields.filter((f) => f.visible !== false && isFillableInput(f));
   const passwords = visible.filter(isPasswordInput);
 
-  const result = { username: null, password: null, newPassword: null, otp: null };
+  const result = {
+    username: null,
+    password: null,
+    newPassword: null,
+    confirmPassword: null,
+    otp: null,
+  };
   if (!visible.length) return result;
 
   // --- passwords ---------------------------------------------------------
@@ -133,6 +139,18 @@ export function classifyLoginFields(fields) {
     // safe reading — offering to *generate* is harmless, whereas filling an
     // existing password into a "choose a new password" box is not.
     result.newPassword = passwords[0];
+  }
+
+  // The confirmation box. A generated password has to go in both, or the form
+  // rejects it and the person has to paste it in by hand — at which point the
+  // generator has saved them nothing.
+  if (result.newPassword) {
+    const after = passwords.slice(passwords.indexOf(result.newPassword) + 1);
+    result.confirmPassword =
+      after.find((f) => autocompleteToken(f.autocomplete) === 'new-password') ??
+      after.find((f) => NEW_HINTS.test(haystack(f))) ??
+      after[0] ??
+      null;
   }
 
   // --- one-time codes ----------------------------------------------------

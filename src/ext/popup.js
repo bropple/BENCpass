@@ -49,9 +49,12 @@ function renderCapture() {
   const p = state.pending;
   $('capture').hidden = !p;
   if (!p) return;
-  $('capture-text').textContent = p.update
-    ? `Update the password for ${p.username || 'this login'} on ${p.host}?`
-    : `Save ${p.username || 'this login'} for ${p.host}?`;
+  $('capture-text').textContent =
+    p.kind === 'address'
+      ? `Save the address you entered on ${p.host}?${p.summary ? ` (${p.summary})` : ''}`
+      : p.update
+        ? `Update the password for ${p.username || 'this login'} on ${p.host}?`
+        : `Save ${p.username || 'this login'} for ${p.host}?`;
 }
 
 function row(c) {
