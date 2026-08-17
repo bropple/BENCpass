@@ -1,14 +1,7 @@
 name: CI
 
-# The native hosts are the reason this exists. Everything else here can be run
-# on any machine; the macOS host needs a Mac with the Swift toolchain and the
-# Windows host needs Windows, and neither can be compiled where the rest of the
-# work happens. A runner per platform turns "this ought to compile" into a fact.
-#
-# Note for a private repository: Linux minutes are cheap, macOS minutes count
-# tenfold and Windows twofold against the same allowance. The host jobs are
-# therefore scoped by `paths` — they run when a host or its build script
-# changes, and not for every commit touching the extension.
+# Everything that can be checked on any machine. The native hosts cannot, and
+# live in hosts.yml — see the note there about what runner minutes cost.
 
 on:
   push:
@@ -28,21 +21,20 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # Present because `npm test` builds and runs the real Go server for the
+      # sync tests, not to test the server itself — server-image.yml does that,
+      # and gates the published image on it. `cache: false` because the server
+      # has no dependencies and so no go.sum for setup-go to key a cache on;
+      # without this the step fails looking for one.
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
-          cache-dependency-path: server/go.sum
+          go-version: '1.26'
+          cache: false
 
       - run: npm ci
 
-      # The sync tests build and run the real Go server rather than a stub, so
-      # the toolchain above is not optional for a full run.
       - name: npm test
         run: npm test
-
-      - name: go test
-        run: go test ./...
-        working-directory: server
 
       - name: web-ext lint
         run: npx web-ext lint --source-dir=src --self-hosted
@@ -55,41 +47,3 @@ jobs:
 
       - name: shell scripts parse
         run: for f in tools/*.sh hosts/*.sh; do sh -n "$f" || exit 1; done
-
-  macos-host:
-    name: macOS host compiles
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # No test can be run here — Touch ID needs hardware and a person, and a
-      # runner has neither. What this proves is that the Swift compiles against
-      # the real LocalAuthentication and Security frameworks, which is the half
-      # that cannot be checked anywhere else.
-      - name: build
-        run: swiftc -O -o /tmp/bencpass-auth hosts/macos/main.swift
-
-      - name: ad-hoc sign
-        run: codesign --force --sign - /tmp/bencpass-auth
-
-      # It should answer `hello` without a keystore or a fingerprint, and report
-      # biometrics: none on a machine that has none — which a runner is. That
-      # exercises the framing, the JSON and the dispatch.
-      - name: answers hello
-        run: |
-          python3 - <<'PY' > /tmp/request.bin
-          import json, struct, sys
-          body = json.dumps({"v": 1, "op": "hello"}).encode()
-          sys.stdout.buffer.write(struct.pack("<I", len(body)) + body)
-          PY
-          /tmp/bencpass-auth < /tmp/request.bin > /tmp/reply.bin
-          python3 - <<'PY'
-          import json, struct
-          data = open("/tmp/reply.bin", "rb").read()
-          length = struct.unpack("<I", data[:4])[0]
-          reply = json.loads(data[4:4 + length])
-          print(reply)
-          assert reply["ok"] is True, reply
-          assert reply["platform"] == "macos", reply
-          assert reply["biometrics"] == "none", "a runner has no Touch ID"
-          PY
