@@ -27,6 +27,7 @@ export const MSG = Object.freeze({
   // background -> content
   FILL: 'fill', // "put these values in these fields"
   DISMISS: 'dismiss',
+  LOCKSTATE: 'lockstate', // "the vault locked or unlocked; redraw"
 
   // popup -> background
   STATE: 'state',

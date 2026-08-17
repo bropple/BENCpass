@@ -20,6 +20,7 @@
     CAPTURE: 'capture',
     FILL: 'fill',
     DISMISS: 'dismiss',
+    LOCKSTATE: 'lockstate',
   };
 
   const MARK = 'data-bencpass';
@@ -41,6 +42,8 @@
   let fields = []; // live elements, index-aligned with the descriptors sent
   let groups = []; // per-form roles, as the background classified them
   let formIds = new WeakMap();
+  let formSeq = 0; // WeakMap has no .size — see groupOf
+  let locked = true;
   let activeGroup = null; // the form the open menu belongs to
   let anchorEl = null;
   let rescanTimer = null;
@@ -79,11 +82,20 @@
     return '';
   }
 
-  /** Which form an input belongs to; one shared bucket for those with none. */
+  /**
+   * Which form an input belongs to; one shared bucket for those with none.
+   *
+   * The counter is explicit because WeakMap has no `.size` — it cannot have
+   * one, since it cannot enumerate its own keys. Reading it gave `undefined`,
+   * so every form was numbered `undefined + 1` = NaN, and Map treats NaN as
+   * equal to NaN, so all of them landed in one group. The result was
+   * indistinguishable from the whole-document classification this replaced,
+   * which is why nothing appeared to change.
+   */
   function groupOf(el) {
     const form = el.form ?? el.closest('form');
     if (!form) return 0;
-    if (!formIds.has(form)) formIds.set(form, formIds.size + 1);
+    if (!formIds.has(form)) formIds.set(form, ++formSeq);
     return formIds.get(form);
   }
 
@@ -112,6 +124,7 @@
       return;
     }
     formIds = new WeakMap();
+    formSeq = 0;
     const descriptors = fields.slice(0, 300).map(describe);
     try {
       const reply = await browser.runtime.sendMessage({
@@ -119,6 +132,7 @@
         fields: descriptors,
       });
       groups = reply?.groups ?? [];
+      locked = reply?.locked !== false;
     } catch {
       groups = []; // background asleep or extension reloading
     }
@@ -173,7 +187,7 @@
    * a page can fingerprint the extension by. The shapes carry inline styles
    * because the wrapper's `all: initial` resets `fill`, and fill inherits.
    */
-  function gonMark() {
+  function gonMark(isLocked) {
     const svg = document.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('viewBox', '0 0 200 200');
     svg.setAttribute('width', '18');
@@ -195,7 +209,9 @@
     stripe.setAttribute('y', '103.36');
     stripe.setAttribute('width', '58.8');
     stripe.setAttribute('height', '13.44');
-    stripe.setAttribute('style', 'fill:#78b946');
+    // The visor is the lock indicator, the same as on the gate: red locked,
+    // green open.
+    stripe.setAttribute('style', `fill:${isLocked ? '#d84a3a' : '#78b946'}`);
 
     svg.append(body, visor, stripe);
     return svg;
@@ -210,7 +226,7 @@
       'all: initial; position: absolute; width: 18px; height: 18px; cursor: pointer;' +
       'z-index: 2147483646; line-height: 0;';
     dot.title = 'BENCpass';
-    dot.append(gonMark());
+    dot.append(gonMark(locked));
 
     dot.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -254,7 +270,11 @@
     } catch {
       return;
     }
-    if (!reply || reply.locked || !reply.sessionId || !reply.candidates.length) return;
+    // A locked vault returns a session with a single placeholder candidate, so
+    // the menu can offer to unlock. Bailing on reply.locked meant clicking a
+    // field while locked did nothing at all, which is the state most in need of
+    // an explanation.
+    if (!reply || !reply.sessionId || !reply.candidates.length) return;
 
     anchorEl = el;
     const frame = document.createElement('iframe');
@@ -416,6 +436,12 @@
     if (msg?.type === MSG.FILL) {
       fill(msg.kind, msg.values ?? {});
       closeMenu();
+      return Promise.resolve({ ok: true });
+    }
+    if (msg?.type === MSG.LOCKSTATE) {
+      locked = Boolean(msg.locked);
+      closeMenu();
+      placeAnchors();
       return Promise.resolve({ ok: true });
     }
     if (msg?.type === MSG.DISMISS) {

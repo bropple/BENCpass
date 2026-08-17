@@ -40,3 +40,12 @@ for size in 16 32 48 64 128; do
   cp "$out/bencpass-$size.png" "$root/src/ext/icons/$size.png"
 done
 echo "src/ext/icons/{16,32,48,64,128}.png"
+
+# The locked variant, red visor stripe, for the toolbar icon while the vault is
+# shut. Same mark, one colour different — it reads at 16px because the stripe is
+# the only saturated thing in it.
+for size in 16 32 48 64 128; do
+  rsvg-convert -w "$size" -h "$size" "$out/bencpass-locked.svg" \
+    -o "$root/src/ext/icons/$size-locked.png"
+done
+echo "src/ext/icons/{16,32,48,64,128}-locked.png"

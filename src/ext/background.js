@@ -63,6 +63,7 @@ function lock() {
   sessions.clear();
   clearTimeout(autolockTimer);
   paintBadge();
+  broadcastLockState();
 }
 
 // Locking when the screen locks or the machine sleeps is the case an idle timer
@@ -89,6 +90,38 @@ function paintBadge() {
   const pending = pendingCaptures.size > 0;
   browser.browserAction.setBadgeText({ text: pending ? '!' : '' });
   browser.browserAction.setBadgeBackgroundColor({ color: pending ? '#e8b23d' : '#3d7dbf' });
+  paintIcon();
+}
+
+/**
+ * The toolbar icon carries the lock state, same as the gate and the in-page
+ * anchor: red visor shut, green visor open. One glance, no clicking.
+ */
+function paintIcon() {
+  const shut = !vault || vault.locked;
+  const suffix = shut ? '-locked' : '';
+  browser.browserAction
+    .setIcon({
+      path: {
+        16: `icons/16${suffix}.png`,
+        32: `icons/32${suffix}.png`,
+        48: `icons/48${suffix}.png`,
+      },
+    })
+    .catch(() => {});
+}
+
+/** Anchors already drawn in open tabs cannot see the vault; tell them. */
+async function broadcastLockState() {
+  const shut = !vault || vault.locked;
+  const tabs = await browser.tabs.query({}).catch(() => []);
+  for (const tab of tabs) {
+    browser.tabs
+      .sendMessage(tab.id, { type: MSG.LOCKSTATE, locked: shut })
+      .catch(() => {
+        /* no content script in that tab, which is normal */
+      });
+  }
 }
 
 // ---- origin, derived rather than believed ----------------------------------
@@ -274,6 +307,7 @@ async function handleCandidates(msg, sender) {
 async function handleDescribe(msg, sender) {
   const fields = Array.isArray(msg.fields) ? msg.fields.slice(0, 300) : [];
   return {
+    locked: !vault || vault.locked,
     groups: classifyGroups(fields).map((g) => ({
       group: g.group,
       login: describeIndices(g.login),
@@ -591,6 +625,7 @@ async function handleUnlock(msg, sender) {
     await vault.unlock(asString(msg.password, 1024));
     bumpAutolock();
     paintBadge();
+    broadcastLockState();
     scheduleSync();
     return { ok: true };
   } catch (err) {
