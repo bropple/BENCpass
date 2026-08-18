@@ -130,6 +130,25 @@ export function hostOf(url) {
   }
 }
 
+/**
+ * Does every address on this entry belong to one site?
+ *
+ * An entry matches on any of its addresses, which is right — one account can
+ * live on two domains. But it means an entry naming both the site in front of
+ * you and somewhere else is a candidate here, and anything that writes a
+ * secret into such an entry writes it somewhere it will be offered again
+ * elsewhere. Capture uses this to decide what it may overwrite in place.
+ *
+ * An entry with no addresses counts as belonging: it has never claimed to be
+ * anywhere.
+ */
+export function belongsOnlyTo(record, host) {
+  return (record?.urls ?? []).every((u) => {
+    const h = hostOf(u);
+    return !h || sameSite(h, host);
+  });
+}
+
 export const EXACT = 3;
 export const SUBDOMAIN = 2;
 export const SITE = 1;

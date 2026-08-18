@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  belongsOnlyTo,
   isPrivateHost,
   publicSuffix,
   registrableDomain,
@@ -199,4 +200,35 @@ test('an address is refused over plain http on a public host', () => {
     'insecure-page',
   );
   assert.deepEqual(canFillAddress('192.168.1.50', { frameProtocol: 'http:' }), { ok: true });
+});
+
+// ---- what a capture may overwrite ------------------------------------------
+
+test('an entry that names only this site may be overwritten in place', () => {
+  assert.equal(belongsOnlyTo({ urls: ['https://bank.example'] }, 'bank.example'), true);
+  assert.equal(belongsOnlyTo({ urls: ['https://login.bank.example'] }, 'bank.example'), true);
+  // Saved here, never claimed to be anywhere.
+  assert.equal(belongsOnlyTo({ urls: [] }, 'bank.example'), true);
+  assert.equal(belongsOnlyTo({}, 'bank.example'), true);
+});
+
+test('an entry that also names somewhere else may not', () => {
+  // The shape a crafted import file uses: the real site, so it matches and
+  // captures there, plus the attacker's, so the captured password fills for
+  // them afterwards.
+  const planted = { urls: ['https://bank.example', 'https://evil.attacker.example'] };
+  assert.equal(belongsOnlyTo(planted, 'bank.example'), false);
+
+  // And it is the pairing that matters, not the count.
+  assert.equal(
+    belongsOnlyTo({ urls: ['https://bank.example', 'https://www.bank.example'] }, 'bank.example'),
+    true,
+  );
+});
+
+test('an unparseable address does not count against an entry', () => {
+  // Junk cannot be matched against anything, so it cannot be the address that
+  // makes an entry dangerous — and treating it as such would refuse updates to
+  // entries carrying a stray note in the url field.
+  assert.equal(belongsOnlyTo({ urls: ['not a url', 'https://bank.example'] }, 'bank.example'), true);
 });

@@ -15,6 +15,7 @@ import {
   addressesFor,
   hostOf,
   isPrivateHost,
+  belongsOnlyTo,
 } from '../core/match.js';
 import { classifyGroups } from '../core/fields.js';
 import {
@@ -777,14 +778,34 @@ async function handleCapture(msg, sender) {
   if (!password) return { ok: false };
 
   const forHost = matchesFor(vault.list(), origin.frameHost);
-  const existing = forHost.find((r) => (r.username ?? '') === username);
+  const candidate = forHost.find((r) => (r.username ?? '') === username);
+
+  // Updating in place is only offered for an entry that belongs to this site
+  // and no other.
+  //
+  // An entry matches on any of its addresses, which is right — one account can
+  // live on two domains. But it means an entry naming both this site and
+  // somewhere else can be the one a capture lands on, and the capture writes a
+  // password that was typed *here* into a record that also fills *there*. That
+  // was only ever a self-inflicted wound until import arrived; now the entry
+  // can come from a file, and a crafted one pairs the real site with the
+  // attacker's and waits for the password to be filled in for them.
+  //
+  // A wider entry is not refused, only not silently overwritten: the password
+  // is offered as a new entry scoped to this site, which costs a duplicate to
+  // tidy and cannot cost the password.
+  const existing = candidate && belongsOnlyTo(candidate, origin.frameHost) ? candidate : null;
 
   // Nothing to learn if this host already has this exact password on file. The
   // username is only required to match when there was one to see: the second
   // page of a two-step sign-in has no username box at all, so insisting on it
   // there turned every such sign-in into an offer to save a duplicate.
-  const alreadyKnown = existing
-    ? existing.password === password
+  // Deliberately `candidate` and not `existing`: an entry that already holds
+  // this exact password is nothing to learn from, whatever else it names, and
+  // asking again would be the "it keeps offering to save a password I did not
+  // change" complaint by another route.
+  const alreadyKnown = candidate
+    ? candidate.password === password
     : !username && forHost.some((r) => r.password === password);
 
   if (alreadyKnown) {
