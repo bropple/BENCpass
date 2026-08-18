@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -836,5 +837,66 @@ func TestRevokingSomethingAlreadyGoneIsFine(t *testing.T) {
 	status, out := c.do("DELETE", "/v1/devices/never-existed", nil, nil)
 	if status != http.StatusOK || out["alreadyGone"] != true {
 		t.Fatalf("revoking an unknown device: %d %v", status, out)
+	}
+}
+
+func TestDevicesCanBeRenamed(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "linux")
+	other := enrol(t, srv, codeFrom(t, c), "linux")
+
+	// "linux" twice tells nobody which machine to revoke. A nickname is the
+	// whole point of the list.
+	if status, out := c.do("PATCH", "/v1/devices/"+other.id, map[string]any{"name": "the one in the loft"}, nil); status != http.StatusOK {
+		t.Fatalf("rename refused: %d %v", status, out)
+	}
+
+	_, out := c.do("GET", "/v1/devices", nil, nil)
+	devices, _ := out["devices"].([]any)
+	found := ""
+	for _, d := range devices {
+		m := d.(map[string]any)
+		if m["id"] == other.id {
+			found, _ = m["name"].(string)
+		}
+	}
+	if found != "the one in the loft" {
+		t.Fatalf("the new name did not stick: %q", found)
+	}
+
+	// Renaming is a label and nothing else: the device still works.
+	if status, _ := other.do("GET", "/v1/records?since=0", nil, nil); status != http.StatusOK {
+		t.Fatalf("renaming broke the device: %d", status)
+	}
+}
+
+func TestDeviceNamesAreBoundedAndSingleLine(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	// A name reaches the device list and this server's log. The log quotes with
+	// %q, but a name is not the place to depend on remembering that.
+	long := strings.Repeat("x", 500)
+	c.do("PATCH", "/v1/devices/"+c.id, map[string]any{"name": "a\nb\tc\x1b[31m " + long}, nil)
+
+	_, out := c.do("GET", "/v1/devices", nil, nil)
+	name := out["devices"].([]any)[0].(map[string]any)["name"].(string)
+
+	if strings.ContainsAny(name, "\n\t\x1b") {
+		t.Fatalf("a control character survived: %q", name)
+	}
+	if len([]rune(name)) > 60 {
+		t.Fatalf("name not bounded: %d runes", len([]rune(name)))
+	}
+}
+
+func TestRenamingSomethingThatIsNotThereIsRefused(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	// Unlike revoking, where "already gone" is the outcome asked for, renaming
+	// a device that does not exist is a mistake worth reporting.
+	if status, _ := c.do("PATCH", "/v1/devices/never-existed", map[string]any{"name": "x"}, nil); status != http.StatusNotFound {
+		t.Fatalf("renaming an unknown device: %d", status)
 	}
 }

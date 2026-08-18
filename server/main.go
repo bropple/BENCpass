@@ -101,6 +101,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/codes", s.auth(s.mintCode))
 	mux.HandleFunc("GET /v1/devices", s.auth(s.listDevices))
 	mux.HandleFunc("DELETE /v1/devices/{id}", s.auth(s.forgetDevice))
+	mux.HandleFunc("PATCH /v1/devices/{id}", s.auth(s.renameDevice))
 	mux.HandleFunc("GET /v1/meta", s.auth(s.getMeta))
 	mux.HandleFunc("PUT /v1/meta", s.auth(s.putMeta))
 	mux.HandleFunc("GET /v1/records", s.auth(s.getRecords))
@@ -271,6 +272,29 @@ func (s *server) forgetDevice(w http.ResponseWriter, r *http.Request, _ []byte) 
 		return
 	}
 	send(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// renameDevice changes a device's label, so the list can say which machine is
+// which before somebody has to decide which one to revoke.
+func (s *server) renameDevice(w http.ResponseWriter, r *http.Request, body []byte) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		fail(w, http.StatusBadRequest, "bad request")
+		return
+	}
+
+	err := s.store.Rename(r.PathValue("id"), req.Name)
+	if errors.Is(err, ErrNoDevice) {
+		fail(w, http.StatusNotFound, "no such device")
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "cannot write")
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"ok": true, "name": CleanName(req.Name)})
 }
 
 func (s *server) getRecords(w http.ResponseWriter, r *http.Request, _ []byte) {

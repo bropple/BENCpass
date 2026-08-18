@@ -294,6 +294,38 @@ export class SyncClient {
     return { status, seq: body.seq, error: body.error };
   }
 
+  /** Which machines are enrolled. Names and dates; never keys. */
+  async devices() {
+    const { status, body } = await this.request('GET', '/v1/devices');
+    if (status !== 200) throw new SyncError(`could not list devices (${status})`, 'devices');
+    return body.devices ?? [];
+  }
+
+  /**
+   * Cut a machine off. Its key stops authenticating anything immediately.
+   *
+   * The server refuses to remove the last one, because a store with no devices
+   * cannot be reached at all — nothing could enrol, since minting a code needs
+   * a device to sign the request.
+   */
+  async forgetDevice(id) {
+    const { status, body } = await this.request('DELETE', `/v1/devices/${encodeURIComponent(id)}`);
+    if (status === 409) throw new SyncError(body?.error ?? 'that is the only device', 'last-device');
+    if (status !== 200) throw new SyncError(`could not revoke (${status})`, 'revoke');
+    return body;
+  }
+
+  /** Give a machine a name a person will recognise. */
+  async renameDevice(id, name) {
+    const { status, body } = await this.request(
+      'PATCH',
+      `/v1/devices/${encodeURIComponent(id)}`,
+      { name },
+    );
+    if (status !== 200) throw new SyncError(`could not rename (${status})`, 'rename');
+    return body?.name ?? name;
+  }
+
   async getMeta() {
     const { status, body } = await this.request('GET', '/v1/meta');
     if (status !== 200) throw new SyncError(`meta pull failed (${status})`, 'meta');

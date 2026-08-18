@@ -272,6 +272,12 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleSettingsSet(msg);
     case MSG.JOIN:
       return handleJoin(msg, sender);
+    case MSG.DEVICES:
+      return handleDevices(sender);
+    case MSG.DEVICE_FORGET:
+      return handleDeviceForget(msg, sender);
+    case MSG.DEVICE_RENAME:
+      return handleDeviceRename(msg, sender);
     case MSG.BIO_STATE:
       return handleBioState();
     case MSG.BIO_ENROL:
@@ -976,6 +982,70 @@ async function handleJoin(msg, sender) {
     // a failure here would be wrong about what happened.
   }
   return { ok: true };
+}
+
+/**
+ * Which machines are enrolled, and which one is this.
+ *
+ * `mine` is the difference between a list and a decision: revoking the wrong
+ * row is how somebody locks themselves out of their own vault, and "linux"
+ * three times over gives them no way to tell.
+ */
+async function handleDevices(sender) {
+  if (!isExtensionPage(sender)) return { ok: false };
+  const c = client();
+  if (!c) return { ok: false, reason: 'not-configured' };
+  try {
+    return { ok: true, devices: await c.devices(), mine: settings.deviceId };
+  } catch (err) {
+    return { ok: false, reason: err?.code ?? 'error', message: String(err?.message ?? err) };
+  }
+}
+
+async function handleDeviceForget(msg, sender) {
+  if (!isExtensionPage(sender)) return { ok: false };
+  const c = client();
+  if (!c) return { ok: false, reason: 'not-configured' };
+
+  const id = asString(msg.deviceId, 128);
+  if (!id) return { ok: false, reason: 'no-device' };
+
+  // Decided before the credential is cleared, or the comparison below is made
+  // against the empty string it was just set to and always answers no.
+  const self = id === settings.deviceId;
+
+  try {
+    await c.forgetDevice(id);
+  } catch (err) {
+    return { ok: false, reason: err?.code ?? 'error', message: String(err?.message ?? err) };
+  }
+
+  // Revoking this machine is allowed — it is how one about to be wiped bows
+  // out — but it cannot then go on syncing with a key the server has dropped.
+  // Clearing the credential turns the next sync into "no server set" rather
+  // than a 401 that reads as something broken.
+  if (self) {
+    settings.deviceId = '';
+    settings.deviceKey = '';
+    await persistSettings();
+  }
+  return { ok: true, self };
+}
+
+async function handleDeviceRename(msg, sender) {
+  if (!isExtensionPage(sender)) return { ok: false };
+  const c = client();
+  if (!c) return { ok: false, reason: 'not-configured' };
+
+  const id = asString(msg.deviceId, 128);
+  const name = asString(msg.name, 128);
+  if (!id) return { ok: false, reason: 'no-device' };
+
+  try {
+    return { ok: true, name: await c.renameDevice(id, name) };
+  } catch (err) {
+    return { ok: false, reason: err?.code ?? 'error', message: String(err?.message ?? err) };
+  }
 }
 
 async function handleSettingsGet() {

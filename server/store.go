@@ -439,6 +439,46 @@ func (s *Store) mintLocked(key string, ttl time.Duration) (string, error) {
 
 // Redeem consumes a code and issues a device. The code is deleted whether or not
 // the save succeeds, so a failed enrolment cannot be retried with the same code.
+// CleanName is what a device may be called.
+//
+// Names are chosen by people and read by people — in the device list, and in
+// this server's log. So: bounded, single-line, and never empty. Control
+// characters go because a name reaches the log, and while the log already
+// quotes with %q, a name is not the place to rely on that being remembered.
+//
+// An empty result is not an error. A device with no name is listed by its id,
+// which is worse to read and better than refusing an enrolment over a label.
+func CleanName(name string) string {
+	const max = 60
+	out := make([]rune, 0, max)
+	for _, r := range strings.TrimSpace(name) {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		out = append(out, r)
+		if len(out) == max {
+			break
+		}
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// Rename changes what a device is called and nothing else. Its key, its id and
+// what it may do are untouched — this is a label, so that "linux" can become
+// "the one in the loft" before somebody has to decide which to revoke.
+func (s *Store) Rename(id, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dev, ok := s.d.Devices[id]
+	if !ok {
+		return ErrNoDevice
+	}
+	dev.Name = CleanName(name)
+	s.d.Devices[id] = dev
+	return s.save()
+}
+
 func (s *Store) Redeem(code, name string) (Device, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -451,7 +491,7 @@ func (s *Store) Redeem(code, name string) (Device, error) {
 
 	dev := Device{
 		ID:      token(9),
-		Name:    name,
+		Name:    CleanName(name),
 		Key:     base64.StdEncoding.EncodeToString(randomBytes(32)),
 		Created: time.Now().UnixMilli(),
 	}

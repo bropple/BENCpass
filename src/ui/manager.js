@@ -256,6 +256,9 @@ async function refreshBiometrics() {
 
   renderBioSetting();
   renderRecoverySetting();
+  // Fetched rather than remembered: what is enrolled is the server's answer,
+  // and a stale list is how somebody revokes a machine that is already gone.
+  loadDevices().catch(() => {});
 
   // Ask straight away rather than waiting to be clicked. Opening the manager
   // while locked *is* the request to unlock it; making someone press one more
@@ -1067,6 +1070,124 @@ async function copyText(text, label, isSecret = false) {
 }
 
 let sayTimer = null;
+// ---- the machines on this server --------------------------------------------
+//
+// Built with createElement rather than markup, like everything else that shows
+// a name somebody else chose: a device called `<img onerror=…>` is a name, and
+// it renders as one.
+
+function deviceRow(dev, mine) {
+  const li = document.createElement('li');
+
+  const name = document.createElement('span');
+  name.className = 'dev-name';
+  name.textContent = dev.name || dev.id;
+  li.append(name);
+
+  if (dev.id === mine) {
+    const tag = document.createElement('span');
+    tag.className = 'dev-mine';
+    tag.textContent = 'this machine';
+    li.append(tag);
+  }
+
+  const when = document.createElement('span');
+  when.className = 'dev-when';
+  when.textContent = dev.created ? new Date(dev.created).toLocaleDateString() : '';
+  li.append(when);
+
+  const actions = document.createElement('span');
+  actions.className = 'dev-actions';
+
+  const rename = document.createElement('button');
+  rename.type = 'button';
+  rename.className = 'btn btn-sm';
+  rename.textContent = 'Rename';
+  rename.addEventListener('click', () => renameDevice(dev));
+
+  const revoke = document.createElement('button');
+  revoke.type = 'button';
+  revoke.className = 'btn btn-sm';
+  revoke.textContent = 'Revoke';
+  revoke.addEventListener('click', () => revokeDevice(dev, mine));
+
+  actions.append(rename, revoke);
+  li.append(actions);
+  return li;
+}
+
+async function loadDevices() {
+  const list = $('s-devices');
+  const note = $('s-devices-note');
+  list.replaceChildren();
+  note.className = 'settings-note';
+  note.textContent = 'Asking the server…';
+
+  const reply = await askBackground(MSG.DEVICES);
+  if (!reply?.ok) {
+    note.textContent =
+      reply?.reason === 'not-configured'
+        ? 'No server set, so there is nothing enrolled anywhere.'
+        : `Could not ask the server: ${reply?.message ?? reply?.reason ?? 'error'}`;
+    note.className = 'settings-note bad';
+    return;
+  }
+
+  note.textContent = '';
+  for (const dev of reply.devices) list.append(deviceRow(dev, reply.mine));
+}
+
+async function renameDevice(dev) {
+  const name = window.prompt('Call this machine:', dev.name || '');
+  if (name === null) return;
+
+  const reply = await askBackground(MSG.DEVICE_RENAME, { deviceId: dev.id, name });
+  const note = $('s-devices-note');
+  if (!reply?.ok) {
+    note.textContent = `Could not rename: ${reply?.message ?? reply?.reason ?? 'error'}`;
+    note.className = 'settings-note bad';
+    return;
+  }
+  await loadDevices();
+}
+
+async function revokeDevice(dev, mine) {
+  const label = dev.name || dev.id;
+  // Revoking this machine is allowed and is occasionally what somebody means —
+  // a laptop about to be wiped bows out — but it is not what they mean by
+  // accident, so it says which one it is about to cut off.
+  const question =
+    dev.id === mine
+      ? `Revoke ${label} — the machine you are using?\n\nIt will stop syncing immediately and will need a new code to come back.`
+      : `Revoke ${label}?\n\nIts key stops working immediately and it cannot come back without a new code.`;
+  if (!window.confirm(question)) return;
+
+  const reply = await askBackground(MSG.DEVICE_FORGET, { deviceId: dev.id });
+  const note = $('s-devices-note');
+  if (!reply?.ok) {
+    note.textContent =
+      reply?.reason === 'last-device'
+        ? 'That is the only machine enrolled. Removing it would leave the server unreachable — nothing could enrol, because minting a code needs a machine to ask.'
+        : `Could not revoke: ${reply?.message ?? reply?.reason ?? 'error'}`;
+    note.className = 'settings-note bad';
+    return;
+  }
+
+  if (reply.self) {
+    // The list cannot be fetched again: the credential that would have asked
+    // for it has just been dropped. Say what happened instead of showing an
+    // error from a request that was never going to work.
+    await loadSettings();
+    $('s-devices').replaceChildren();
+    note.textContent = 'This machine is no longer enrolled. Its vault is untouched; syncing is off.';
+    note.className = 'settings-note';
+    return;
+  }
+  await loadDevices();
+}
+
+$('s-devices-refresh').addEventListener('click', loadDevices);
+
 // ---- the recovery code, after setup -----------------------------------------
 
 function renderRecoverySetting() {
