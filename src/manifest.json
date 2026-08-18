@@ -76,7 +76,7 @@
     "ext/overlay.html",
     "ext/toast.html"
   ],
-  "content_security_policy": "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src *; frame-src 'self'",
+  "content_security_policy": "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src *; frame-src 'self'",
   "commands": {
     "_execute_sidebar_action": {
       "suggested_key": {

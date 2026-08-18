@@ -80,12 +80,15 @@ it was removed.
 ## Generated and minified files, and how to reproduce them
 
 Three files in the package are not hand-written. Each has a script in the
-repository that regenerates it, and CI fails if the committed copy drifts.
+repository that regenerates it. CI fails if `argon2.js` or the country table
+drifts from what its script produces; the Public Suffix List cannot be checked
+that way and is handled differently — see below.
 
 ### `src/vendor/argon2.js` — Argon2id (minified)
 
-Verbatim `hash-wasm@4.12.0`'s `dist/argon2.umd.min.js` with one export appended.
-The WASM is inlined as base64 by upstream, not by us.
+Verbatim `hash-wasm@4.12.0`'s `dist/argon2.umd.min.js`, with a provenance header
+prepended and one export appended — that is the whole delta, and both ends are
+readable in the file. The WASM is inlined as base64 by upstream, not by us.
 
 ```sh
 npm ci                 # hash-wasm is integrity-pinned in package-lock.json
@@ -106,7 +109,7 @@ specifier and cannot use an import map — that needs an inline
 
 ```
 default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self';
-img-src 'self' data:; font-src 'self'; connect-src *; frame-src 'self'
+img-src 'self'; font-src 'self'; connect-src *; frame-src 'self'
 ```
 
 `default-src 'none'` is the base: nothing is permitted that is not named
@@ -119,20 +122,27 @@ nothing else. It does not permit `eval`, `new Function`, or inline script —
 
 `connect-src *` is the one open directive, and it is open because the sync
 endpoint is an address the user types in. No other directive allows a remote
-origin: scripts, styles, fonts and frames are all `'self'`, and images are
-`'self'` plus `data:` for the generated icons.
+origin, and none allows `data:` — scripts, styles, images, fonts and frames are
+all `'self'`.
 
 Argon2id is the key derivation function for the master password — 128 MiB, t=3.
 A JavaScript implementation at that memory cost is not viable.
 
 ### `src/vendor/psl.js` — Public Suffix List
 
-Generated from publicsuffix.org, with the rule count and retrieval date recorded
-in its header.
+Fetched from publicsuffix.org, with the rule count and retrieval date recorded in
+its header.
 
 ```sh
 tools/vendor-psl.sh
 ```
+
+**Not reproducible byte-for-byte, and deliberately not CI-checked.** The list is
+a living document: re-running the script fetches whatever publicsuffix.org
+serves today and stamps today's date, so a drift check would fail whenever the
+world changed rather than whenever this repository did. The committed copy
+records what was fetched and when, and refreshing it is a deliberate act with a
+visible diff.
 
 Used for origin matching, so that `foo.github.io` and `bar.github.io` are treated
 as different sites in both directions.
@@ -150,11 +160,14 @@ node tools/gen-countries.mjs --check   # verify, as CI does
 
 ## No remote code
 
-There is no `eval`, `new Function`, `document.write`, `innerHTML`,
-`insertAdjacentHTML`, or `Range.createContextualFragment` anywhere in the
-package — every one of those greps clean. All rendering of record data goes
-through `textContent` or `createTextNode`, including data arriving from the
-import feature, so a record whose title is `<img onerror=...>` renders inert.
+The package contains no call to `eval`, `new Function`, `document.write`,
+`innerHTML`, `insertAdjacentHTML`, or `Range.createContextualFragment`. Grepping
+for those names returns exactly one line, a comment in `ext/toast.js` noting
+that the sentence below it is built without `innerHTML`.
+
+All rendering of record data goes through `textContent` or `createTextNode`,
+including data arriving from the import feature, so a record whose title is
+`<img onerror=...>` renders inert.
 
 No script is fetched at runtime. Everything executed ships in the package.
 

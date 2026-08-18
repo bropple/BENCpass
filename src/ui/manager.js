@@ -1186,10 +1186,54 @@ $('settings-close').addEventListener('click', () => {
 $('s-autolock').addEventListener('change', () =>
   saveSetting({ autolockMinutes: Number($('s-autolock').value) }),
 );
-$('s-endpoint').addEventListener('change', () => saveSetting({ endpoint: $('s-endpoint').value }));
-$('s-fallback').addEventListener('change', () =>
-  saveSetting({ fallbackEndpoint: $('s-fallback').value }),
-);
+// ---- consent for what sync sends -------------------------------------------
+//
+// The manifest declares `authenticationInfo` and `personallyIdentifyingInfo` as
+// *optional* data collection, which is accurate: nothing leaves the machine
+// until a server is configured. But optional data-collection permissions are
+// real permissions in Firefox's model — off until granted, listed in
+// about:addons under Permissions and Data, and revocable there.
+//
+// Declaring them and never asking would mean about:addons showing both switched
+// off while the vault syncs, which contradicts the extension's own declaration
+// and the requirement that a person affirmatively consents before personal data
+// is transmitted. So the ask happens where the decision is made: at the moment
+// somebody puts an address in the box.
+//
+// It has to run inside the event handler. `permissions.request` needs a user
+// gesture, and awaiting anything first spends it.
+const SYNC_DATA = ['authenticationInfo', 'personallyIdentifyingInfo'];
+
+async function consentToSync() {
+  const api = globalThis.browser?.permissions;
+  // Firefox before 140 has no data_collection in the permissions model. Nothing
+  // to ask, and nothing that would show in about:addons either.
+  if (!api?.request) return true;
+  try {
+    return await api.request({ data_collection: SYNC_DATA });
+  } catch {
+    // An older build that does not know the key rejects rather than returning
+    // false. Not a refusal by the person, so not treated as one.
+    return true;
+  }
+}
+
+/** Save an address, having first asked to send anything to it. */
+async function saveEndpoint(field, key) {
+  const value = $(field).value.trim();
+
+  // Clearing the box is switching sync off. Nothing to consent to.
+  if (value && !(await consentToSync())) {
+    $(field).value = '';
+    endpointStatus(field === 's-endpoint' ? 'endpoint' : 'fallback',
+      'Not saved: syncing needs permission to send your passwords and addresses to that server.', 'bad');
+    return;
+  }
+  await saveSetting({ [key]: value });
+}
+
+$('s-endpoint').addEventListener('change', () => saveEndpoint('s-endpoint', 'endpoint'));
+$('s-fallback').addEventListener('change', () => saveEndpoint('s-fallback', 'fallbackEndpoint'));
 $('s-insecure').addEventListener('change', () =>
   saveSetting({ allowInsecure: $('s-insecure').checked }),
 );

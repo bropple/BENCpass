@@ -29,6 +29,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history, so `git describe` can find the previous tag. The
+          # default shallow checkout has no HEAD^ at all, which made the release
+          # notes range below a silent no-op on every run rather than only the
+          # first.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -64,7 +70,6 @@ jobs:
             echo "Run: node tools/check-version.mjs $tag"
             exit 1
           fi
-          echo "version=$manifest" >> "$GITHUB_ENV"
 
       # The full suite, again, on the exact commit being released. CI has
       # already run it — but CI runs on a branch and this runs on a tag, and the
@@ -94,13 +99,17 @@ jobs:
       # minified bundle, and tools/vendor.sh is the recipe that produces it from
       # the pinned lockfile.
       - name: Sign
+        env:
+          # Through the environment rather than the command line. GitHub masks
+          # both either way; this keeps them out of the process arguments too,
+          # which is the one place on the runner they would otherwise be visible.
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
           npx web-ext sign \
             --source-dir=src \
             --artifacts-dir=build/ext \
-            --channel=unlisted \
-            --api-key="${{ secrets.AMO_JWT_ISSUER }}" \
-            --api-secret="${{ secrets.AMO_JWT_SECRET }}"
+            --channel=unlisted
 
       - name: Find what came back
         run: |

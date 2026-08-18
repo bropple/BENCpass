@@ -113,7 +113,12 @@ if [ "${1:-}" = "shot" ]; then
     echo "  screenshots/$1.png"
   }
 
+    # Both generated pages. The toast is a separate document with its own
+    # swapped script, and checking only the manager left exactly the hole this
+    # check exists to close — a moved toast-preview.js would still have produced
+    # three clean screenshots of a prompt that never drew itself.
     check_scripts "$gen" || exit 1
+    check_scripts "$toast_gen" || exit 1
 
 echo "screenshots:"
   # Gate states, at the size the gate is actually used at.

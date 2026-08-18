@@ -71,9 +71,17 @@ const code = sources(join(root, 'src')).map(stripProse).join('\n');
  * permission needs no entry here. The exceptions are the ones whose API is not
  * named after them.
  */
+// Word-bounded, all of them. Without a left boundary `browser.bookmarks.` also
+// matches `mybrowser.bookmarks.`, and `connectNative` matches inside
+// `reconnectNativeThing` — both demonstrated hiding an unused permission behind
+// a name that merely ends the right way.
+//
+// Word characters only, not a preceding dot: every reach for an API here is
+// written `globalThis.browser?.…`, so excluding `.` rejects the real calls and
+// reports the whole extension as using nothing.
 const SPECIAL = {
-  nativeMessaging: /connectNative|sendNativeMessage/,
-  idle: /browser\??\.idle\??\./,
+  nativeMessaging: /\b(?:connectNative|sendNativeMessage)\b/,
+  idle: /(?<![\w$])browser\??\.idle\??\./,
   clipboardWrite: /navigator\.clipboard|execCommand\(\s*['"]copy/,
   activeTab: /browser\.tabs\./,
   // Host permissions are not APIs. They are matched by pattern below and are
@@ -91,7 +99,7 @@ for (const p of manifest.permissions ?? []) {
   // reach for an API that may be absent is written here, so a rule demanding
   // plain dots matches none of them — and the check passed anyway, because the
   // comments beside those calls spell the API out. Two holes cancelling out.
-  const rule = SPECIAL[p] ?? new RegExp(`browser\\??\\.${p}\\??\\.`);
+  const rule = SPECIAL[p] ?? new RegExp(`(?<![\\w$])browser\\??\\.${p}\\??\\.`);
   if (!rule.test(code)) unused.push(p);
 }
 
