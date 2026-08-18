@@ -25,12 +25,54 @@ fi
 
 # ---- find a certificate ------------------------------------------------------
 
-identity=$(security find-identity -v -p codesigning 2>/dev/null |
-  grep -E 'Apple Development|Mac Developer|Developer ID Application' | head -1 || true)
+find_identity() {
+  security find-identity -v -p codesigning 2>/dev/null |
+    grep -E 'Apple Development|Mac Developer|Developer ID Application' | head -1 || true
+}
+
+identity=$(find_identity)
+
+# A .p12 in cert/ is no use to codesign, which reads identities from a keychain
+# rather than from a file. Offer to put it in one.
+if [ -z "$identity" ]; then
+  p12=""
+  for f in "$root"/cert/*.p12 "$root"/cert/*.P12; do
+    # AppleDouble sidecars share the extension and are not certificates.
+    case ${f##*/} in ._*) continue ;; esac
+    [ -f "$f" ] && p12="$f" && break
+  done
+
+  if [ -n "$p12" ]; then
+    echo "found $p12, which is not in a keychain yet."
+    echo "Importing it into your login keychain, for codesign only."
+    printf 'Passphrase you set when exporting it: '
+    stty -echo 2>/dev/null || true
+    read -r p12pass
+    stty echo 2>/dev/null || true
+    echo
+
+    if security import "$p12" -k "$HOME/Library/Keychains/login.keychain-db" \
+         -P "$p12pass" -T /usr/bin/codesign 2>"$work/import.err"; then
+      echo "imported."
+      echo
+    else
+      echo "Could not import it:" >&2
+      sed 's/^/  /' "$work/import.err" >&2
+      echo >&2
+      echo "A wrong passphrase reports as 'MAC verification failed', which does" >&2
+      echo "not sound like a wrong passphrase but usually is." >&2
+      exit 1
+    fi
+    p12pass=""
+    identity=$(find_identity)
+  fi
+fi
 
 if [ -z "$identity" ]; then
   cat >&2 <<'EOF'
 No Apple code-signing certificate found on this Mac.
+
+Nothing in cert/ either, or it did not import.
 
 To make one — free, with the Apple ID you already have:
 

@@ -5,6 +5,10 @@
 # ends up inside a packaged extension.
 build/
 
+# Signing material. A .p12 holds a private key — the one thing in this
+# repository that could not be regenerated and must never be committed.
+cert/
+
 # Dependencies
 node_modules/
 
