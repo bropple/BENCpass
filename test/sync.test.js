@@ -527,6 +527,58 @@ test('each attempt is signed for the address it is actually sent to', async () =
   assert.match(sent[0].headers['X-Bencpass-Nonce'], /^[0-9a-f]{32}$/);
 });
 
+test('the port is part of what is signed, not just the hostname', async () => {
+  // Two addresses for one machine, differing only by port — a second instance,
+  // or something else that answered on the port the first one used to. The
+  // test above uses two different names, so a signature that quietly dropped
+  // the port would still pass it; this is the case that notices.
+  const sent = [];
+  const fetch = (url, init) => {
+    sent.push({ url, headers: init.headers });
+    if (url.includes(':8788')) return Promise.reject(new Error('unreachable'));
+    return Promise.resolve(okResponse({}));
+  };
+
+  const key = new Uint8Array(32);
+  const client = new SyncClient({
+    endpoints: ['http://box:8788', 'http://box:9999'],
+    deviceId: 'd',
+    key,
+    fetch,
+    probeTimeoutMs: 20,
+  });
+  await client.request('GET', '/v1/changes?since=0');
+
+  assert.equal(sent.length, 2);
+  const ports = ['box:8788', 'box:9999'];
+
+  for (const [i, attempt] of sent.entries()) {
+    const common = {
+      method: 'GET',
+      path: '/v1/changes?since=0',
+      ts: attempt.headers['X-Bencpass-Time'],
+      nonce: attempt.headers['X-Bencpass-Nonce'],
+      body: new Uint8Array(0),
+    };
+    assert.equal(
+      attempt.headers['X-Bencpass-Sig'],
+      await expectedSig(key, { ...common, host: ports[i] }),
+      `attempt ${i} was not signed for ${ports[i]}`,
+    );
+    assert.notEqual(
+      attempt.headers['X-Bencpass-Sig'],
+      await expectedSig(key, { ...common, host: ports[1 - i] }),
+      `attempt ${i} would also have been accepted on the other port`,
+    );
+    // The bare hostname must not be what was signed.
+    assert.notEqual(
+      attempt.headers['X-Bencpass-Sig'],
+      await expectedSig(key, { ...common, host: 'box' }),
+      `attempt ${i} was signed for the hostname with the port dropped`,
+    );
+  }
+});
+
 test('an address that hangs is abandoned rather than waited out', async () => {
   // A LAN address on a foreign network does not refuse; there is nothing there
   // to refuse. Without a bound on the attempt this is a TCP timeout every sync.

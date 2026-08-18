@@ -82,7 +82,25 @@ func TestTheSweepDoesNotForgetWhatItShouldKeep(t *testing.T) {
 		t.Fatal("a nonce was still held long after any request carrying it had expired")
 	}
 
-	if len(s.when) > 40 {
+	// And the sweep has actually deleted, rather than merely letting entries
+	// expire logically. The distinction is the whole reason the sweep exists:
+	// the membership check above refuses a stale nonce whether or not anything
+	// was ever removed, so without looking in the map, a server that never
+	// collects is indistinguishable from one that does -- until it runs for a
+	// month.
+	//
+	// Checked by asking for a specific long-dead key rather than by counting.
+	// A count is only as good as the number it is compared against, and an
+	// earlier version of this test compared against the exact number of inserts
+	// it made, so the assertion could not fire under any implementation at all.
+	if _, held := s.when["device\x00n2"]; held {
+		t.Fatal("a nonce nineteen minutes past its lifetime is still in the map")
+	}
+
+	// Roughly the entries from the last ten minutes, plus the one the probe
+	// above put back. Generous, because the sweep cadence means a few may
+	// linger; tight enough that a sweep which never runs fails here.
+	if len(s.when) > 25 {
 		t.Fatalf("the sweep is not collecting: %d entries held", len(s.when))
 	}
 }
