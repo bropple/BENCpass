@@ -350,6 +350,20 @@ func probe() -> [String: Any] {
 
     var results: [String: Int32] = [:]
     let id = "probe-\(UInt32.random(in: 0..<UInt32.max))"
+
+    // A plain item with no access control at all, which is what an ordinary
+    // command-line tool stores. If this works where the biometric one does not,
+    // there is a weaker design available — the secret protected by the login
+    // keychain, and the fingerprint enforced by this program rather than by the
+    // hardware. Worth knowing precisely, because it is a real reduction and the
+    // choice belongs to whoever runs it.
+    for keychain in KEYCHAINS {
+        var plain = query("\(id)-plain", dataProtection: keychain.dataProtection)
+        plain[kSecValueData as String] = Data("probe".utf8)
+        results["\(keychain.name), no access control"] = SecItemAdd(plain as CFDictionary, nil)
+        SecItemDelete(query("\(id)-plain", dataProtection: keychain.dataProtection) as CFDictionary)
+    }
+
     for keychain in KEYCHAINS {
         var add = query(id, dataProtection: keychain.dataProtection)
         add[kSecValueData as String] = Data("probe".utf8)
