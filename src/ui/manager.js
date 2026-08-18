@@ -266,7 +266,14 @@ async function refreshBiometrics() {
   }
 }
 
+// True while a prompt is on screen. Without it the on-sight prompt and a
+// PROMPT_BIO arriving together would raise two sheets for one intention, and
+// the second would be waiting behind the first for a finger that already came.
+let prompting = false;
+
 async function unlockWithBiometrics() {
+  if (prompting) return;
+  prompting = true;
   $('gate-bio-text').textContent = 'Waiting for you…';
 
   let secret;
@@ -281,11 +288,13 @@ async function unlockWithBiometrics() {
     $('gate-bio-text').textContent =
       err?.name === 'NotAllowedError' ? 'Cancelled.' : `${bioName()} is not available just now.`;
     showPasswordBox = true;
+    prompting = false;
     refreshBiometrics();
     return;
   }
 
   const reply = await askBackground(MSG.BIO_UNLOCK, { secret: toB64(secret) });
+  prompting = false;
   if (reply?.ok) {
     state.vault = vaultHost.vault;
     enterApp();
@@ -524,15 +533,46 @@ function lock(why = '') {
   $('gate-hint').textContent = why || 'Locked.';
   $('gate-pw').focus();
 
-  // A fresh visit to the gate, so the fingerprint is offered again — including
-  // after someone chose the password box last time. Locking is the end of a
-  // session, not a standing preference.
-  promptedThisVisit = false;
+  // The fingerprint is offered again — including after someone chose the
+  // password box last time, because that was a decision about one unlock and
+  // not a standing preference. Offered, though, and deliberately not raised:
+  // the on-sight prompt is left spent.
+  //
+  // Locking is a request for the vault to be shut, and a Touch ID sheet that
+  // appears the instant you press Lock is the lock undoing itself — the only
+  // way past it is to cancel a dialog nobody asked for. The auto-lock is the
+  // same mistake with a sharper edge: it fires when nobody is at the machine,
+  // so the sheet is raised at an empty desk, where it either waits for a
+  // passer-by or simply advertises that this vault opens with a finger.
+  //
+  // Arriving at the gate is still a request to unlock, and still prompts:
+  // boot() leaves this flag clear on the way in.
+  promptedThisVisit = true;
   showPasswordBox = false;
   refreshBiometrics();
 }
 
 $('lock-btn').addEventListener('click', () => lock());
+
+// Somebody asked to unlock from somewhere that cannot prompt: the menu on a
+// password field, or the toolbar. Opening the manager fresh raises the prompt
+// on its own, so this is for the surfaces that were already open and sitting
+// at a locked gate -- above all the sidebar, which is not a tab and so is
+// never the one the background finds and focuses.
+//
+// This is also what makes locking deliberately quiet safe to do. The prompt is
+// not raised again until it is asked for, and asking to fill a password is
+// asking for it.
+// Optional-chained like every other reach for the extension APIs in this file:
+// preview.sh serves these pages over plain http with no `browser` at all, and a
+// listener registered at load would take the whole document down with it.
+globalThis.browser?.runtime?.onMessage?.addListener((msg) => {
+  if (msg?.type !== MSG.PROMPT_BIO) return;
+  if (!state.vault?.locked) return;
+  promptedThisVisit = false;
+  showPasswordBox = false;
+  refreshBiometrics();
+});
 for (const ev of ['keydown', 'pointerdown']) {
   document.addEventListener(ev, bumpAutolock, { passive: true });
 }

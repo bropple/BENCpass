@@ -555,6 +555,7 @@ async function handleOpenManager(_msg, sender) {
   if (existing) {
     await browser.tabs.update(existing.id, { active: true });
     await browser.windows.update(existing.windowId, { focused: true }).catch(() => {});
+    promptForUnlock();
     return { ok: true };
   }
 
@@ -564,6 +565,25 @@ async function handleOpenManager(_msg, sender) {
   // first place; the tab closes itself once the vault opens.
   if (sender.tab?.id !== undefined) unlockReturns.set(tab.id, sender.tab.id);
   return { ok: true, via: 'tab' };
+}
+
+/**
+ * Ask whatever manager surface is already open to raise the fingerprint prompt.
+ *
+ * A manager that is opened fresh prompts on the way in, so this is for the two
+ * cases where there is no way in: a tab that already existed and was merely
+ * focused, and the sidebar, which is not a tab and so is never found by the
+ * query above at all. Both are otherwise a locked gate with a button on it,
+ * reached by someone who has already said what they want.
+ *
+ * Broadcast rather than aimed, because the sidebar has no address. Every other
+ * extension page ignores it, and a manager that is not locked ignores it too.
+ */
+function promptForUnlock() {
+  browser.runtime.sendMessage({ type: MSG.PROMPT_BIO }).catch(() => {
+    // Nothing listening. Routine: the popup may have closed, and a manager tab
+    // created a moment ago is not up yet -- and that one prompts by itself.
+  });
 }
 
 /** Manager tabs opened purely to unlock, and the tab to return to after. */

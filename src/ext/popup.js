@@ -104,6 +104,10 @@ let showPasswordBox = false;
 async function unlockWithBiometrics() {
   try {
     await browser.sidebarAction.open();
+    // Opening a sidebar that was already open does nothing at all, and if it
+    // was sitting at a locked gate it has already spent its prompt. Say what
+    // the click meant; a sidebar that is not locked ignores it.
+    await send({ type: MSG.PROMPT_BIO });
   } catch {
     await send({ type: MSG.OPEN_MANAGER });
   }
