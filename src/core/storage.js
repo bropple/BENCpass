@@ -7,8 +7,16 @@
 //
 // Everything written through these is already encrypted. `browser.storage.local`
 // is an unencrypted IndexedDB inside the Firefox profile directory, readable by
-// anyone with the profile — which is fine, and only fine because nothing
-// readable goes into it.
+// anyone with the profile — which is fine, because what goes through here opens
+// nothing on its own.
+//
+// One thing stored beside the vault is not written through here and is not
+// ciphertext: the sync device key, in settings. It authenticates this machine
+// to the server, so reading it off a stolen profile buys the ability to push
+// and pull ciphertext and to mint enrolment codes — not to decrypt anything.
+// The vault key never touches storage in any form. Said plainly because an
+// earlier version of this note claimed nothing readable was stored at all,
+// which was not true and would have been a bad thing to be wrong about.
 
 const KEY = 'bencpass.vault';
 

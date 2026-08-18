@@ -28,7 +28,6 @@
     "idle",
     "notifications",
     "menus",
-    "nativeMessaging",
     "<all_urls>"
   ],
   "background": {
