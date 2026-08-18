@@ -964,6 +964,30 @@ async function handleBioState() {
   };
 }
 
+/**
+ * The device secret as it arrives in a message, decoded and checked.
+ *
+ * It is derived in a document — WebAuthn will not run here — and crosses as
+ * base64, because a string survives every messaging path without argument. The
+ * bytes are recovered the same way the device key is above; anything that is
+ * not a string, not base64, or not exactly the 32 bytes PRF produces comes back
+ * null, which the callers turn into a refusal with a reason. Length is checked
+ * here rather than left to the vault so that a truncated value never reaches
+ * the crypto at all.
+ */
+function secretFrom(msg) {
+  const encoded = asString(msg.secret, 128);
+  if (!encoded) return null;
+  let raw;
+  try {
+    raw = atob(encoded);
+  } catch {
+    return null;
+  }
+  if (raw.length !== 32) return null;
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
 async function handleBioEnrol(msg) {
   if (!vault) return { ok: false, reason: 'no-vault' };
 
