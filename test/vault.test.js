@@ -444,3 +444,18 @@ test('a tombstone flipped to live stays deleted', async () => {
 
   assert.equal(reopened.list().length, 0, 'a deleted record came back');
 });
+
+test('a record cannot seal its own disappearance', async () => {
+  // `deleted` in a sealed body is what a reader takes as proof a record was
+  // removed. A record carrying it would vanish at the next unlock with its
+  // ciphertext intact and nothing to point at — so it never survives into one.
+  const v = await Vault.create({ password: 'hunter2', kdf: FAST });
+  const id = await v.add({ title: 'Still here', password: 'x', deleted: true });
+
+  assert.equal(v.get(id).deleted, undefined, 'a record kept a tombstone marker');
+
+  const reopened = Vault.load(v.toJSON());
+  await reopened.unlock('hunter2');
+  assert.equal(reopened.list().length, 1, 'a record sealed its own disappearance');
+  assert.equal(reopened.get(id).title, 'Still here');
+});

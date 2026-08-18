@@ -121,6 +121,17 @@ export function newRecord(fields = {}, now = Date.now()) {
     timesUsed: 0,
   };
 
+  // A record is never a tombstone. `deleted` in a sealed body is what a reader
+  // takes as proof that a record was removed — see unlockWithVaultKey — so a
+  // record carrying it would seal its own disappearance and become invisible
+  // after the next unlock, with the ciphertext intact and nothing to point at.
+  //
+  // Nothing reaches here with it today: the importer builds fields key by key
+  // from the known sets. But this is a public entry point and the spread above
+  // takes whatever it is handed, so the guarantee belongs here rather than in
+  // the discipline of every future caller.
+  delete rec.deleted;
+
   if (type === LOGIN) {
     // Set even when the password starts empty: an entry that later gains one
     // should not read as "changed at the dawn of time".
@@ -196,6 +207,10 @@ export function normalise(input, now = Date.now()) {
     lastUsed: lastUsed.t,
     timesUsed: Number.isFinite(input.timesUsed) ? input.timesUsed : 0,
   };
+
+  // See newRecord: a record is never a tombstone, and this spread is fed by
+  // importRecords, which is public and may one day be handed raw parsed JSON.
+  delete rec.deleted;
 
   let pwClaimed = null;
   if (type === LOGIN) {
