@@ -10,6 +10,7 @@ import { pickStorage } from '../core/storage.js';
 import { generate, entropyBits } from '../core/generate.js';
 import { ADDRESS_SCHEMA, countryOptions, countryName, splitName } from '../core/address.js';
 import { MSG } from '../ext/protocol.js';
+import * as webauthn from '../ext/webauthn.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -185,31 +186,18 @@ async function boot() {
 // it appears.
 
 const bio = {
-  available: false,
-  enrolled: false,
-  biometrics: 'none',
-  possible: false,
+  available: false, // an authenticator is present and this browser does PRF
+  enrolled: false, // this vault carries the second wrapping
+  credentialId: '',
+  os: '',
   reason: '',
-  blocked: '',
-  hostVersion: '',
 };
 
-// Guarded on there being something to ask rather than on `vaultHost.shared`,
-// which is a statement about where the vault lives and not about whether a
-// message can be sent. If the background is gone the send rejects and this
-// returns null, which is the same answer by a shorter route.
-const askBackground = async (type, extra = {}) => {
-  if (!globalThis.browser?.runtime?.sendMessage) return null;
-  try {
-    return await browser.runtime.sendMessage({ type, ...extra });
-  } catch {
-    return null;
-  }
-};
+const toB64 = (u8) => btoa(String.fromCharCode(...u8));
 
 /** What to call it, in the words the platform uses for itself. */
 const bioName = () =>
-  bio.biometrics === 'touchid' ? 'Touch ID' : bio.biometrics === 'hello' ? 'Windows Hello' : '';
+  bio.os === 'mac' ? 'Touch ID' : bio.os === 'win' ? 'Windows Hello' : 'your security key';
 
 // Raised once when the gate appears. A prompt that returns the instant it is
 // dismissed cannot be dismissed.
@@ -218,19 +206,18 @@ let showPasswordBox = false;
 
 async function refreshBiometrics() {
   const reply = await askBackground(MSG.BIO_STATE);
+  // Two halves. The background knows whether this vault is enrolled; only a
+  // document can ask whether there is an authenticator to enrol against.
+  const here = await webauthn.available();
+
   Object.assign(bio, {
-    available: Boolean(reply?.available),
+    available: Boolean(here.ok),
     enrolled: Boolean(reply?.enrolled),
-    biometrics: reply?.biometrics ?? 'none',
-    possible: Boolean(reply?.possible),
-    reason: reply?.reason ?? '',
-    blocked: reply?.blocked ?? '',
-    hostVersion: reply?.hostVersion ?? '',
+    credentialId: reply?.credentialId ?? '',
+    os: reply?.os ?? '',
+    reason: here.reason ?? '',
   });
 
-  // Usable means all three: a host is installed, the machine can take a
-  // fingerprint today, and this vault carries the second wrapping. Any less and
-  // the button would be one that fails.
   const usable = bio.available && bio.enrolled && $('gate').dataset.mode !== 'setup';
 
   $('gate-bio-panel').hidden = !usable;
@@ -238,16 +225,11 @@ async function refreshBiometrics() {
   $('gate-bio').textContent = `Unlock with ${bioName()}`;
   if (usable && !showPasswordBox) {
     $('gate-bio-text').textContent = `Unlock with ${bioName()}.`;
-    // setGate focuses the password box on the way in, and it has just been
-    // hidden underneath this panel.
     $('gate-bio').focus();
   }
 
   renderBioSetting();
 
-  // Ask straight away rather than waiting to be clicked. Opening the manager
-  // while locked *is* the request to unlock it; making someone press one more
-  // button first is the errand the fingerprint was enrolled to save.
   if (usable && !showPasswordBox && !promptedThisVisit) {
     promptedThisVisit = true;
     unlockWithBiometrics();
@@ -256,24 +238,30 @@ async function refreshBiometrics() {
 
 async function unlockWithBiometrics() {
   $('gate-bio-text').textContent = 'Waiting for you…';
-  const reply = await askBackground(MSG.BIO_UNLOCK);
-  if (reply?.ok) {
-    state.vault = vaultHost.vault;
-    enterApp();
-    return;
-  }
-
-  // Cancelling is a decision, not a fault. Offer the password rather than
-  // scolding, and do not raise the prompt again unasked.
-  if (reply?.reason === 'cancelled') {
-    $('gate-bio-text').textContent = 'Cancelled.';
-    return;
-  }
-  if (reply?.reason === 'stale-secret') {
+  try {
+    // The prompt belongs to the browser and the hardware. Nothing here sees
+    // anything but the 32 bytes that come back.
+    const secret = await webauthn.derive({ credentialId: bio.credentialId });
+    const reply = await askBackground(MSG.BIO_UNLOCK, { secret: toB64(secret) });
+    if (reply?.ok) {
+      state.vault = vaultHost.vault;
+      enterApp();
+      return;
+    }
+    if (reply?.reason === 'stale-secret') {
+      $('gate-bio-text').textContent =
+        `${bioName()} no longer matches this vault, so it has been turned off.`;
+    } else {
+      $('gate-bio-text').textContent = `Could not unlock (${reply?.reason ?? 'error'}).`;
+    }
+  } catch (err) {
+    // Cancelling is a decision, not a fault, and NotAllowedError is what both a
+    // dismissal and a timeout look like.
     $('gate-bio-text').textContent =
-      `${bioName()} no longer matches this vault, so it has been turned off.`;
-  } else {
-    $('gate-bio-text').textContent = `${bioName()} is not available just now.`;
+      err?.name === 'NotAllowedError' ? 'Cancelled.' : `${bioName()} failed: ${err?.message ?? err}`;
+    showPasswordBox = true;
+    refreshBiometrics();
+    return;
   }
   showPasswordBox = true;
   refreshBiometrics();
@@ -296,40 +284,24 @@ $('gate-use-password').addEventListener('click', () => {
  * how it looked like it had not shipped.
  */
 function renderBioSetting() {
-  const name = bioName() || 'Biometric unlock';
+  const name = bioName();
   $('s-bio-name').textContent = name;
   $('s-bio-btn').hidden = !bio.available;
   $('s-bio-btn').textContent = bio.enrolled ? 'Turn off' : 'Turn on';
 
   if (bio.available) {
     $('s-bio-note').textContent = bio.enrolled
-      ? `On for this machine. Your master password still works, and still opens it anywhere else.`
-      : `Available on this machine. You will be asked for your master password once.`;
+      ? `On for this machine. Your master password still works, and still opens this vault anywhere else.`
+      : `Available on this machine. You will be asked for your master password once, and for ${name} straight after.`;
     return;
   }
 
-  if (bio.blocked === 'needs-apple-profile') {
-    // Built, tested, and waiting on Apple rather than on us.
-    $('s-bio-note').textContent =
-      'Not available on macOS yet. Everything for it is built — the host, the Secure Enclave key, the sealing — but macOS will only authorise the keychain entitlement with an Apple provisioning profile, which needs a paid developer account and an annual renewal. Software-enforced Touch ID was the alternative and is not worth having. See hosts/macos/README.md.';
-    return;
-  }
-
-  if (!bio.possible) {
-    // Linux. Not "there is no fingerprint reader support" — fprintd is real and
-    // widely used — but that it answers a question rather than withholding a
-    // key, and a program that wants the secret can decline to ask it.
-    $('s-bio-note').textContent =
-      'Not available from a built-in reader on this system. Linux has fingerprint services, but they answer yes or no rather than holding a key back, so the check could be skipped by anything able to read the secret. A FIDO2 key with user verification would be hardware-backed and is the route worth building.';
-    return;
-  }
-
-  // The case that produced "no Touch ID option anywhere": the platform can do
-  // it, and the helper that reaches the keystore has simply not been built yet.
+  // No authenticator, or a browser without PRF. Nothing to install and nothing
+  // to fix here — it is a property of the machine in front of you.
   $('s-bio-note').textContent =
-    bio.reason === 'no-host' || bio.reason === 'unsupported'
-      ? 'Not set up on this machine yet. A small helper program has to be built and registered first — run hosts/install.sh from the repository, then restart the browser.'
-      : 'The helper is installed, but this machine reports no enrolled fingerprint. Set one up in system settings first.';
+    bio.reason === 'no-webauthn'
+      ? 'This browser does not support WebAuthn.'
+      : 'No authenticator on this machine. A Mac with Touch ID, a PC with Windows Hello, or a plugged-in security key would each do.';
 }
 
 $('s-bio-btn').addEventListener('click', async () => {
@@ -363,9 +335,31 @@ $('s-bio-form').addEventListener('submit', async (e) => {
   const password = $('s-bio-pw').value;
   if (!password) return;
 
+  $('s-bio-error').textContent = `Asking for ${bioName()}…`;
+  let credentialId;
+  let secret;
+  try {
+    // Done here rather than in the background because WebAuthn needs a document
+    // and the user gesture that submitted this form.
+    ({ credentialId, secret } = await webauthn.enrol());
+  } catch (err) {
+    $('s-bio-pw').value = '';
+    $('s-bio-error').textContent =
+      err?.name === 'NotAllowedError'
+        ? 'Cancelled.'
+        : err?.code === 'no-prf'
+          ? 'This authenticator cannot derive a key, so it cannot unlock the vault.'
+          : `Could not enrol: ${err?.message ?? err}`;
+    return;
+  }
+
   // Argon2 at 128 MiB blocks for a moment. Say so rather than looking dead.
   $('s-bio-error').textContent = 'Deriving key…';
-  const reply = await askBackground(MSG.BIO_ENROL, { password });
+  const reply = await askBackground(MSG.BIO_ENROL, {
+    password,
+    credentialId,
+    secret: toB64(secret),
+  });
   $('s-bio-pw').value = '';
 
   if (reply?.ok) {
@@ -376,401 +370,12 @@ $('s-bio-form').addEventListener('submit', async (e) => {
   }
 
   await refreshBiometrics();
-  $('s-bio-btn').hidden = true; // the form stays up so it can be tried again
-  const said = {
-    'bad-password': 'That is not the master password.',
-    unavailable: 'This machine reports no enrolled fingerprint.',
-    cancelled: 'Cancelled.',
-    'no-host': 'The helper is not installed. Run hosts/install.sh, then restart the browser.',
-  };
-  // `detail` is whatever the host said went wrong — an OSStatus, usually. It is
-  // not pretty, and it is the only thing that distinguishes one keystore
-  // failure from another, so it is shown rather than swallowed.
+  $('s-bio-btn').hidden = true;
   $('s-bio-error').textContent =
-    (said[reply?.reason] ?? `Could not turn it on (${reply?.reason ?? 'error'}).`) +
-    (reply?.detail ? ` ${reply.detail}` : '');
+    reply?.reason === 'bad-password'
+      ? 'That is not the master password.'
+      : `Could not turn it on (${reply?.reason ?? 'error'}).`;
 });
-
-function setGate(mode) {
-  const setup = mode === 'setup';
-  $('gate-confirm-field').hidden = !setup;
-  $('gate-pw2').required = setup;
-  $('gate-go').textContent = setup ? 'Create vault' : 'Unlock';
-  $('gate-hint').textContent = setup ? 'No vault on this machine.' : 'Locked.';
-  $('gate-note').textContent = setup
-    ? 'The master password is not recoverable. Nothing here, and nothing on the server, can open the vault without it.'
-    : '';
-  $('gate-pw').autocomplete = setup ? 'new-password' : 'current-password';
-  $('gate').dataset.mode = mode;
-  $('gate-pw').focus();
-}
-
-// ---- gate ------------------------------------------------------------------
-
-$('gate-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const pw = $('gate-pw').value;
-  const err = $('gate-error');
-  err.hidden = true;
-
-  const btn = $('gate-go');
-  const label = btn.textContent;
-  // Argon2 at 128 MiB blocks this thread for ~400 ms. Say so rather than
-  // letting the button look dead — but say it flatly.
-  btn.disabled = true;
-  btn.textContent = 'Deriving key';
-  await new Promise((r) => setTimeout(r, 0));
-
-  try {
-    if ($('gate').dataset.mode === 'setup') {
-      if (pw !== $('gate-pw2').value) throw new Error('The two entries do not match.');
-      if (pw.length < 8) throw new Error('Use at least 8 characters.');
-      state.vault = await Vault.create({ password: pw });
-      vaultHost.setVault(state.vault);
-      await persist();
-    } else {
-      await state.vault.unlock(pw);
-    }
-    enterApp();
-  } catch (ex) {
-    // The one deliberately ambiguous message in the app. It stays ambiguous —
-    // saying which of the two it was would tell someone holding the file
-    // whether a guess was close.
-    err.textContent =
-      ex.code === 'unwrap-failed'
-        ? 'Wrong password, or this vault is damaged.'
-        : ex.message;
-    err.hidden = false;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = label;
-    $('gate-pw').value = '';
-    $('gate-pw2').value = '';
-  }
-});
-
-function enterApp() {
-  // Tell the background the vault is open. If this page was opened purely to
-  // unlock — from the menu on a login form — it closes itself and puts the
-  // person back where they were, rather than stranding them in a tab they did
-  // not ask for.
-  if (vaultHost?.shared) {
-    globalThis.browser?.runtime?.sendMessage({ type: 'unlocked' }).catch(() => {});
-  }
-
-  $('visor').setAttribute('fill', 'var(--good)');
-  $('gate').hidden = true;
-  $('app').hidden = false;
-  bumpAutolock();
-  render();
-  refreshBiometrics();
-  $('search').focus();
-}
-
-function lock(why = '') {
-  vaultHost?.lock();
-  state.selected = null;
-  state.editing = null;
-  clearTimeout(revealTimer);
-  state.revealed = false;
-  state.editRevealed = false;
-
-  // Clear the DOM as well as the vault. A locked vault with the last password
-  // still sitting in a span is not locked.
-  $('list').replaceChildren();
-  $('d-password').textContent = '';
-  $('d-username').textContent = '';
-  $('d-notes').textContent = '';
-  $('e-password').value = '';
-  $('search').value = '';
-
-  $('settings').hidden = true;
-  $('app').hidden = true;
-  $('gate').hidden = false;
-  $('visor').setAttribute('fill', 'var(--bad)');
-  $('gate-hint').textContent = why || 'Locked.';
-  $('gate-pw').focus();
-
-  // A fresh visit to the gate, so the fingerprint is offered again — including
-  // after someone chose the password box last time. Locking is the end of a
-  // session, not a standing preference.
-  promptedThisVisit = false;
-  showPasswordBox = false;
-  refreshBiometrics();
-}
-
-$('lock-btn').addEventListener('click', () => lock());
-for (const ev of ['keydown', 'pointerdown']) {
-  document.addEventListener(ev, bumpAutolock, { passive: true });
-}
-
-// ---- persistence -----------------------------------------------------------
-
-const persist = () => vaultHost.persist();
-
-// ---- rendering -------------------------------------------------------------
-
-function render() {
-  renderList();
-  renderDetail();
-  const n = state.vault.list(state.section).length;
-  const noun = state.section === 'address' ? 'address' : 'entry';
-  const plural = state.section === 'address' ? 'addresses' : 'entries';
-  $('foot-count').textContent = `${n} ${n === 1 ? noun : plural}`;
-}
-
-function renderList() {
-  const items = state.vault
-    .search($('search').value, state.section)
-    .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-
-  $('list-empty').hidden = items.length > 0;
-  $('list-empty').textContent = $('search').value.trim()
-    ? 'Nothing matches.'
-    : state.section === 'address'
-      ? 'No addresses.'
-      : 'No entries.';
-
-  $('list').replaceChildren(
-    ...items.map((r) => {
-      const li = document.createElement('li');
-      li.setAttribute('aria-selected', String(r.id === state.selected));
-      li.tabIndex = 0;
-
-      const title = document.createElement('span');
-      title.className = 'li-title';
-      title.textContent = r.title || '(untitled)';
-
-      const sub = document.createElement('span');
-      sub.className = 'li-sub';
-      sub.textContent =
-        r.type === 'address'
-          ? [r['address-line1'], r['address-level2']].filter(Boolean).join(', ') || '—'
-          : r.username || host(r.urls?.[0]) || '—';
-
-      li.append(title, sub);
-      li.addEventListener('click', () => select(r.id));
-      li.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(r.id); }
-      });
-      return li;
-    }),
-  );
-}
-
-function select(id) {
-  state.selected = id;
-  state.editing = null;
-  // Revealing one entry must not carry over to the next one clicked.
-  clearTimeout(revealTimer);
-  state.revealed = false;
-  state.editRevealed = false;
-  render();
-}
-
-function renderDetail() {
-  const editing = state.editing !== null;
-  const r = state.selected ? state.vault.get(state.selected) : null;
-
-  $('edit-form').hidden = !editing;
-  $('detail-view').hidden = editing || !r;
-  $('detail-empty').hidden = editing || !!r;
-
-  if (editing || !r) return;
-
-  $('d-title').textContent = r.title || '(untitled)';
-
-  const isAddress = r.type === 'address';
-  $('d-login').hidden = isAddress;
-  $('d-address').hidden = !isAddress;
-
-  if (isAddress) {
-    renderAddressDetail(r);
-    renderMeta(r);
-    return;
-  }
-
-  $('d-username').textContent = r.username || '—';
-  $('d-password').textContent = state.revealed ? r.password : '•'.repeat(12);
-  $('reveal-btn').textContent = state.revealed ? 'Hide' : 'Reveal';
-
-  $('d-urls-row').hidden = !r.urls?.length;
-  $('d-urls').textContent = (r.urls ?? []).join('\n');
-  $('d-notes-row').hidden = !r.notes;
-  $('d-notes').textContent = r.notes ?? '';
-
-  renderMeta(r);
-}
-
-function renderAddressDetail(record) {
-  const r = withNameParts(record);
-  const box = $('d-address');
-  box.replaceChildren();
-
-  for (const { token, label, kind } of ADDRESS_FIELDS) {
-    if (!r[token]) continue;
-    const row = document.createElement('div');
-    row.className = 'row';
-
-    const name = document.createElement('span');
-    name.className = 'label';
-    name.textContent = label;
-
-    // The country is stored as its code, which is the right thing to store and
-    // the wrong thing to read: "GB" tells you less than "United Kingdom".
-    const shown = kind === 'country' ? countryName(r[token]) || r[token] : r[token];
-
-    const value = document.createElement('span');
-    value.className = 'value';
-    value.textContent = shown;
-
-    const copy = document.createElement('button');
-    copy.className = 'btn btn-sm';
-    copy.textContent = 'Copy';
-    copy.addEventListener('click', () => copyText(r[token], label));
-
-    row.append(name, value, copy);
-    box.append(row);
-  }
-
-  if (r.notes) {
-    const row = document.createElement('div');
-    row.className = 'row';
-    const name = document.createElement('span');
-    name.className = 'label';
-    name.textContent = 'Notes';
-    const value = document.createElement('span');
-    value.className = 'value wrap';
-    value.textContent = r.notes;
-    row.append(name, value);
-    box.append(row);
-  }
-}
-
-function renderMeta(r) {
-  const dl = $('d-meta');
-  dl.replaceChildren();
-
-  const add = (term, node) => {
-    const dt = document.createElement('dt');
-    dt.textContent = term;
-    const dd = document.createElement('dd');
-    if (typeof node === 'string') dd.textContent = node;
-    else dd.append(node);
-    dl.append(dt, dd);
-  };
-
-  add('Created', date(r.created));
-
-  if (r.type === 'address') {
-    add('Updated', date(r.updated));
-    if (r.claimedTime) {
-      const note = document.createElement('span');
-      note.className = 'age-warn';
-      note.textContent = `source claimed ${date(r.claimedTime)}`;
-      add('Imported', note);
-    }
-    return;
-  }
-
-  // The whole reason `passwordChanged` is kept separate from `updated`: only
-  // this can answer the question, and only if renaming an entry never touched it.
-  const days = Math.floor((Date.now() - r.passwordChanged) / 86_400_000);
-  const age = document.createElement('span');
-  age.textContent = `${date(r.passwordChanged)} (${days} ${days === 1 ? 'day' : 'days'})`;
-  age.className = days > 1095 ? 'age-bad' : days > 365 ? 'age-warn' : 'age-good';
-  add('Password set', age);
-
-  add('Last used', r.lastUsed ? `${date(r.lastUsed)} (${r.timesUsed}×)` : 'never');
-
-  if (r.history?.length) add('Previous', `${r.history.length} kept`);
-
-  // Reuse is checked across the whole vault, not against a breach list — no
-  // network call, and nothing leaves the machine to find it out.
-  const shared = state.vault
-    .list()
-    .filter((o) => o.id !== r.id && o.password && o.password === r.password);
-  if (shared.length) {
-    const warn = document.createElement('span');
-    warn.className = 'age-warn';
-    warn.textContent = `also on ${shared.map((o) => o.title || '(untitled)').join(', ')}`;
-    add('Reused', warn);
-  }
-
-  if (r.claimedTime) {
-    const note = document.createElement('span');
-    note.className = 'age-warn';
-    note.textContent = `source claimed ${date(r.claimedTime)}`;
-    add('Imported', note);
-  }
-}
-
-const date = (ms) => new Date(ms).toISOString().slice(0, 10);
-
-function host(url) {
-  try { return new URL(url).host; } catch { return url ?? ''; }
-}
-
-// ---- search ----------------------------------------------------------------
-
-$('search').addEventListener('input', renderList);
-
-for (const btn of document.querySelectorAll('.seg-btn')) {
-  btn.addEventListener('click', () => {
-    if (state.section === btn.dataset.section) return;
-    state.section = btn.dataset.section;
-    state.selected = null;
-    state.editing = null;
-    for (const b of document.querySelectorAll('.seg-btn')) {
-      b.setAttribute('aria-selected', String(b === btn));
-    }
-    render();
-  });
-}
-
-// ---- copying ---------------------------------------------------------------
-
-for (const btn of document.querySelectorAll('[data-copy]')) {
-  btn.addEventListener('click', () => copy(btn.dataset.copy));
-}
-
-async function copy(field) {
-  const r = state.vault.get(state.selected);
-  if (!r?.[field]) return;
-  await copyText(r[field], field, field === 'password');
-}
-
-/** Shared by the login rows and the address rows. */
-async function copyText(text, label, isSecret = false) {
-  if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    say('Clipboard refused.');
-    return;
-  }
-
-  if (isSecret && state.selected) {
-    state.vault.touchUsed(state.selected).then(persist).then(render);
-  }
-
-  say(`${label} copied — clears in ${CLIPBOARD_MS / 1000}s`);
-
-  clearTimeout(clipboardTimer);
-  clipboardTimer = setTimeout(async () => {
-    // Best effort, and worth being honest about: a clipboard manager has
-    // already taken a copy by now, and this cannot reach into one.
-    try { await navigator.clipboard.writeText(''); } catch { /* not focused */ }
-    say('Clipboard cleared.');
-  }, CLIPBOARD_MS);
-}
-
-let sayTimer = null;
-function say(msg) {
-  $('status').textContent = msg;
-  clearTimeout(sayTimer);
-  sayTimer = setTimeout(() => { $('status').textContent = ''; }, 4000);
-}
 
 // ---- settings ---------------------------------------------------------------
 //

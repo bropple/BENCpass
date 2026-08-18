@@ -5,6 +5,7 @@
 // and anything it remembered would be a stale copy of the vault.
 
 import { MSG } from './protocol.js';
+import * as webauthn from './webauthn.js';
 
 const $ = (id) => document.getElementById(id);
 const send = (msg) => browser.runtime.sendMessage(msg);
@@ -52,58 +53,56 @@ async function refresh() {
 // again every time afterwards is the thing the fingerprint was meant to spare
 // you, and it is what "I still have to type my password" means.
 
-const bioName = (kind) =>
-  kind === 'touchid' ? 'Touch ID' : kind === 'hello' ? 'Windows Hello' : 'your fingerprint';
+const bioName = (os) =>
+  os === 'mac' ? 'Touch ID' : os === 'win' ? 'Windows Hello' : 'your security key';
 
-// Only ever raised once per opening of this popup. A prompt that reappears the
-// instant it is dismissed cannot be dismissed.
-let promptedThisOpen = false;
+// Never raised on its own here. WebAuthn wants a user gesture, and opening a
+// popup is not reliably one — so this is a button, and pressing it is the
+// gesture. The manager can prompt on sight because it is a page.
+const here = { available: false, checked: false };
 
-function renderLocked() {
+async function renderLocked() {
   const bio = state.bio ?? {};
-  const usable = Boolean(bio.available && bio.enrolled);
+  if (!here.checked) {
+    here.available = Boolean((await webauthn.available()).ok);
+    here.checked = true;
+  }
 
+  const usable = here.available && Boolean(bio.enrolled);
   $('bio-unlock').hidden = !usable;
   $('unlock-form').hidden = usable && !showPasswordBox;
 
-  if (!usable || showPasswordBox) {
-    $('pw').focus();
-  }
+  if (!usable || showPasswordBox) $('pw').focus();
   if (!usable) return;
 
-  $('bio-text').textContent = `Unlock with ${bioName(bio.biometrics)}.`;
-  $('bio-retry').textContent = `Unlock with ${bioName(bio.biometrics)}`;
-
-  if (!promptedThisOpen) {
-    promptedThisOpen = true;
-    unlockWithBiometrics();
-  }
+  const name = bioName(bio.os);
+  $('bio-text').textContent = `Unlock with ${name}.`;
+  $('bio-retry').textContent = `Unlock with ${name}`;
+  $('bio-retry').focus();
 }
 
 let showPasswordBox = false;
 
 async function unlockWithBiometrics() {
+  const bio = state.bio ?? {};
   $('bio-text').textContent = 'Waiting for you…';
-  const reply = await send({ type: MSG.BIO_UNLOCK });
-  if (reply?.ok) {
-    await refresh();
-    return;
-  }
-
-  // Cancelling is a decision, not a fault. Offer the password rather than
-  // scolding, and do not raise the prompt again unasked.
-  if (reply?.reason === 'cancelled') {
-    $('bio-text').textContent = 'Cancelled.';
-    return;
-  }
-  if (reply?.reason === 'stale-secret') {
+  try {
+    const secret = await webauthn.derive({ credentialId: bio.credentialId });
+    const reply = await send({
+      type: MSG.BIO_UNLOCK,
+      secret: btoa(String.fromCharCode(...secret)),
+    });
+    if (reply?.ok) {
+      await refresh();
+      return;
+    }
     $('bio-text').textContent =
-      'That no longer matches this vault, so it has been turned off. Use your master password.';
-    showPasswordBox = true;
-    renderLocked();
-    return;
+      reply?.reason === 'stale-secret'
+        ? 'That no longer matches this vault. Use your master password.'
+        : `Could not unlock (${reply?.reason ?? 'error'}).`;
+  } catch (err) {
+    $('bio-text').textContent = err?.name === 'NotAllowedError' ? 'Cancelled.' : 'Not available.';
   }
-  $('bio-text').textContent = 'Not available just now.';
   showPasswordBox = true;
   renderLocked();
 }

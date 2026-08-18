@@ -26,8 +26,6 @@ import {
   addressSummary,
 } from '../core/address.js';
 import { generate } from '../core/generate.js';
-import { randomBytes } from '../core/crypto.js';
-import * as native from './native.js';
 import { SyncClient, syncOnce, loadSyncState, dumpSyncState } from '../core/sync.js';
 import { MSG, publicCandidate, publicAddress, isMessage, asString, asId } from './protocol.js';
 
@@ -46,7 +44,7 @@ let settings = {
   deviceKey: '',
   autolockMs: AUTOLOCK_MS,
   allowInsecure: false,
-  biometricId: '', // which secret in the OS keystore is this vault's
+  webauthnCredentialId: '', // which credential derives this vault's device secret
   syncPreferred: '', // the server address that answered last
   syncPreferredAt: 0, // and when, so the preference can go stale
 };
@@ -276,7 +274,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     case MSG.BIO_ENROL:
       return handleBioEnrol(msg);
     case MSG.BIO_UNLOCK:
-      return handleBioUnlock(sender);
+      return handleBioUnlock(msg, sender);
     case MSG.BIO_FORGET:
       return handleBioForget();
     case MSG.SAVE:
@@ -950,98 +948,31 @@ async function handleSettingsSet(msg) {
 // Every one of these handlers has to survive there being no host at all, which
 // is the normal case. Nothing here changes how the password path behaves.
 
-/** Which secret in the keystore belongs to this vault on this machine. */
-function biometricId() {
-  if (!settings.biometricId) {
-    settings.biometricId = newSessionId();
-  }
-  return settings.biometricId;
-}
-
-/**
- * What the host says, remembered for a minute.
- *
- * Every call starts a process. The popup asks on every open and every redraw,
- * and a fingerprint reader does not appear and disappear between two of those.
- */
-let capabilityCache = { at: 0, value: null };
-
-async function biometricCapabilities() {
-  if (capabilityCache.value && Date.now() - capabilityCache.at < 60_000) {
-    return capabilityCache.value;
-  }
-  const value = await native.capabilities();
-  capabilityCache = { at: Date.now(), value };
-  return value;
-}
-
-const forgetCapabilities = () => {
-  capabilityCache = { at: 0, value: null };
-};
-
 async function handleBioState() {
-  const enrolled = Boolean(vault?.hasBiometric);
-  const hello = await biometricCapabilities();
-
-  // Which operating system, asked of the browser rather than inferred from the
-  // host — because when there is no host that is exactly what has to be
-  // reported, and the interface still has to say something useful. Hiding the
-  // whole feature when nothing is installed left no way to find out it existed.
   const os = await browser.runtime
     .getPlatformInfo()
     .then((info) => info.os)
     .catch(() => '');
 
   return {
-    // Is there a host, and can it do anything today? A Mac with Touch ID
-    // switched off answers 'none' and is treated as having no host at all —
-    // offering a button that cannot work is worse than offering nothing.
-    available: Boolean(hello.ok) && hello.biometrics !== 'none',
-    biometrics: hello.ok ? hello.biometrics : 'none',
-    platform: hello.ok ? hello.platform : '',
-    reason: hello.ok ? '' : hello.reason,
-    // Which host is answering. A stale binary fails in ways that look like the
-    // current design failing — an error from a design that was replaced reads
-    // exactly like a bug in the one that replaced it — so the version it
-    // reports is shown rather than left to be inferred.
-    hostVersion: hello.ok ? (hello.version ?? '') : '',
-    enrolled,
+    // Whether this vault carries the second wrapping, and which credential
+    // derives it. Whether an authenticator is actually present is a question
+    // only a document can ask — see webauthn.js — so the UI fills that in.
+    enrolled: Boolean(vault?.hasBiometric),
+    credentialId: settings.webauthnCredentialId ?? '',
     os,
-    // Whether this machine could have it at all, which is a different question
-    // from whether it does. Linux is a deliberate no — see hosts/install.sh —
-    // and saying "not set up" there would be an invitation to a dead end.
-    possible: os === 'win',
-    // Not "impossible": parked. macOS can do all of it except authorise the
-    // entitlement, which needs an Apple provisioning profile embedded in an
-    // .app bundle — measured, see hosts/macos/README.md. The host, the sealing,
-    // the second wrapping and this whole path are built and tested; what is
-    // missing is paperwork from Apple. Saying "not set up yet, run the
-    // installer" would send someone down a road that ends in a killed process.
-    blocked: os === 'mac' ? 'needs-apple-profile' : '',
   };
 }
 
-/**
- * Wrap the vault key for the keystore.
- *
- * The master password is asked for again here rather than reusing the unlocked
- * session, and that is the point: the vault key lives in a non-extractable
- * CryptoKey, so a second wrapping genuinely cannot be made without re-deriving
- * it. Granting a fingerprint the same power over the vault should cost the
- * password once.
- */
 async function handleBioEnrol(msg) {
   if (!vault) return { ok: false, reason: 'no-vault' };
-
-  const hello = await biometricCapabilities();
-  if (!hello.ok || hello.biometrics === 'none') {
-    return { ok: false, reason: hello.ok ? 'unavailable' : hello.reason };
-  }
 
   const password = asString(msg.password, 1024);
   if (!password) return { ok: false, reason: 'no-password' };
 
-  const secret = randomBytes(32);
+  const secret = secretFrom(msg);
+  if (!secret) return { ok: false, reason: 'no-secret' };
+
   try {
     await vault.enrolBiometric(password, secret);
   } catch (err) {
@@ -1050,35 +981,24 @@ async function handleBioEnrol(msg) {
     return { ok: false, reason: err?.code === 'unwrap-failed' ? 'bad-password' : 'error' };
   }
 
-  const stored = await native.store(biometricId(), secret);
-  if (!stored.ok) {
-    // The wrapping exists but nothing can open it. Undo it rather than leave a
-    // vault claiming a biometric unlock it cannot perform.
-    vault.forgetBiometric();
-    // `detail` is passed through untouched. It is the host's own account of
-    // what the keystore said — an OSStatus, usually — and it is the only thing
-    // that tells one failure from another. Swallowing it is how "it crashed
-    // with no log explanation" happens.
-    console.warn('BENCpass: the keystore refused the secret', stored);
-    return { ok: false, reason: stored.reason ?? 'error', detail: stored.detail };
-  }
-
+  // Which credential to ask next time. Not a secret: it identifies the key, and
+  // the key will not act without the fingerprint.
+  settings.webauthnCredentialId = asString(msg.credentialId, 512);
   await persistVault();
   await persistSettings();
-  forgetCapabilities();
   return { ok: true };
 }
 
-async function handleBioUnlock(sender) {
+async function handleBioUnlock(msg, sender) {
   if (!vault) return { ok: false, reason: 'no-vault' };
   if (!vault.locked) return { ok: true };
   if (!vault.hasBiometric) return { ok: false, reason: 'not-enrolled' };
 
-  const got = await native.retrieve(biometricId(), 'Unlock your BENCpass vault');
-  if (!got.ok) return { ok: false, reason: got.reason ?? 'error' };
+  const secret = secretFrom(msg);
+  if (!secret) return { ok: false, reason: 'no-secret' };
 
   try {
-    await vault.unlockWithBiometricSecret(got.secret);
+    await vault.unlockWithBiometricSecret(secret);
   } catch {
     // The keystore gave back something that does not open this vault. The
     // honest reading is that the two have drifted apart — a vault restored from
@@ -1107,11 +1027,12 @@ async function handleBioUnlock(sender) {
 async function handleBioForget() {
   if (!vault) return { ok: false, reason: 'no-vault' };
   vault.forgetBiometric();
+  settings.webauthnCredentialId = '';
   await persistVault();
-  // Best effort: a secret whose wrapping is gone opens nothing, so failing to
-  // remove it from the keystore leaves nothing exposed.
-  await native.forget(biometricId());
-  forgetCapabilities();
+  await persistSettings();
+  // The credential itself is left on the authenticator. Nothing can be done
+  // about that from here — a passkey is removed in the operating system's own
+  // settings — and it opens nothing once the wrapping it fitted is gone.
   return { ok: true };
 }
 

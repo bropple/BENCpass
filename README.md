@@ -28,7 +28,7 @@ clients.
 | ✅ Origin matching against the Public Suffix List | `src/core/match.js` |
 | ✅ Form-field classification, logins and addresses | `src/core/fields.js` |
 | ✅ Address model: every WHATWG token, country and state dropdowns | `src/core/address.js` |
-| 🔶 Native host: built and tested; macOS parked on an Apple provisioning profile, Windows Hello to come | `hosts/` |
+| ✅ Biometric unlock — Touch ID, Hello or a security key, via WebAuthn PRF | `src/ext/webauthn.js` |
 | ⬜ Import from Firefox, recovery kit | — |
 
 ## Layout

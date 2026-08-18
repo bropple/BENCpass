@@ -55,38 +55,16 @@ async function render() {
   $('head').textContent = kind === 'address' ? 'Addresses' : 'BENCpass';
 
   if (kind === 'locked') {
-    // A fingerprint, when there is one to use. This is the row that matters:
-    // meeting a locked vault at a login field is the common case, and sending
-    // someone to another tab to type a master password there is precisely the
-    // errand the fingerprint was enrolled to save.
+    // No fingerprint row here, and it is not an oversight. This document is an
+    // iframe inside a web page, so a WebAuthn call from it would be bound to
+    // *that page's* origin rather than the extension's — a cross-origin frame
+    // cannot use the platform authenticator at all without the containing page
+    // granting it, which no site will.
     //
-    // Note what is *not* being done here. The prompt belongs to the operating
-    // system and is raised by the background page; this document only asks. It
-    // never sees the device secret, and a page that drew a convincing imitation
-    // of this row would achieve nothing but a real Touch ID prompt it cannot
-    // answer.
-    if (reply.bio?.available && reply.bio?.enrolled) {
-      const name =
-        reply.bio.biometrics === 'touchid'
-          ? 'Touch ID'
-          : reply.bio.biometrics === 'hello'
-            ? 'Windows Hello'
-            : 'your fingerprint';
-      list.append(
-        row({
-          title: `Unlock with ${name}`,
-          sub: 'Then pick an entry',
-          className: 'gen',
-          onPick: async () => {
-            const done = await browser.runtime.sendMessage({ type: MSG.BIO_UNLOCK });
-            // On success the background reopens this menu against the same
-            // field, now holding entries. On a cancel there is nothing to say
-            // that the person does not already know.
-            if (!done?.ok && done?.reason !== 'cancelled') render();
-          },
-        }),
-      );
-    }
+    // The manager can, being a page of our own. So this row opens it, and it
+    // raises the prompt on sight and closes itself again afterwards — see
+    // handleUnlocked in background.js. One extra click, and it is the only
+    // arrangement that is actually available.
 
     // The master password, deliberately not as a box here.
     //
