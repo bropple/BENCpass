@@ -51,10 +51,13 @@ creates its directory `0700` and its files `0600`. If the dataset is owned by
 anyone else the container exits immediately with:
 
 ```
-cannot open store: mkdir /data: permission denied
+cannot open store: mkdir /data/snapshots: permission denied
 ```
 
 and TrueNAS shows an app that will not start, with the reason only in the logs.
+(`mkdir /data` rather than `/data/snapshots` means something else: the mount
+itself is not there.)
+
 So:
 
 ```sh
@@ -213,7 +216,7 @@ avoids all three.
 The error does not say "permissions".
 
 **2. The app will not start.** Dataset not owned by 568:568. The log says
-`permission denied` on `/data`.
+`cannot open store: mkdir /data/snapshots: permission denied`.
 
 **3. The address is refused in Settings.** `http://truenas:8788` (a bare
 hostname) and `http://100.x.x.x:8788` (a Tailscale IP) are both rejected. Use

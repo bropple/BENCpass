@@ -413,7 +413,15 @@ async function shareHeader(vault, client) {
   const { meta, seq } = await client.getMeta();
   if (meta) return { published: false };
 
-  await client.putMeta(vault.meta, seq === 0 ? null : seq);
+  // The sequence that was just read, including zero.
+  //
+  // Not `seq === 0 ? null : seq`: null omits If-Match, which the server treats
+  // as "not checking" and permits only while the store is empty — so on a fresh
+  // server, the one case the comment above is about, the compare-and-swap was
+  // switched off and two machines could both publish, last one winning. Passing
+  // 0 instead makes the check-and-increment atomic under the store's own lock,
+  // and the loser gets a 409.
+  await client.putMeta(vault.meta, seq);
   return { published: true };
 }
 

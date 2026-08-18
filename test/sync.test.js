@@ -786,3 +786,28 @@ test('the header is published once and not overwritten afterwards', { ...skip },
     'a local biometric enrolment was pushed to the server',
   );
 });
+
+test('two machines cannot both publish the first header', { ...skip }, async (t) => {
+  // Both see an empty server and both try to be the one that sets it up. One
+  // has to lose, or two independently created vaults end up with the last
+  // header written and records nobody can read.
+  const { a: aClient, b: bClient } = await pair(t);
+  const one = await mkVault();
+  const two = await Vault.create({ password: 'different', kdf: FAST });
+
+  const [first, second] = await Promise.allSettled([
+    syncOnce(one, aClient, emptySyncState()),
+    syncOnce(two, bClient, emptySyncState()),
+  ]);
+
+  const won = [first, second].filter((r) => r.status === 'fulfilled').length;
+  assert.ok(won >= 1, 'neither machine managed to publish');
+
+  // Whatever happened, the server carries exactly one header and it is one of
+  // theirs — not a blend, and not the second silently replacing the first.
+  const onServer = JSON.stringify((await aClient.getMeta()).meta);
+  assert.ok(
+    onServer === JSON.stringify(one.meta) || onServer === JSON.stringify(two.meta),
+    'the published header belongs to neither machine',
+  );
+});

@@ -517,7 +517,17 @@ async function joinExisting(password) {
     throw new Error('Joining needs permission to send your passwords and addresses to that server.');
   }
 
-  const saved = await askBackground(MSG.SETTINGS_SET, { endpoint: server, enrolment: code });
+  // Redeem the code only if this machine has not already used one.
+  //
+  // Enrolling and joining are two steps, and the first can succeed while the
+  // second fails — mistype the master password and the device is enrolled with
+  // no vault to show for it. Re-running the redemption on the retry would then
+  // spend an already-spent code and fail with "unknown or expired", stranding
+  // somebody one keystroke from success and sending them to mint another.
+  const already = await askBackground(MSG.SETTINGS_GET);
+  const patch = already?.enrolled ? { endpoint: server } : { endpoint: server, enrolment: code };
+
+  const saved = await askBackground(MSG.SETTINGS_SET, patch);
   if (!saved?.ok) {
     const why = {
       'bad-endpoint': 'That is not a URL.',
