@@ -405,3 +405,42 @@ test('a secret that travelled as base64 through a message still enrols', async (
   await reopened.unlockWithBiometricSecret(received);
   assert.equal(reopened.list()[0].password, 'secret');
 });
+
+// ---- the `deleted` flag is not the server's to set ---------------------------
+//
+// It sits beside the ciphertext in the clear and no AAD covers it, so anyone who
+// can write the vault file — or the server, which this design does not trust —
+// can flip it. The sealed body is the authority; these pin that the readers
+// actually consult it.
+
+test('a record flipped to deleted in the file does not vanish', async () => {
+  const v = await Vault.create({ password: 'hunter2', kdf: FAST });
+  const id = await v.add({ title: 'Bank', password: 'hunter2' });
+
+  const shipped = v.toJSON();
+  // Exactly what a hostile server or a profile thief can do: set the flag,
+  // leave the ciphertext untouched. No key needed.
+  shipped.envelopes.find((e) => e.id === id).deleted = true;
+
+  const reopened = Vault.load(shipped);
+  await reopened.unlock('hunter2');
+
+  assert.equal(reopened.list().length, 1, 'a record was suppressed by a flag nobody signed');
+  assert.equal(reopened.get(id).title, 'Bank');
+});
+
+test('a tombstone flipped to live stays deleted', async () => {
+  const v = await Vault.create({ password: 'hunter2', kdf: FAST });
+  const id = await v.add({ title: 'Gone', password: 'x' });
+  await v.remove(id);
+
+  const shipped = v.toJSON();
+  // The other direction: clear the flag and try to resurrect the record. What
+  // surfaces would otherwise be the tombstone body itself.
+  shipped.envelopes.find((e) => e.id === id).deleted = false;
+
+  const reopened = Vault.load(shipped);
+  await reopened.unlock('hunter2');
+
+  assert.equal(reopened.list().length, 0, 'a deleted record came back');
+});

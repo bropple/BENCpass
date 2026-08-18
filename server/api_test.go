@@ -363,22 +363,39 @@ func TestARestartDoesNotHandBackTheReplayWindow(t *testing.T) {
 		t.Fatalf("a replay was honoured before any restart: %d", status)
 	}
 
-	// The server restarts -- an update, a reboot, or a crash somebody induced --
-	// against the same data directory. Devices and sequence survive; the nonce
-	// map does not, which used to make this the moment to strike.
+	// The code is then used, because that is what a code is for. This step is
+	// the one an earlier version of this test left out, and leaving it out was
+	// the difference between passing and catching a device-key giveaway: the
+	// first implementation keyed idempotency on the code still existing, and
+	// redeeming it is precisely what makes it stop existing.
+	enrol(t, srv, first, "the-second-machine")
+
+	// Now the restart. Devices and sequence survive; the nonce map does not.
 	restarted := newServerOn(t, store.dir)
 	status, again := send(restarted.URL)
 
-	// It may be answered. What it must never do is mint a *second* code,
-	// because each code buys a device key. Whoever was positioned to replay the
-	// request also saw the response to the original, so returning the same code
-	// tells them nothing new -- and it is single-use, so the device that asked
-	// still holds the only one.
+	// The replay must not produce a code that can still be redeemed. Returning
+	// the spent one is fine — whoever could replay the request also saw the
+	// response to the original — but a fresh one is a second device key, which
+	// is a full peer on the vault.
 	if status == http.StatusOK && again != first {
-		t.Fatalf("the replay minted a second code: %q then %q", first, again)
+		t.Fatalf("the replay minted a second code after the first was redeemed: %q then %q", first, again)
 	}
 	if status != http.StatusOK && status != http.StatusUnauthorized {
 		t.Fatalf("unexpected answer to the replay: %d", status)
+	}
+
+	// And whatever came back cannot buy a device.
+	if again != "" {
+		body, _ := json.Marshal(map[string]any{"code": again, "name": "rogue"})
+		resp, err := http.Post(restarted.URL+"/v1/enrol", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			t.Fatal("the replayed code enrolled a rogue device")
+		}
 	}
 }
 

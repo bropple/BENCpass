@@ -126,6 +126,23 @@ func TestMintingIsIdempotentForOneRequest(t *testing.T) {
 		t.Fatalf("a restart let one request mint a second code: %q then %q", first, after)
 	}
 
+	// Redeeming is what a code is for, and the fact that this request was
+	// already served has to survive it. Keying on whether the code still exists
+	// meant redemption erased the memory, and the next replay minted afresh.
+	if _, err := reopened.Redeem(first, "the-second-machine"); err != nil {
+		t.Fatalf("could not redeem the code: %v", err)
+	}
+	spent, err := reopened.NewCodeFor("device", "nonce-a", 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spent != first {
+		t.Fatalf("once the code was redeemed the same request minted another: %q then %q", first, spent)
+	}
+	if _, err := reopened.Redeem(spent, "rogue"); err == nil {
+		t.Fatal("the code handed back after redemption could still be redeemed")
+	}
+
 	// A different request is a different code, or nobody could ever enrol twice.
 	other, err := reopened.NewCodeFor("device", "nonce-b", 30*time.Minute)
 	if err != nil {

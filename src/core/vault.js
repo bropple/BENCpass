@@ -109,8 +109,16 @@ export class Vault {
     const key = await importKey(vaultKeyBytes, { extractable: false });
     const plain = new Map();
     for (const e of this.envelopes.values()) {
-      if (e.deleted) continue;
-      plain.set(e.id, await openRecord(key, e.id, e.rev, e));
+      // Opened before it is believed. `deleted` sits beside the ciphertext in
+      // the clear and is not covered by the AAD, so skipping on it means taking
+      // the word of whoever last wrote the file — which is the server, or
+      // anyone with the profile, neither of which is trusted here. Flip it on a
+      // live record and the record silently vanishes for its owner; flip it off
+      // a tombstone and a deleted record comes back. The sealed body is the one
+      // that cannot be invented.
+      const body = await openRecord(key, e.id, e.rev, e);
+      if (body?.deleted) continue;
+      plain.set(e.id, body);
     }
     this.#key = key;
     this.#plain = plain;
@@ -216,7 +224,10 @@ export class Vault {
    *
    * The tombstone carries a sealed body rather than an empty one so that it is
    * authenticated like any other revision. A bare `deleted: true` flag would be
-   * something the server could invent.
+   * something the server could invent — which is exactly why the readers open
+   * the body and do not trust the flag beside it. The flag stays in the
+   * envelope because merge.js works on a locked vault and needs to see that a
+   * removal exists; it is a hint for sorting, never the authority.
    */
   async remove(id, now = Date.now()) {
     const key = this.#require();
@@ -278,13 +289,17 @@ export class Vault {
     if (!this.locked) {
       for (const [id, e] of next) {
         const cur = this.envelopes.get(id);
-        if (e.deleted) {
-          this.#plain.delete(id);
-          continue;
-        }
         if (cur && cur.rev === e.rev && this.#plain.has(id)) continue;
         try {
-          this.#plain.set(id, await openRecord(this.#key, id, e.rev, e));
+          // Same reasoning as unlockWithVaultKey: the flag is the server's to
+          // set, the body is not. A removal is honoured because the plaintext
+          // says so, not because the envelope claims it.
+          const body = await openRecord(this.#key, id, e.rev, e);
+          if (body?.deleted) {
+            this.#plain.delete(id);
+            continue;
+          }
+          this.#plain.set(id, body);
         } catch {
           // Almost always one cause: this vault was pointed at a server holding
           // someone else's — or an older, differently-keyed — vault. Saying so

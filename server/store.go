@@ -49,9 +49,22 @@ type data struct {
 	Devices map[string]Device   `json:"devices"`
 	Codes   map[string]int64    `json:"codes"` // code -> expiry, unix ms
 	// Which request minted which code, so that minting is idempotent — see
-	// NewCodeFor. Keyed by device and the request's nonce, and thrown away with
-	// the code it names.
-	Mints map[string]string `json:"mints,omitempty"` // device\x00nonce -> code
+	// NewCodeFor. Keyed by device and the request's nonce.
+	//
+	// Carries its own expiry rather than living or dying with the code it names.
+	// The first version was a bare map to the code and asked whether that code
+	// was still live: redeeming it — the one thing a code is for — broke the
+	// link, and a replay after a restart then minted a fresh one. The fact worth
+	// remembering is "this request was already served", which has nothing to do
+	// with what later happened to the code.
+	Mints map[string]mint `json:"mints,omitempty"` // device\x00nonce -> what it got
+}
+
+// mint is what one request was already given, and until when that is worth
+// remembering.
+type mint struct {
+	Code   string `json:"code"`
+	Expiry int64  `json:"expiry"` // unix ms
 }
 
 type Store struct {
@@ -73,7 +86,7 @@ func OpenStore(dir string, keep int) (*Store, error) {
 		Records: map[string]Envelope{},
 		Devices: map[string]Device{},
 		Codes:   map[string]int64{},
-		Mints:   map[string]string{},
+		Mints:   map[string]mint{},
 	}}
 
 	raw, err := os.ReadFile(s.path())
@@ -96,7 +109,7 @@ func OpenStore(dir string, keep int) (*Store, error) {
 		s.d.Devices = map[string]Device{}
 	}
 	if s.d.Mints == nil {
-		s.d.Mints = map[string]string{}
+		s.d.Mints = map[string]mint{}
 	}
 	if s.d.Codes == nil {
 		s.d.Codes = map[string]int64{}
@@ -317,10 +330,13 @@ func (s *Store) NewCodeFor(device, nonce string, ttl time.Duration) (string, err
 	defer s.mu.Unlock()
 
 	key := device + "\x00" + nonce
-	if code, ok := s.d.Mints[key]; ok {
-		if expiry, live := s.d.Codes[code]; live && time.Now().UnixMilli() <= expiry {
-			return code, nil
-		}
+	// Deliberately not conditional on the code still existing. It will not: the
+	// point of minting one is to redeem it, and Redeem deletes it. Asking about
+	// liveness here is what let a replay after a restart mint a second code
+	// once the first had been used — the whole hole, reopened by the ordinary
+	// case rather than an unusual one.
+	if m, ok := s.d.Mints[key]; ok && time.Now().UnixMilli() <= m.Expiry {
+		return m.Code, nil
 	}
 	return s.mintLocked(key, ttl)
 }
@@ -348,16 +364,20 @@ func (s *Store) mintLocked(key string, ttl time.Duration) (string, error) {
 		}
 	}
 
-	for k, c := range s.d.Mints {
-		if _, live := s.d.Codes[c]; !live {
+	// Swept on their own expiry. A request stops being replayable once its
+	// timestamp falls outside the clock window, so remembering it for as long
+	// as the code it produced is already generous.
+	for k, m := range s.d.Mints {
+		if now > m.Expiry {
 			delete(s.d.Mints, k)
 		}
 	}
 
 	code := token(9)
-	s.d.Codes[code] = time.Now().Add(ttl).UnixMilli()
+	expiry := time.Now().Add(ttl).UnixMilli()
+	s.d.Codes[code] = expiry
 	if key != "" {
-		s.d.Mints[key] = code
+		s.d.Mints[key] = mint{Code: code, Expiry: expiry}
 	}
 	return code, s.save()
 }
