@@ -38,11 +38,24 @@ url="http://127.0.0.1:$port/tools/webauthn-probe/index.html"
 # the half that answers the question on a machine with a sensor.
 if [ "${1:-}" = "live" ]; then
   echo "opening a browser. Press the button, and use the sensor when asked."
-  echo "Ctrl-C here when you are done."
+  echo
   "$BROWSER_BIN" --profile "$profile" "$url" >/dev/null 2>&1 &
+
+  # Waiting for the file to *exist* is wrong here: the page posts its
+  # capabilities on load, which creates it within a second, and the browser was
+  # then shut before anyone could reach the button. Wait for the verdict, which
+  # only the test itself writes.
   i=0
-  while [ ! -f "$result" ] && [ $i -lt 300 ]; do sleep 1; i=$((i + 1)); done
-  sleep 2
+  while [ $i -lt 300 ]; do
+    if [ -f "$result" ] && grep -q '"verdict"' "$result" 2>/dev/null; then break; fi
+    sleep 1
+    i=$((i + 1))
+  done
+
+  if ! grep -q '"verdict"' "$result" 2>/dev/null; then
+    echo "No verdict after ${i}s — the button was not pressed, or the prompt was" >&2
+    echo "dismissed. What was read on load:" >&2
+  fi
 else
   "$BROWSER_BIN" --headless --profile "$profile" \
     --screenshot /dev/null "$url" >/dev/null 2>&1 || true
