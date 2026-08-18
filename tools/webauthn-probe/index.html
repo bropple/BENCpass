@@ -95,7 +95,16 @@ $('go').addEventListener('click', async () => {
           userVerification: 'required',
           residentKey: 'required',
         },
-        extensions: { prf: {} },
+        // `prf: {}` -- enable it, evaluate nothing -- is refused outright by
+        // Windows: a single create() asking for it fails with "UnknownError:
+        // The operation failed for an unknown transient reason", which is not
+        // transient and happens every time. Asking for an evaluation in the
+        // same breath works, on the same machine, with the same sensor.
+        //
+        // Measured on Firefox 153 / Windows, 2026-08, after this line spent an
+        // afternoon reporting that Windows Hello could not do PRF at all. It
+        // can. The extension always asks with an eval and never hit this.
+        extensions: { prf: { eval: { first: new TextEncoder().encode('bencpass:probe') } } },
         timeout: 120000,
       },
     });

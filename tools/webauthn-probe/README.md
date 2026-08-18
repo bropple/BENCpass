@@ -107,23 +107,29 @@ this page exists.
 
 ### What it found, Firefox 153 on Windows, 2026-08
 
-| Variant | Result |
+**Windows Hello does PRF.** It derives a stable 32-byte key, discoverable or
+not, and by either spelling — every variant above passes on the machine that
+first reported it could not.
+
+What it will not accept is being asked to *enable* PRF without *evaluating* it:
+
+| Asked for at `create()` | Windows |
 |---|---|
-| plain, no PRF | created, and discoverable |
-| discoverable, no PRF | created |
-| PRF, not discoverable | `UnknownError` |
-| PRF + discoverable | `UnknownError` |
+| `extensions: { prf: {} }` | `UnknownError: The operation failed for an unknown transient reason` |
+| `extensions: { prf: { eval: { first: … } } }` | works |
 
-So `residentKey` is innocent — Windows granted a discoverable credential even
-when asked not to — and **PRF is the refusal**, on its own and in company.
-Windows Hello will make a credential all day and will not make one that derives
-a key.
+One isolated `create()` is enough to see it, so it is not a matter of asking
+too often, and "transient" is the error's word rather than a description — it
+fails every time.
 
-That leaves round two: `hmac-secret` is the CTAP2 extension `prf` is built on
-and Firefox advertises it under its own name, so it is worth asking for by that
-spelling; and dropping `authenticatorAttachment` lets a security key or a phone
-answer instead, which says whether the refusal belongs to Hello specifically or
-to this machine.
+This cost an afternoon and two wrong conclusions, so it is worth being precise
+about what misled: `residentKey` was blamed first and is innocent (Windows
+grants a discoverable credential even when asked not to), then PRF itself was
+blamed and is also innocent. The probe was asking the wrong question and
+reporting the answer as a fact about the hardware.
+
+`enrol()` in `../../src/ext/webauthn.js` has always asked with an eval, so the
+extension never had this problem — only the page testing it did.
 
 ## The extension asks a narrower question
 

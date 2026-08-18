@@ -401,16 +401,20 @@ $('s-bio-form').addEventListener('submit', async (e) => {
     enrolled = await webauthn.enrol();
   } catch (err) {
     $('s-bio-pw').value = '';
-    // UnknownError is what Firefox reports when the platform refuses and gives
-    // no reason worth passing on -- "the operation failed for an unknown
-    // transient reason", which sounds like something worth retrying and is
-    // not. Measured on Windows 11 / Firefox 153: creating a credential works,
-    // and creating one that carries PRF fails every time, whatever else is
-    // asked for (tools/webauthn-probe/variants.html). The browser advertises
-    // PRF because the browser has it; the authenticator behind it does not.
+    // UnknownError is what Firefox passes on when Windows refuses and gives no
+    // reason worth repeating — "the operation failed for an unknown transient
+    // reason", which is not transient and reads as worth retrying when it is
+    // not.
     //
-    // So it is named as the authenticator's limit rather than an error, since
-    // there is nothing here to fix and nothing lost but this one convenience.
+    // Windows Hello does do PRF: measured deriving a stable 32-byte key,
+    // discoverable or not (tools/webauthn-probe/variants.html). The one thing
+    // it will not accept is being asked to enable PRF without evaluating it —
+    // `prf: {}` fails every time where `prf: { eval: … }` succeeds — and
+    // enrol() has always asked with an eval, so this branch is not that.
+    //
+    // Left as the honest answer to a refusal we have not seen: an authenticator
+    // that will not derive is a limit rather than a fault, and nothing is lost
+    // but this one convenience.
     $('s-bio-error').textContent =
       err?.name === 'NotAllowedError'
         ? 'Cancelled.'
