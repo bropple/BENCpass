@@ -73,6 +73,38 @@ origin has one.
 A `false` anywhere costs nothing but the fingerprint path: the master password
 wrapping is untouched and opens the vault on any machine.
 
+## When it fails with `UnknownError`
+
+Firefox on Windows does not implement WebAuthn itself — it hands the request to
+the operating system, and Windows answers a whole family of refusals with one
+code that Firefox surfaces as:
+
+```
+UnknownError: The operation failed for an unknown transient reason
+```
+
+That names no ingredient. `variants.html`, next to this file, takes the request
+apart and changes one thing at a time — plain, discoverable, PRF, then PRF and
+discoverable together, which is what `enrol()` asks for. Whichever row is the
+first to fail is the ingredient Windows objects to.
+
+Serve it the same way and open:
+
+```
+http://localhost:8736/tools/webauthn-probe/variants.html
+```
+
+It raises a prompt per variant, and stops early at the first one that derives a
+stable key. Successful variants leave a credential behind; they are harmless,
+and Windows Settings → Accounts → Passkeys will remove anything named
+"BENCpass probe".
+
+Worth knowing before reading the result: `getClientCapabilities()` reports what
+the *browser* supports, not what the authenticator behind it will actually do.
+`extension:prf: true` alongside a failing `create()` is not a contradiction —
+it is the browser saying yes and the platform saying no, which is precisely why
+this page exists.
+
 ## The extension asks a narrower question
 
 This page serves from `localhost` and lets the browser infer the RP ID. The

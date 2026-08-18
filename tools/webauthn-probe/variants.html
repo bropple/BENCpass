@@ -1,0 +1,241 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebAuthn variant probe</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, Consolas, monospace; background: #0c1420;
+         color: #c3d9ee; margin: 0; padding: 24px; }
+  h1 { font-size: 18px; font-weight: normal; letter-spacing: 1px; }
+  button { font: inherit; background: #3d7dbf; color: #06101c; border: 0;
+           border-radius: 3px; padding: 8px 16px; cursor: pointer; }
+  button[disabled] { background: #2a3a4d; color: #6a8098; cursor: default; }
+  pre { background: #141d2a; border: 1px solid #1e2c3d; padding: 12px;
+        white-space: pre-wrap; word-break: break-all; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #1e2c3d;
+           vertical-align: top; }
+  th { color: #7f9ab5; font-weight: normal; }
+  .good { color: #78b946; } .bad { color: #d84a3a; } .wait { color: #d8a13a; }
+  .note { color: #7f9ab5; }
+</style>
+<body>
+<h1>Which part is Windows refusing?</h1>
+
+<p id="summary">reading capabilities…</p>
+
+<p class="note">
+  Each row below is one <code>create()</code> with one ingredient changed, run in
+  order. Every one that gets as far as the authenticator raises a Hello prompt,
+  so expect to be asked several times — that is the test, not a fault. The run
+  stops early once a variant both creates a credential and derives a stable key,
+  because at that point the question is answered.
+</p>
+
+<p><button id="go" hidden>Run the variants</button></p>
+
+<table id="rows"></table>
+<pre id="out"></pre>
+
+<script>
+// Firefox on Windows hands WebAuthn to the operating system, and Windows
+// answers a whole family of refusals with one HRESULT that Firefox surfaces as
+// "UnknownError: The operation failed for an unknown transient reason". That
+// sentence names no ingredient, so the only way to learn which one it objects
+// to is to change one at a time and watch.
+//
+// The variants are ordered cheapest-first in what they ask of the authenticator:
+// a plain credential, then a discoverable one, then PRF on top of each. The
+// first that works tells us what enrol() in ext/webauthn.js has to ask for.
+
+const out = { userAgent: navigator.userAgent, variants: [] };
+const $ = (id) => document.getElementById(id);
+const show = () => { $('out').textContent = JSON.stringify(out, null, 2); };
+const post = () => fetch('/__result', { method: 'POST', body: JSON.stringify(out, null, 2) })
+  .catch(() => {});
+
+const random = (n) => crypto.getRandomValues(new Uint8Array(n));
+const hex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('');
+
+// What BENCpass actually asks for today is the last of these. If an earlier one
+// works and it does not, that difference is the fix.
+const VARIANTS = [
+  {
+    name: 'plain, no PRF',
+    why: 'is WebAuthn working here at all?',
+    residentKey: 'discouraged',
+    prf: false,
+  },
+  {
+    name: 'discoverable, no PRF',
+    why: 'does a resident key alone upset it?',
+    residentKey: 'required',
+    prf: false,
+  },
+  {
+    name: 'PRF, not discoverable',
+    why: 'does PRF alone upset it?',
+    residentKey: 'discouraged',
+    prf: true,
+  },
+  {
+    name: 'PRF + discoverable (what BENCpass asks for)',
+    why: 'the combination the extension uses',
+    residentKey: 'required',
+    prf: true,
+  },
+];
+
+function addRow(v) {
+  const tr = document.createElement('tr');
+  const name = document.createElement('td');
+  name.textContent = v.name;
+  const why = document.createElement('td');
+  why.className = 'note';
+  why.textContent = v.why;
+  const status = document.createElement('td');
+  status.className = 'wait';
+  status.textContent = 'waiting…';
+  tr.append(name, why, status);
+  $('rows').append(tr);
+  return status;
+}
+
+/** One create(), and if it carries PRF, two evaluations to see if it is stable. */
+async function run(v) {
+  const record = { name: v.name, residentKey: v.residentKey, prf: v.prf };
+
+  const publicKey = {
+    rp: { name: 'BENCpass probe' },
+    user: { id: random(16), name: 'probe', displayName: 'probe' },
+    challenge: random(32),
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: {
+      authenticatorAttachment: 'platform',
+      userVerification: 'required',
+      residentKey: v.residentKey,
+    },
+    // credProps answers whether the credential really ended up discoverable,
+    // which "required" asks for but does not guarantee.
+    extensions: v.prf ? { credProps: true, prf: {} } : { credProps: true },
+    timeout: 120000,
+  };
+
+  let created;
+  try {
+    created = await navigator.credentials.create({ publicKey });
+  } catch (e) {
+    record.ok = false;
+    record.error = `${e.name}: ${e.message}`;
+    return record;
+  }
+
+  const ext = created.getClientExtensionResults() ?? {};
+  record.ok = true;
+  record.residentKeyGranted = ext.credProps?.rk ?? null;
+  record.prfEnabled = ext.prf?.enabled ?? null;
+
+  if (!v.prf) return record;
+  if (record.prfEnabled !== true) {
+    record.note = 'credential made, but it will not derive';
+    return record;
+  }
+
+  // The half that matters: the same input must give the same bytes every time.
+  const SALT = new TextEncoder().encode('bencpass:probe');
+  const evaluate = async () => {
+    const got = await navigator.credentials.get({
+      publicKey: {
+        challenge: random(32),
+        allowCredentials: [{ type: 'public-key', id: created.rawId }],
+        userVerification: 'required',
+        extensions: { prf: { eval: { first: SALT } } },
+        timeout: 120000,
+      },
+    });
+    const r = got.getClientExtensionResults()?.prf?.results?.first;
+    return r ? hex(r) : null;
+  };
+
+  try {
+    const first = await evaluate();
+    const second = await evaluate();
+    record.secretLength = first ? first.length / 2 : 0;
+    record.stable = Boolean(first && second && first === second);
+  } catch (e) {
+    record.stable = false;
+    record.deriveError = `${e.name}: ${e.message}`;
+  }
+  return record;
+}
+
+(async () => {
+  out.hasPublicKeyCredential = typeof PublicKeyCredential !== 'undefined';
+  if (out.hasPublicKeyCredential) {
+    try { out.clientCapabilities = await PublicKeyCredential.getClientCapabilities?.(); }
+    catch (e) { out.clientCapabilitiesError = String(e); }
+    try {
+      out.platformAuthenticator =
+        await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+    } catch (e) { out.platformAuthenticatorError = String(e); }
+  }
+  show();
+  await post();
+
+  if (!out.platformAuthenticator) {
+    $('summary').innerHTML =
+      '<span class="bad">No built-in authenticator here.</span> Nothing to take apart.';
+    return;
+  }
+  $('summary').textContent =
+    'Ready. Each variant asks for a fingerprint or PIN — several prompts is expected.';
+  $('go').hidden = false;
+})();
+
+$('go').addEventListener('click', async () => {
+  $('go').disabled = true;
+  const cells = VARIANTS.map(addRow);
+
+  for (let i = 0; i < VARIANTS.length; i++) {
+    $('summary').textContent = `running: ${VARIANTS[i].name}…`;
+    cells[i].className = 'wait';
+    cells[i].textContent = 'asking…';
+
+    const record = await run(VARIANTS[i]);
+    out.variants.push(record);
+    show();
+    await post();
+
+    if (!record.ok) {
+      cells[i].className = 'bad';
+      cells[i].textContent = record.error;
+      continue;
+    }
+    if (record.prf && record.stable) {
+      cells[i].className = 'good';
+      cells[i].textContent = `works — stable ${record.secretLength}-byte key`;
+      $('summary').innerHTML =
+        `<span class="good">This one works:</span> ${VARIANTS[i].name}. ` +
+        'Stopping here — that is the answer.';
+      out.verdict = `WORKS with: ${VARIANTS[i].name}`;
+      show();
+      await post();
+      return;
+    }
+    cells[i].className = record.prfEnabled === false ? 'bad' : 'good';
+    cells[i].textContent = record.prf
+      ? `created, prfEnabled=${record.prfEnabled}${record.deriveError ? ` — ${record.deriveError}` : ''}`
+      : `created (discoverable=${record.residentKeyGranted})`;
+  }
+
+  out.verdict = out.variants.some((v) => v.stable)
+    ? 'a variant derived a stable key'
+    : 'no variant derived a stable key on this machine';
+  $('summary').innerHTML = `<span class="bad">${out.verdict}.</span>`;
+  show();
+  await post();
+});
+</script>
+<p class="note">
+  Each successful variant leaves a credential behind. They are harmless, but if
+  you want them gone: Windows Settings → Accounts → Passkeys, anything named
+  “BENCpass probe”.
+</p>
