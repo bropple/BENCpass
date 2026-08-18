@@ -14,6 +14,15 @@
 # Without `live` nothing is created and no prompt is raised.
 set -eu
 
+# Job control on, so every background job below becomes its own process group
+# and can be killed as one. This is not decoration: web-ext copies the profile
+# into a temp directory of its own and starts the browser as a detached child,
+# so killing web-ext leaves the browser running with a 117 MB profile behind
+# it. Twenty of those accumulated over a day and a half of probe runs on the
+# machine this was written on — five gigabytes of resident memory and two and a
+# half of /tmp, held by browsers nobody could see.
+set -m
+
 root=$(cd "$(dirname "$0")/.." && pwd)
 port=${PORT:-8736}
 logs="$root/build/logs"
@@ -27,7 +36,14 @@ profile=$(mktemp -d)
 
 BIND=localhost RESULT_FILE="$result" node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
 server=$!
-cleanup() { kill $server 2>/dev/null || true; rm -rf "$profile"; }
+cleanup() {
+  kill $server 2>/dev/null || true
+  # The browser too. `live` starts one in the background and waits for a
+  # verdict; interrupt the wait and it used to be left behind for good.
+  [ -n "${browser:-}" ] && kill $browser 2>/dev/null
+  rm -rf "$profile"
+  true
+}
 trap cleanup EXIT
 sleep 0.5
 
@@ -42,6 +58,7 @@ if [ "${1:-}" = "live" ]; then
   echo "opening a browser. Press the button, and use the sensor when asked."
   echo
   "$BROWSER_BIN" --profile "$profile" "$url" >/dev/null 2>&1 &
+  browser=$!
 
   # Waiting for the file to *exist* is wrong here: the page posts its
   # capabilities on load, which creates it within a second, and the browser was

@@ -14,6 +14,15 @@
 # fingerprint. Those are the two answers being told apart.
 set -eu
 
+# Job control on, so every background job below becomes its own process group
+# and can be killed as one. This is not decoration: web-ext copies the profile
+# into a temp directory of its own and starts the browser as a detached child,
+# so killing web-ext leaves the browser running with a 117 MB profile behind
+# it. Twenty of those accumulated over a day and a half of probe runs on the
+# machine this was written on — five gigabytes of resident memory and two and a
+# half of /tmp, held by browsers nobody could see.
+set -m
+
 root=$(cd "$(dirname "$0")/.." && pwd)
 port=${PORT:-8739}
 work="$root/build/rpid-test"
@@ -94,7 +103,13 @@ printf '\nbrowser.tabs.create({ url: browser.runtime.getURL("rpid.html") });\n' 
 RESULT_FILE="$result" node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
 server=$!
 profile=$(mktemp -d)
-cleanup() { kill $server 2>/dev/null || true; kill $webext 2>/dev/null || true; rm -rf "$profile"; }
+cleanup() {
+  kill $server 2>/dev/null || true
+  # The whole group: web-ext detaches the browser, so killing web-ext
+  # alone leaves it running. The leading dash means the process group.
+  kill -- -$webext 2>/dev/null || kill $webext 2>/dev/null || true
+  rm -rf "$profile"
+}
 trap cleanup EXIT
 sleep 0.5
 
