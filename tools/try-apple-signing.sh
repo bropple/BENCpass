@@ -43,9 +43,13 @@ if [ -z "$identity" ]; then
   done
 
   if [ -n "$p12" ]; then
-    echo "found $p12, which is not in a keychain yet."
-    echo "Importing it into your login keychain, for codesign only."
-    printf 'Passphrase you set when exporting it: '
+    echo "No signing identity in your keychain, but there is $p12."
+    echo
+    echo "The passphrase below is the one set when that file was *exported* —"
+    echo "not your Apple ID password, which is never involved here. If you did"
+    echo "not set one, press Enter."
+    echo
+    printf 'Export passphrase (or Enter for none): '
     stty -echo 2>/dev/null || true
     read -r p12pass
     stty echo 2>/dev/null || true
@@ -59,8 +63,15 @@ if [ -z "$identity" ]; then
       echo "Could not import it:" >&2
       sed 's/^/  /' "$work/import.err" >&2
       echo >&2
-      echo "A wrong passphrase reports as 'MAC verification failed', which does" >&2
-      echo "not sound like a wrong passphrase but usually is." >&2
+      echo "'MAC verification failed' means the passphrase was wrong, however" >&2
+      echo "little it sounds like it." >&2
+      echo >&2
+      echo "If Xcode made this certificate, the private key is probably already" >&2
+      echo "in your login keychain and this file is not needed. Check with:" >&2
+      echo "  security find-identity -v -p codesigning" >&2
+      echo >&2
+      echo "Nothing listed there means the key is missing rather than the" >&2
+      echo "certificate — a .cer on its own cannot sign anything." >&2
       exit 1
     fi
     p12pass=""
