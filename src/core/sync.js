@@ -326,6 +326,50 @@ export class SyncClient {
  * that serves an older copy of the vault would otherwise be believed, and the
  * client would helpfully restore a password it had already rotated away from.
  */
+/**
+ * Adopt a vault that already exists on a server.
+ *
+ * This is the whole of joining. The header carries the vault key wrapped under
+ * the master password, so a second machine unwraps the *same* key rather than
+ * inventing its own — which is the difference between two machines syncing and
+ * two machines refusing to read each other.
+ *
+ * Records are not fetched here. The caller unlocks and then syncs normally, so
+ * there is one path that moves records rather than two.
+ *
+ * The failure worth naming is a server holding somebody else's header: the
+ * unwrap fails exactly as a mistyped password does, and saying "wrong password"
+ * to a person whose password is right sends them looking in the wrong place.
+ * The caller is told which it cannot distinguish.
+ */
+export async function joinVault({ client, password, Vault }) {
+  const { meta } = await client.getMeta();
+  if (!meta) {
+    throw new SyncError(
+      'that server is not carrying a vault yet — set one up on your first machine and let it sync once',
+      'no-vault-there',
+    );
+  }
+
+  let vault;
+  try {
+    vault = Vault.load({ meta, envelopes: [], syncedRev: {} });
+  } catch (err) {
+    throw new SyncError(`that server's vault is not readable by this version: ${err.message}`, 'bad-meta');
+  }
+
+  try {
+    await vault.unlock(password);
+  } catch {
+    throw new SyncError(
+      'that master password did not open the vault on that server. Either it is the wrong password, ' +
+        'or that server holds a different vault than the one you meant.',
+      'no-entry',
+    );
+  }
+  return vault;
+}
+
 export const emptySyncState = () => ({ seq: 0, highestSeq: 0, syncedRev: {} });
 
 export function loadSyncState(raw) {
@@ -350,7 +394,34 @@ export function dumpSyncState(state) {
  * Returns what happened rather than logging it, so the UI can say "3 changes
  * from another machine, 1 conflict" instead of "synced".
  */
+/**
+ * Make sure the server is carrying this vault's header, if it is carrying none.
+ *
+ * The header is the wrapped vault key and the KDF parameters. Without it on the
+ * server, a second machine has nothing to join: it would create its own vault
+ * with its own random key, and the two would never be able to read each other's
+ * records — which is what happened, because nothing ever pushed it.
+ *
+ * Published only when the server has none. A server that already holds a header
+ * is left alone, and deliberately: the local copy diverges legitimately the
+ * moment a fingerprint is enrolled (that adds a second wrapping and is local by
+ * design), so treating every difference as something to upload would push one
+ * machine's private business to every other. The compare-and-swap is passed the
+ * sequence that was read, so two machines racing to be first cannot both win.
+ */
+async function shareHeader(vault, client) {
+  const { meta, seq } = await client.getMeta();
+  if (meta) return { published: false };
+
+  await client.putMeta(vault.meta, seq === 0 ? null : seq);
+  return { published: true };
+}
+
 export async function syncOnce(vault, client, state) {
+  // Before the records, because a machine that joins later needs this to exist
+  // and the cost when it already does is one unauthenticated-shaped GET.
+  await shareHeader(vault, client);
+
   const pulled = await client.getRecords(state.seq);
   guardRollback(pulled.seq, state);
 

@@ -14,6 +14,7 @@ import {
   SyncError,
   canonical,
   PROTOCOL,
+  joinVault,
 } from '../src/core/sync.js';
 
 // These run against the real Go binary rather than a stub. The point is to
@@ -709,4 +710,79 @@ test('an address with nothing behind it is unreachable, not a protocol problem',
   const check = await client.checkProtocol();
   assert.equal(check.ok, false);
   assert.equal(check.reason, 'unreachable');
+});
+
+// ---- joining a vault that already exists ------------------------------------
+//
+// The point of the server. Before this existed, a second machine could only
+// create its own vault with its own random key, and the two could never read
+// each other's records — the server carried the header the whole time and
+// nothing ever pushed or pulled it.
+
+test('a second machine joins the first machine vault and reads its records', { ...skip }, async (t) => {
+  const { a: aClient, b: bClient } = await pair(t);
+
+  // Machine one: a vault with something in it, synced.
+  const first = await mkVault();
+  const firstState = emptySyncState();
+  const id = await first.add({ title: 'Bank', username: 'ben', password: 'hunter2' });
+  await syncOnce(first, aClient, firstState);
+
+  // Machine two knows the master password and the address, and nothing else.
+  const second = await joinVault({ client: bClient, password: 'hunter2', Vault });
+  const secondState = emptySyncState();
+  await syncOnce(second, bClient, secondState);
+
+  assert.equal(second.get(id).password, 'hunter2', 'the joined machine could not read the record');
+
+  // And it is genuinely the same vault, not a copy: an edit on the second
+  // machine comes back to the first.
+  await second.update(id, { password: 'rotated' });
+  await syncOnce(second, bClient, secondState);
+  await syncOnce(first, aClient, firstState);
+  assert.equal(first.get(id).password, 'rotated');
+});
+
+test('joining with the wrong password says so without blaming the password alone', { ...skip }, async (t) => {
+  const { a: aClient, b: bClient } = await pair(t);
+  const first = await mkVault();
+  await first.add({ title: 'Bank', password: 'hunter2' });
+  await syncOnce(first, aClient, emptySyncState());
+
+  await assert.rejects(
+    () => joinVault({ client: bClient, password: 'not the password', Vault }),
+    (err) => err.code === 'no-entry',
+  );
+});
+
+test('joining a server with no vault on it says that, rather than failing to unlock', { ...skip }, async (t) => {
+  const { endpoint, code } = await startServer(t);
+  const client = await device(endpoint, 'lonely', code);
+
+  await assert.rejects(
+    () => joinVault({ client, password: 'hunter2', Vault }),
+    (err) => err.code === 'no-vault-there',
+  );
+});
+
+test('the header is published once and not overwritten afterwards', { ...skip }, async (t) => {
+  const { a: aClient, b: bClient } = await pair(t);
+
+  const first = await mkVault();
+  await syncOnce(first, aClient, emptySyncState());
+  const published = (await aClient.getMeta()).meta;
+  assert.ok(published, 'the first sync did not publish the header');
+
+  // A second machine joins, enrols a fingerprint (which is local by design and
+  // changes its own copy of the header), and syncs. The server's copy must not
+  // move: that wrapping belongs to one machine.
+  const second = await joinVault({ client: bClient, password: 'hunter2', Vault });
+  await second.enrolBiometric('hunter2', new Uint8Array(32).fill(7));
+  await syncOnce(second, bClient, emptySyncState());
+
+  assert.deepEqual(
+    (await bClient.getMeta()).meta,
+    published,
+    'a local biometric enrolment was pushed to the server',
+  );
 });
