@@ -47,6 +47,9 @@ Reviewing this, or just want the short version of how it holds together?
 leaves the machine, why each permission is asked for, and how to reproduce every
 generated file in the package.
 
+Running the server on a NAS? [`TRUENAS-DEPLOY.md`](TRUENAS-DEPLOY.md) is the
+step-by-step, including the three things that will bite you first.
+
 ## What leaves your machine
 
 Nothing, unless you set up a server — and then only ciphertext, to the address
