@@ -124,3 +124,19 @@ JSON of the right shape.
    rather than falling back to storing the secret unprotected. A vault that
    asks for a password is working correctly; one whose second key is lying on
    the disk in the clear is not.
+
+## What each platform can actually enforce
+
+Measured, not assumed. The distinction that matters is not "does this system
+have a fingerprint reader" but "will something refuse to release a key without
+one" — a service that answers yes or no can be skipped by anything that wanted
+the secret in the first place.
+
+| | Trusted path | State |
+|---|---|---|
+| macOS, Secure Enclave | yes | built and tested; blocked on an Apple provisioning profile, which needs a paid account and annual renewal — `hosts/macos/README.md` |
+| Windows Hello, TPM | yes | not built. Gated on package identity, which unlike Apple's entitlement is something you can grant yourself with a self-signed sparse package |
+| Linux, fprintd | **no** | answers a question rather than withholding a key. Not worth building |
+| Linux, TPM 2.0 | no biometric input | can seal to a PIN, which is a password by another name |
+| **FIDO2 with user verification** | **yes** | not built, and the most promising thing here: one implementation, hardware-backed on all three platforms, no Apple paperwork. Needs a token rather than a built-in reader |
+| WebAuthn PRF, no host at all | yes | blocked on Firefox. Shipped in Chromium and Safari 18; Firefox 150 solved the extension-origin half but not the PRF half. When it lands, most of this table stops mattering |

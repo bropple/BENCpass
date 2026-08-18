@@ -316,9 +316,11 @@ function renderBioSetting() {
   }
 
   if (!bio.possible) {
-    // Linux, or something the browser will not name. Not a defect to fix.
+    // Linux. Not "there is no fingerprint reader support" — fprintd is real and
+    // widely used — but that it answers a question rather than withholding a
+    // key, and a program that wants the secret can decline to ask it.
     $('s-bio-note').textContent =
-      'Not available on this system. There is no equivalent of Touch ID or Windows Hello to put in front of the key, and a login-password keyring would be a weaker door rather than a stronger one.';
+      'Not available from a built-in reader on this system. Linux has fingerprint services, but they answer yes or no rather than holding a key back, so the check could be skipped by anything able to read the secret. A FIDO2 key with user verification would be hardware-backed and is the route worth building.';
     return;
   }
 

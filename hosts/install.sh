@@ -114,13 +114,23 @@ NOTE
     fi
     ;;
   linux)
-    echo "No biometric host for Linux."
-    echo
-    echo "There is no equivalent of Touch ID or Hello to put in front of the"
-    echo "secret here: the desktop keyrings unlock with your login password,"
-    echo "which would make this a way to open the vault *without* a password"
-    echo "rather than a stronger one. BENCpass asks for the master password on"
-    echo "Linux, which is the honest answer."
+    cat <<'NOTE'
+No biometric host for Linux — yet, and not for want of a fingerprint reader.
+
+fprintd is real and widely used. What it does is answer a question: is this the
+enrolled user's finger, yes or no. Nothing cryptographic hangs on the answer, so
+a program that wants the secret can simply not ask, and the check protects
+nothing. Touch ID and Windows Hello are different in kind: they withhold a key,
+and no software in between can talk them out of it.
+
+The route that would be hardware-backed here is a FIDO2 authenticator with user
+verification — a token with a PIN or its own fingerprint — using hmac-secret to
+derive the secret. systemd-cryptenroll already unlocks LUKS that way. It needs a
+token rather than the laptop's reader, and it would work identically on macOS and
+Windows, which makes it the most promising thing left on this list.
+
+Until then BENCpass asks for the master password on Linux, which is honest.
+NOTE
     exit 0
     ;;
 esac
