@@ -50,31 +50,38 @@ func TestTheSweepDoesNotForgetWhatItShouldKeep(t *testing.T) {
 	// lifetime by up to that -- harmless, since keeping one too long only ever
 	// refuses a replay. What must never happen is the reverse.
 	//
-	// The span deliberately runs past nonceLifetime so the sweep actually
-	// deletes something; an earlier version stayed inside it and so never
-	// exercised the branch it claimed to be testing.
+	// The probe has to be an entry whose age at the moment of checking sits
+	// between maxSkew and nonceLifetime, because that is the only band where a
+	// too-short lifetime and a correct one disagree. An earlier version probed
+	// an entry thirty seconds old, which no plausible regression would have
+	// dropped: it passed with the lifetime reverted to maxSkew and with the
+	// sweep made four times too aggressive, while claiming to pin both.
 	s := newSeen()
 	start := time.Now()
 
-	if !s.use("device", "first", start) {
-		t.Fatal("a fresh nonce was refused")
-	}
-
-	// Traffic either side of the boundary, enough of it to trigger sweeps.
+	// Half-minute traffic for twenty minutes, so sweeps fire throughout and
+	// entries cross the boundary while the map is in use.
 	for i := 1; i <= 40; i++ {
-		at := start.Add(time.Duration(i) * time.Minute / 2)
+		at := start.Add(time.Duration(i) * 30 * time.Second)
 		if !s.use("device", "n"+strconv.Itoa(i), at) {
-			t.Fatalf("a fresh nonce was refused at %v", at)
+			t.Fatalf("a fresh nonce was refused at %v", at.Sub(start))
 		}
 	}
+	check := start.Add(20 * time.Minute)
 
-	// Still inside its lifetime despite every sweep that has run since.
-	if s.use("device", "n38", start.Add(20*time.Minute)) {
-		t.Fatal("the sweep dropped a nonce that was still within its lifetime")
+	// n21 landed at 10m30s, so it is 9m30s old here: past maxSkew, inside
+	// nonceLifetime. A request carrying it can still be accepted, so the nonce
+	// must still be remembered.
+	if s.use("device", "n21", check) {
+		t.Fatal("a nonce inside its lifetime was swept away")
 	}
 
-	// And the map does not grow for ever: the first one is long past its
-	// lifetime by now and has been let go.
+	// n1 landed at 30s, so it is 19m30s old: no request carrying it can be
+	// accepted any more, and holding it for ever would be an unbounded map.
+	if !s.use("device", "n1", check) {
+		t.Fatal("a nonce was still held long after any request carrying it had expired")
+	}
+
 	if len(s.when) > 40 {
 		t.Fatalf("the sweep is not collecting: %d entries held", len(s.when))
 	}

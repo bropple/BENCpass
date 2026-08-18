@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Vault } from '../src/core/vault.js';
-import { SyncClient, syncOnce, emptySyncState, SyncError } from '../src/core/sync.js';
+import { SyncClient, syncOnce, emptySyncState, SyncError, canonical } from '../src/core/sync.js';
 
 // These run against the real Go binary rather than a stub. The point is to
 // prove the two implementations agree on the canonical signing string — a mock
@@ -444,6 +444,22 @@ test('a client with no address at all refuses to be built', () => {
   assert.throws(() => new SyncClient({ endpoints: ['', null], deviceId: 'd', key: new Uint8Array(32) }));
 });
 
+/** The signature the server would compute for these exact parameters. */
+async function expectedSig(keyBytes, { method, host, path, ts, nonce, ifMatch = '', body }) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', body));
+  const hex = [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const key = await crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const msg = new TextEncoder().encode(canonical(method, host, path, ts, nonce, ifMatch, hex));
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, msg));
+  return btoa(String.fromCharCode(...mac));
+}
+
 test('each attempt is signed for the address it is actually sent to', async () => {
   // The reason this matters is the failover itself. Something sitting on the
   // first address can read a whole signed request and then drop the
@@ -451,6 +467,12 @@ test('each attempt is signed for the address it is actually sent to', async () =
   // against the second, and the listener keeps a complete request. If the
   // signature did not name the host, that copy would work against the real
   // server.
+  //
+  // Checked by recomputing the signature rather than by comparing the two
+  // attempts to each other. An earlier version asserted only that the two
+  // signatures differed, which the differing nonces guarantee on their own --
+  // so it passed even when the client was made to sign the *first* host on
+  // every attempt, which is precisely the bug it was named after.
   const sent = [];
   const fetch = (url, init) => {
     sent.push({ url, headers: init.headers });
@@ -458,29 +480,51 @@ test('each attempt is signed for the address it is actually sent to', async () =
     return Promise.resolve(okResponse({}));
   };
 
+  const key = new Uint8Array(32);
   const client = new SyncClient({
     endpoints: ['http://lan:8788', 'https://tail.ts.net'],
     deviceId: 'd',
-    key: new Uint8Array(32),
+    key,
     fetch,
     probeTimeoutMs: 20,
   });
   await client.request('GET', '/v1/changes?since=0');
 
   assert.equal(sent.length, 2, 'both addresses should have been tried');
-  const [first, second] = sent;
+  const hosts = ['lan:8788', 'tail.ts.net'];
+
+  for (const [i, attempt] of sent.entries()) {
+    const common = {
+      method: 'GET',
+      path: '/v1/changes?since=0',
+      ts: attempt.headers['X-Bencpass-Time'],
+      nonce: attempt.headers['X-Bencpass-Nonce'],
+      body: new Uint8Array(0),
+    };
+
+    assert.equal(
+      attempt.headers['X-Bencpass-Sig'],
+      await expectedSig(key, { ...common, host: hosts[i] }),
+      `attempt ${i} was not signed for ${hosts[i]}`,
+    );
+
+    // And demonstrably not valid at the other address, which is the property
+    // the whole exercise exists for.
+    assert.notEqual(
+      attempt.headers['X-Bencpass-Sig'],
+      await expectedSig(key, { ...common, host: hosts[1 - i] }),
+      `attempt ${i} would also have been accepted by ${hosts[1 - i]}`,
+    );
+  }
 
   // A nonce is spent once. Reusing it across the two attempts would make the
-  // retry look exactly like the replay the server now refuses.
+  // retry look exactly like the replay the server refuses.
   assert.notEqual(
-    first.headers['X-Bencpass-Nonce'],
-    second.headers['X-Bencpass-Nonce'],
+    sent[0].headers['X-Bencpass-Nonce'],
+    sent[1].headers['X-Bencpass-Nonce'],
     'the second attempt reused the first attempt nonce',
   );
-  assert.match(first.headers['X-Bencpass-Nonce'], /^[0-9a-f]{32}$/);
-
-  // Different host, different nonce, so necessarily a different signature.
-  assert.notEqual(first.headers['X-Bencpass-Sig'], second.headers['X-Bencpass-Sig']);
+  assert.match(sent[0].headers['X-Bencpass-Nonce'], /^[0-9a-f]{32}$/);
 });
 
 test('an address that hangs is abandoned rather than waited out', async () => {
