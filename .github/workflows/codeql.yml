@@ -1,0 +1,60 @@
+name: CodeQL
+
+# Split from security.yml for one reason: code scanning is a GitHub feature
+# that has to be switched on for the repository, and on a private repository
+# that needs Advanced Security. Until this repo is public the upload fails with
+# "Code scanning is not enabled", which is not a defect in anything here — but
+# folded in with the other checks it turned the Security badge red for a
+# reason nobody could act on, and a badge that is always red reports nothing.
+#
+# Public repositories get code scanning free, so this goes green on
+# publication and has its own badge from that day.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      # The analyze step reads the workflow run it belongs to before uploading.
+      # Without this it fails with "Resource not accessible by integration"
+      # naming the workflow-runs API, which reads like an entitlement problem
+      # and is a missing scope.
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, go]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          # `languages`, plural. With the singular the key is ignored, CodeQL
+          # falls back to autodetection, finds hosts/macos/main.swift and fails
+          # asking for a macOS runner -- for a Swift file belonging to a
+          # component that is not built and not shipped.
+          languages: ${{ matrix.language }}
+          # security-extended picks up the injection and crypto-misuse queries
+          # that the default set leaves out, which are the ones worth having
+          # here.
+          queries: security-extended
+
+      - uses: github/codeql-action/autobuild@v3
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
+

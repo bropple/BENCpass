@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/bropple/BENCpass/actions/workflows/ci.yml/badge.svg)](https://github.com/bropple/BENCpass/actions/workflows/ci.yml)
 [![Security](https://github.com/bropple/BENCpass/actions/workflows/security.yml/badge.svg)](https://github.com/bropple/BENCpass/actions/workflows/security.yml)
+[![CodeQL](https://github.com/bropple/BENCpass/actions/workflows/codeql.yml/badge.svg)](https://github.com/bropple/BENCpass/actions/workflows/codeql.yml)
 [![Server image](https://github.com/bropple/BENCpass/actions/workflows/server-image.yml/badge.svg)](https://github.com/bropple/BENCpass/actions/workflows/server-image.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
