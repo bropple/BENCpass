@@ -976,9 +976,13 @@ async function handleBioEnrol(msg) {
   try {
     await vault.enrolBiometric(password, secret);
   } catch (err) {
-    // Wrong password, or a damaged vault. Same answer either way, for the same
-    // reason the gate gives one — see unwrapVaultKey.
-    return { ok: false, reason: err?.code === 'unwrap-failed' ? 'bad-password' : 'error' };
+    // A wrong password and a damaged vault get the same answer, for the same
+    // reason the gate gives one — see unwrapVaultKey. Anything else carries its
+    // message, because "error" on its own has now cost two round trips to
+    // diagnose and told nobody anything either time.
+    if (err?.code === 'unwrap-failed') return { ok: false, reason: 'bad-password' };
+    console.error('BENCpass: enrolling the second wrapping failed', err);
+    return { ok: false, reason: 'error', detail: String(err?.message ?? err) };
   }
 
   // Which credential to ask next time. Not a secret: it identifies the key, and
@@ -999,7 +1003,8 @@ async function handleBioUnlock(msg, sender) {
 
   try {
     await vault.unlockWithBiometricSecret(secret);
-  } catch {
+  } catch (err) {
+    console.warn('BENCpass: the derived secret did not open this vault', err);
     // The keystore gave back something that does not open this vault. The
     // honest reading is that the two have drifted apart — a vault restored from
     // elsewhere, or a secret from a previous enrolment — and the way out is to

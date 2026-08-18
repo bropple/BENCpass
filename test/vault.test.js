@@ -388,3 +388,20 @@ test('the two wrappings are bound to their own names', async () => {
     code: 'unwrap-failed',
   });
 });
+
+test('a secret that travelled as base64 through a message still enrols', async () => {
+  // The path the extension actually takes: derived in a document, encoded,
+  // posted to the background, decoded there. The bytes are the same bytes, but
+  // the tests had only ever handed enrolBiometric a fresh Uint8Array.
+  const v = await Vault.create({ password: 'pw' });
+  await v.add({ title: 'x', password: 'secret' });
+
+  const derived = randomBytes(32);
+  const encoded = Buffer.from(derived).toString('base64');
+  const received = Uint8Array.from(Buffer.from(encoded, 'base64'));
+
+  await v.enrolBiometric('pw', received);
+  const reopened = Vault.load(JSON.parse(JSON.stringify(v.toJSON())));
+  await reopened.unlockWithBiometricSecret(received);
+  assert.equal(reopened.list()[0].password, 'secret');
+});

@@ -393,10 +393,14 @@ $('s-bio-form').addEventListener('submit', async (e) => {
 
   await refreshBiometrics();
   $('s-bio-btn').hidden = true; // the form stays up so it can be tried again
+  // `detail` is whatever actually went wrong, passed through untouched. It is
+  // not pretty and it is the only thing that distinguishes one failure from
+  // another.
   $('s-bio-error').textContent =
     reply?.reason === 'bad-password'
       ? 'That is not the master password.'
-      : `Could not turn it on (${reply?.reason ?? 'error'}).`;
+      : `Could not turn it on (${reply?.reason ?? 'error'})` +
+        (reply?.detail ? `: ${reply.detail}` : '.');
 });
 
 function setGate(mode) {

@@ -94,7 +94,11 @@ export async function enrol({ rpId = RP_ID, name = 'BENCpass' } = {}) {
         userVerification: 'required',
         residentKey: 'required',
       },
-      extensions: { prf: {} },
+      // Asking for the value at creation as well as enabling the extension.
+      // Some authenticators return it straight away, which makes enrolment one
+      // prompt rather than two; the rest ignore it and the fallback below asks
+      // again. Either is correct — this only saves a fingerprint where it can.
+      extensions: { prf: { eval: { first: SALT } } },
       timeout: 120000,
     },
   });
@@ -106,7 +110,13 @@ export async function enrol({ rpId = RP_ID, name = 'BENCpass' } = {}) {
   }
 
   const credentialId = toB64(bytes(created.rawId));
-  const secret = await derive({ rpId, credentialId });
+
+  const atCreation = created.getClientExtensionResults()?.prf?.results?.first;
+  const secret =
+    atCreation && atCreation.byteLength === 32
+      ? bytes(atCreation)
+      : await derive({ rpId, credentialId });
+
   return { credentialId, secret };
 }
 
