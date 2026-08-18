@@ -401,11 +401,21 @@ $('s-bio-form').addEventListener('submit', async (e) => {
     enrolled = await webauthn.enrol();
   } catch (err) {
     $('s-bio-pw').value = '';
+    // UnknownError is what Firefox reports when the platform refuses and gives
+    // no reason worth passing on -- "the operation failed for an unknown
+    // transient reason", which sounds like something worth retrying and is
+    // not. Measured on Windows 11 / Firefox 153: creating a credential works,
+    // and creating one that carries PRF fails every time, whatever else is
+    // asked for (tools/webauthn-probe/variants.html). The browser advertises
+    // PRF because the browser has it; the authenticator behind it does not.
+    //
+    // So it is named as the authenticator's limit rather than an error, since
+    // there is nothing here to fix and nothing lost but this one convenience.
     $('s-bio-error').textContent =
       err?.name === 'NotAllowedError'
         ? 'Cancelled.'
-        : err?.code === 'no-prf'
-          ? 'This authenticator cannot derive a key, so it cannot unlock the vault.'
+        : err?.code === 'no-prf' || err?.name === 'UnknownError' || err?.name === 'NotSupportedError'
+          ? `${bioName()} on this machine will not derive a key, so it cannot unlock the vault. Your master password still works.`
           : `Could not enroll: ${err?.message ?? err}`;
     return;
   }

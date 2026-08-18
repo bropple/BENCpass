@@ -105,6 +105,26 @@ the *browser* supports, not what the authenticator behind it will actually do.
 it is the browser saying yes and the platform saying no, which is precisely why
 this page exists.
 
+### What it found, Firefox 153 on Windows, 2026-08
+
+| Variant | Result |
+|---|---|
+| plain, no PRF | created, and discoverable |
+| discoverable, no PRF | created |
+| PRF, not discoverable | `UnknownError` |
+| PRF + discoverable | `UnknownError` |
+
+So `residentKey` is innocent — Windows granted a discoverable credential even
+when asked not to — and **PRF is the refusal**, on its own and in company.
+Windows Hello will make a credential all day and will not make one that derives
+a key.
+
+That leaves round two: `hmac-secret` is the CTAP2 extension `prf` is built on
+and Firefox advertises it under its own name, so it is worth asking for by that
+spelling; and dropping `authenticatorAttachment` lets a security key or a phone
+answer instead, which says whether the refusal belongs to Hello specifically or
+to this machine.
+
 ## The extension asks a narrower question
 
 This page serves from `localhost` and lets the browser infer the RP ID. The
