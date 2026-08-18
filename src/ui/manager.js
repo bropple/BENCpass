@@ -184,7 +184,14 @@ async function boot() {
 // the extension (the preview harness) there is no background page, and none of
 // it appears.
 
-const bio = { available: false, enrolled: false, biometrics: 'none', possible: false, reason: '' };
+const bio = {
+  available: false,
+  enrolled: false,
+  biometrics: 'none',
+  possible: false,
+  reason: '',
+  hostVersion: '',
+};
 
 // Guarded on there being something to ask rather than on `vaultHost.shared`,
 // which is a statement about where the vault lives and not about whether a
@@ -216,6 +223,7 @@ async function refreshBiometrics() {
     biometrics: reply?.biometrics ?? 'none',
     possible: Boolean(reply?.possible),
     reason: reply?.reason ?? '',
+    hostVersion: reply?.hostVersion ?? '',
   });
 
   // Usable means all three: a host is installed, the machine can take a
@@ -805,6 +813,7 @@ async function loadSettings() {
     ['Version', s.version],
     ['Entries', s.records === null ? '—' : String(s.records)],
     ['Device', s.deviceId || 'not enrolled'],
+    ['Helper', bio.hostVersion ? `v${bio.hostVersion}` : 'not installed'],
   ]) {
     const dt = document.createElement('dt');
     dt.textContent = k;

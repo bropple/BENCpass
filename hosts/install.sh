@@ -55,9 +55,11 @@ if [ "${1:-}" = "uninstall" ]; then
     echo "removed $dir/$name.json"
   done
   if [ "$platform" = macos ]; then
-    echo "The secret itself is in the login keychain as 'BENCpass device secret'."
-    echo "Turning biometric unlock off in BENCpass removes it; this script does not,"
-    echo "because a manifest can be reinstalled and a deleted secret cannot."
+    echo
+    echo "The sealed secret and its Secure Enclave key are left alone. Turning"
+    echo "biometric unlock off in BENCpass removes both; this script does not,"
+    echo "because a manifest can be reinstalled and an enclave key cannot."
+    echo "  $HOME/Library/Application Support/BENCpass/"
   fi
   exit 0
 fi
@@ -71,6 +73,19 @@ case $platform in
       echo "  xcode-select --install" >&2
       exit 1
     fi
+    # A binary from before the move to build/ may still be sitting where the
+    # first version of this script put it, and a manifest from that era still
+    # points at it. Pulling new source does not touch either, so the browser
+    # goes on running a host whose design was replaced — which fails with an
+    # error message from that design and reads exactly like the current one
+    # being broken.
+    for legacy in "$root/macos/bencpass-auth" "$root/linux/bencpass-auth"; do
+      if [ -f "$legacy" ]; then
+        rm -f "$legacy"
+        echo "removed a host left over from an older layout: $legacy"
+      fi
+    done
+
     echo "building $binary"
     mkdir -p "$(dirname "$binary")"
     swiftc -O -o "$binary" "$root/macos/main.swift"
@@ -92,6 +107,46 @@ case $platform in
     echo "rather than a stronger one. BENCpass asks for the master password on"
     echo "Linux, which is the honest answer."
     exit 0
+    ;;
+esac
+
+# ---- prove the thing that was just built actually answers -------------------
+#
+# The browser will not tell you which binary it started, and a stale one fails in
+# ways that look like the code being wrong — an error message from a design that
+# was replaced reads exactly like the current design failing. So the freshly
+# built host is asked `hello` here, before anything is registered, and its answer
+# is printed.
+#
+# The framing is native messaging's: a little-endian uint32 length, then the
+# JSON. Written with printf rather than python, which is not on every Mac.
+say_hello() {
+  msg='{"v":1,"op":"hello"}'
+  len=${#msg}
+  prefix=$(printf '\\%03o\\%03o\\%03o\\%03o' \
+    $((len % 256)) $(((len / 256) % 256)) $(((len / 65536) % 256)) $(((len / 16777216) % 256)))
+  # tail -c +5 drops the reply's own four-byte length prefix.
+  printf "$prefix%s" "$msg" | "$binary" 2>/dev/null | tail -c +5
+}
+
+reply=$(say_hello || true)
+case $reply in
+  *'"ok":true'*)
+    echo "host answers: $reply"
+    ;;
+  *)
+    echo "The host was built but did not answer. It will not work." >&2
+    echo "  binary: $binary" >&2
+    echo "  reply : ${reply:-(nothing)}" >&2
+    exit 1
+    ;;
+esac
+
+case $reply in
+  *'"biometrics":"none"'*)
+    echo
+    echo "Note: this Mac reports no usable Touch ID right now, so BENCpass will"
+    echo "not offer to turn it on. Check System Settings -> Touch ID & Password."
     ;;
 esac
 

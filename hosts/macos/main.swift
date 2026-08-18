@@ -16,7 +16,11 @@ import LocalAuthentication
 import Security
 
 let SERVICE = "net.ropple.bencpass.auth"
-let VERSION = "1.0.0"
+// Bumped when the *design* changes, not for tidying. 1.x put the secret in the
+// keychain and could not work; 2.x seals it to a Secure Enclave key. Reported by
+// `hello`, shown in Settings, and quoted in failures — so "which binary is
+// actually running" is a question with an answer.
+let VERSION = "2.0.0"
 let PROTOCOL_VERSION = 1
 
 // ---- native messaging framing ----------------------------------------------

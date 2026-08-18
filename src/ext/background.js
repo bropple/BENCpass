@@ -1000,6 +1000,11 @@ async function handleBioState() {
     biometrics: hello.ok ? hello.biometrics : 'none',
     platform: hello.ok ? hello.platform : '',
     reason: hello.ok ? '' : hello.reason,
+    // Which host is answering. A stale binary fails in ways that look like the
+    // current design failing — an error from a design that was replaced reads
+    // exactly like a bug in the one that replaced it — so the version it
+    // reports is shown rather than left to be inferred.
+    hostVersion: hello.ok ? (hello.version ?? '') : '',
     enrolled,
     os,
     // Whether this machine could have it at all, which is a different question
