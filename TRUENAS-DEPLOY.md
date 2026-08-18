@@ -269,6 +269,19 @@ publish its header to a fresh server. But it is an afternoon you did not need.
 
 ## Revoking a device
 
-There is no endpoint or UI for this yet. Stop the app, edit `store.json`,
-remove the entry from `devices`, and start it again. Workable for three
-machines; a real gap for more.
+Gear → **Sync** → **Machines**. Every enrolled machine is listed, with the one
+you are using marked, and each can be renamed or revoked.
+
+Rename them. The name is whatever the machine called itself when it enrolled —
+`mac`, `windows`, `linux` — and two machines with the same name are two rows
+you cannot tell apart at the moment you are trying to decide which one was
+stolen.
+
+Revoking takes effect immediately: that key stops authenticating anything, and
+the machine cannot come back without a new code.
+
+The last device cannot be revoked, and the server will refuse. A store with no
+devices cannot be reached at all — nothing could enrol, because minting a code
+needs a device to sign the request, and nothing could read, because every route
+is signed. The only way back would be deleting the data directory, which takes
+the vault header with it.
