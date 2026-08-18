@@ -94,7 +94,7 @@ func TestTheSweepDoesNotForgetWhatItShouldKeep(t *testing.T) {
 	// earlier version of this test compared against the exact number of inserts
 	// it made, so the assertion could not fire under any implementation at all.
 	if _, held := s.when["device\x00n2"]; held {
-		t.Fatal("a nonce nineteen minutes past its lifetime is still in the map")
+		t.Fatal("a nonce nineteen minutes old, nine past its lifetime, is still in the map")
 	}
 
 	// Roughly the entries from the last ten minutes, plus the one the probe
