@@ -99,6 +99,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /v1/health", s.health)
 	mux.HandleFunc("POST /v1/enrol", s.enrol)
 	mux.HandleFunc("POST /v1/codes", s.auth(s.mintCode))
+	mux.HandleFunc("GET /v1/devices", s.auth(s.listDevices))
+	mux.HandleFunc("DELETE /v1/devices/{id}", s.auth(s.forgetDevice))
 	mux.HandleFunc("GET /v1/meta", s.auth(s.getMeta))
 	mux.HandleFunc("PUT /v1/meta", s.auth(s.putMeta))
 	mux.HandleFunc("GET /v1/records", s.auth(s.getRecords))
@@ -236,6 +238,39 @@ func (s *server) putMeta(w http.ResponseWriter, r *http.Request, body []byte) {
 		return
 	}
 	send(w, http.StatusOK, map[string]any{"seq": seq})
+}
+
+// listDevices answers with what is enrolled, so a machine can show the others.
+//
+// Names and dates only. The keys stay in the store: an authenticated caller has
+// their own and no business with anyone else's, and handing them out would make
+// this endpoint the easiest way to impersonate every device at once.
+func (s *server) listDevices(w http.ResponseWriter, r *http.Request, _ []byte) {
+	send(w, http.StatusOK, map[string]any{"devices": s.store.Devices()})
+}
+
+// forgetDevice revokes one, which is the whole answer to a lost laptop.
+//
+// Any enrolled device may revoke any other, including itself. There is one
+// vault and one owner here; a permission model on top of that would be
+// ceremony. Revoking yourself is allowed because it is how a machine you are
+// about to wipe bows out — the next request from it simply fails.
+func (s *server) forgetDevice(w http.ResponseWriter, r *http.Request, _ []byte) {
+	err := s.store.Forget(r.PathValue("id"))
+	if errors.Is(err, ErrNoDevice) {
+		// Already gone is the outcome that was asked for.
+		send(w, http.StatusOK, map[string]any{"ok": true, "alreadyGone": true})
+		return
+	}
+	if errors.Is(err, ErrLastDevice) {
+		fail(w, http.StatusConflict, "that is the only enrolled device — removing it would lock everything out")
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "cannot write")
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *server) getRecords(w http.ResponseWriter, r *http.Request, _ []byte) {

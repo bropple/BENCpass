@@ -22,6 +22,12 @@ var (
 	ErrConflict = errors.New("sequence has moved on")
 	ErrBackward = errors.New("record revision would go backwards")
 	ErrBadCode  = errors.New("unknown or expired enrolment code")
+
+	// A device that is not enrolled: already revoked, or never was.
+	ErrNoDevice = errors.New("no such device")
+
+	// Guards against locking every machine out at once; see Forget.
+	ErrLastDevice = errors.New("cannot remove the last device")
 )
 
 // Envelope is a sealed record. The server understands only the four fields it
@@ -301,6 +307,55 @@ func (s *Store) Device(id string) (Device, bool) {
 	defer s.mu.Unlock()
 	d, ok := s.d.Devices[id]
 	return d, ok
+}
+
+// DeviceInfo is a device as the outside world is allowed to see it.
+//
+// A separate type rather than a Device with the key left blank, and the
+// difference is not style. Blanking a field is a thing somebody has to remember
+// to keep doing: one `append(out, d)` written in a hurry and every signing key
+// in the store goes out over the wire. A type with nowhere to put a key cannot
+// carry one.
+type DeviceInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Created int64  `json:"created"`
+}
+
+// Devices lists what is enrolled. Never the keys: an authenticated caller has
+// their own and no business with anyone else's.
+func (s *Store) Devices() []DeviceInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]DeviceInfo, 0, len(s.d.Devices))
+	for _, d := range s.d.Devices {
+		out = append(out, DeviceInfo{ID: d.ID, Name: d.Name, Created: d.Created})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Created < out[j].Created })
+	return out
+}
+
+// Forget removes a device. That is what revoking a lost machine means: its key
+// stops authenticating anything, and it cannot enrol again without a new code.
+//
+// The last one cannot be removed. A store with no devices is unreachable —
+// nothing could enrol, because minting a code needs a device to sign the
+// request, and nothing could read, because every route is signed. The only way
+// back would be deleting the file, which takes the vault header with it. So the
+// one machine still holding a key keeps it.
+func (s *Store) Forget(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.d.Devices[id]; !ok {
+		return ErrNoDevice
+	}
+	if len(s.d.Devices) == 1 {
+		return ErrLastDevice
+	}
+	delete(s.d.Devices, id)
+	return s.save()
 }
 
 // NewCode mints a one-time enrolment code. Short-lived on purpose: it is typed

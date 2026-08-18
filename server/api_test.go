@@ -55,6 +55,21 @@ func newServer(t *testing.T) (*httptest.Server, *Store, string) {
 }
 
 // enrol runs the real bootstrap path rather than reaching into the store.
+// codeFrom asks an enrolled device for a code to enrol the next one with.
+// Not `mint`: store.go has a type by that name, and they share a package.
+func codeFrom(t *testing.T, c *client) string {
+	t.Helper()
+	status, out := c.do("POST", "/v1/codes", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("minting refused: %d", status)
+	}
+	code, _ := out["code"].(string)
+	if code == "" {
+		t.Fatal("no code in the reply")
+	}
+	return code
+}
+
 func enrol(t *testing.T, srv *httptest.Server, code, name string) *client {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"code": code, "name": name})
@@ -750,5 +765,76 @@ func TestExpiredCodesDoNotAccumulate(t *testing.T) {
 
 	if n := len(store.d.Codes); n != 1 {
 		t.Fatalf("expired codes are still held: %d in the store, want only the live one", n)
+	}
+}
+
+func TestDevicesCanBeListedAndRevoked(t *testing.T) {
+	srv, _, code := newServer(t)
+	first := enrol(t, srv, code, "laptop")
+	second := enrol(t, srv, codeFrom(t, first), "the-lost-one")
+
+	status, out := first.do("GET", "/v1/devices", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("listing refused: %d", status)
+	}
+	devices, _ := out["devices"].([]any)
+	if len(devices) != 2 {
+		t.Fatalf("expected 2 devices, got %d", len(devices))
+	}
+
+	// Keys never leave the store. An authenticated caller has their own and no
+	// business with anyone else's.
+	for _, d := range devices {
+		if _, leaked := d.(map[string]any)["key"]; leaked {
+			t.Fatal("the device list handed out a signing key")
+		}
+	}
+
+	// Revoke the lost machine from the one still in hand.
+	if status, _ := first.do("DELETE", "/v1/devices/"+second.id, nil, nil); status != http.StatusOK {
+		t.Fatalf("revoking refused: %d", status)
+	}
+
+	// Its key stops authenticating anything at all.
+	if status, _ := second.do("GET", "/v1/records?since=0", nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("a revoked device could still read: %d", status)
+	}
+	if status, _ := second.do("POST", "/v1/codes", nil, nil); status != http.StatusUnauthorized {
+		t.Fatalf("a revoked device could still mint codes: %d", status)
+	}
+
+	// And the machine that did the revoking is unaffected.
+	if status, _ := first.do("GET", "/v1/records?since=0", nil, nil); status != http.StatusOK {
+		t.Fatalf("the surviving device lost access: %d", status)
+	}
+}
+
+func TestTheLastDeviceCannotRevokeItself(t *testing.T) {
+	srv, _, code := newServer(t)
+	only := enrol(t, srv, code, "the-only-one")
+
+	// A store with no devices is unreachable: nothing can enrol, because
+	// minting a code needs a device to sign the request, and nothing can read,
+	// because every route is signed. The only way back would be deleting the
+	// file, which takes the vault header with it.
+	status, _ := only.do("DELETE", "/v1/devices/"+only.id, nil, nil)
+	if status != http.StatusConflict {
+		t.Fatalf("the last device removed itself: %d", status)
+	}
+	if status, _ := only.do("GET", "/v1/records?since=0", nil, nil); status != http.StatusOK {
+		t.Fatalf("the last device lost access anyway: %d", status)
+	}
+}
+
+func TestRevokingSomethingAlreadyGoneIsFine(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+	enrol(t, srv, codeFrom(t, c), "spare")
+
+	// Asked for a state that already holds. Reporting a failure would invite a
+	// retry loop over something that is already true.
+	status, out := c.do("DELETE", "/v1/devices/never-existed", nil, nil)
+	if status != http.StatusOK || out["alreadyGone"] != true {
+		t.Fatalf("revoking an unknown device: %d %v", status, out)
 	}
 }
