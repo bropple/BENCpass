@@ -30,6 +30,11 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # The analyze step reads the workflow run it belongs to before uploading.
+      # Without this it fails with "Resource not accessible by integration"
+      # naming the workflow-runs API, which reads like an entitlement problem
+      # and is a missing scope.
+      actions: read
     strategy:
       fail-fast: false
       matrix:
