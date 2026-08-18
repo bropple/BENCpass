@@ -371,7 +371,7 @@ $('s-bio-form').addEventListener('submit', async (e) => {
         ? 'Cancelled.'
         : err?.code === 'no-prf'
           ? 'This authenticator cannot derive a key, so it cannot unlock the vault.'
-          : `Could not enrol: ${err?.message ?? err}`;
+          : `Could not enroll: ${err?.message ?? err}`;
     return;
   }
 

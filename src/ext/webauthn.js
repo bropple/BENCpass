@@ -23,6 +23,25 @@
  *  machine derives a different secret and stops opening its own vault. */
 const SALT = new TextEncoder().encode('bencpass:v1:device-secret');
 
+/**
+ * The relying party every credential is bound to. Also fixed forever, and for a
+ * harder reason: a credential created under one RP ID cannot be found under
+ * another, so changing this silently strands every enrolment ever made.
+ *
+ * It has to be stated rather than inferred. A moz-extension:// origin has no
+ * registrable domain, so with `rp.id` unset WebAuthn cannot derive one and
+ * refuses with "SecurityError: The operation is insecure" — measured, along
+ * with the fact that Firefox accepts any domain the extension holds host
+ * permissions for, which with <all_urls> is all of them. See
+ * tools/rpid-probe.sh.
+ *
+ * `.invalid` because RFC 2606 reserves it: the name is guaranteed never to
+ * resolve, so no real site is ever implicated, and nothing here depends on
+ * anyone continuing to own a domain. WebAuthn never contacts it; only the
+ * string matters.
+ */
+const RP_ID = 'bencpass.invalid';
+
 const bytes = (b) => new Uint8Array(b);
 const toB64 = (u8) => btoa(String.fromCharCode(...u8));
 const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -58,15 +77,12 @@ export async function available() {
  * has none, which is why this lives in the UI and only the derived bytes cross
  * to the background.
  */
-export async function enrol({ rpId, name = 'BENCpass' } = {}) {
+export async function enrol({ rpId = RP_ID, name = 'BENCpass' } = {}) {
   const random = (n) => crypto.getRandomValues(new Uint8Array(n));
 
   const created = await navigator.credentials.create({
     publicKey: {
-      // `rp.id` omitted deliberately: it defaults to the origin's own domain,
-      // which is always valid. Firefox 150 gave extensions a stable
-      // moz-extension://<hash> origin precisely so this works.
-      rp: rpId ? { id: rpId, name } : { name },
+      rp: { id: rpId, name },
       user: { id: random(16), name: 'bencpass', displayName: name },
       challenge: random(32),
       pubKeyCredParams: [
@@ -98,10 +114,10 @@ export async function enrol({ rpId, name = 'BENCpass' } = {}) {
  * Re-derive the secret. This is the call that raises the prompt, so it takes as
  * long as the person takes.
  */
-export async function derive({ rpId, credentialId }) {
+export async function derive({ rpId = RP_ID, credentialId }) {
   const got = await navigator.credentials.get({
     publicKey: {
-      ...(rpId ? { rpId } : {}),
+      rpId,
       challenge: crypto.getRandomValues(new Uint8Array(32)),
       allowCredentials: [{ type: 'public-key', id: fromB64(credentialId) }],
       userVerification: 'required',
