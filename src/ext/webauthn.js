@@ -39,6 +39,19 @@ const SALT = new TextEncoder().encode('bencpass:v1:device-secret');
  * resolve, so no real site is ever implicated, and nothing here depends on
  * anyone continuing to own a domain. WebAuthn never contacts it; only the
  * string matters.
+ *
+ * "Can it just say `bencpass`?" — asked, and no, twice over. What macOS puts
+ * on screen is this RP ID: the Touch ID sheet shows it, and Apple's Passwords
+ * app shows it as both the entry's title and its Website row (screenshot,
+ * 2026-08-17). `rp.name` — already 'BENCpass' — is displayed nowhere at all,
+ * so the visible string can only be changed by changing this constant. And a
+ * bare dotless label is refused: rp.id 'bencpass' gets "SecurityError: The
+ * operation is insecure" from an extension page while 'bencpass.invalid' and
+ * 'localhost' pass — measured on Firefox 152 by re-running tools/rpid-probe.sh
+ * with 'bencpass' added, so `localhost` passing is a special case and not a
+ * precedent. The only remaining lever is a different *domain*, and pulling it
+ * strands the working enrolment — the one thing this comment exists to
+ * prevent.
  */
 const RP_ID = 'bencpass.invalid';
 
@@ -92,12 +105,31 @@ export async function enrol({ rpId = RP_ID, name = 'BENCpass' } = {}) {
       authenticatorSelection: {
         authenticatorAttachment: 'platform',
         userVerification: 'required',
+        // On a Mac the platform authenticator behind this is iCloud Keychain,
+        // and what comes back is a passkey: it shows up in Apple's Passwords
+        // app and syncs to the account's other devices, rather than sitting
+        // sealed in this one machine's Secure Enclave (seen in the Passwords
+        // app, 2026-08-17). Reportedly not this flag's doing — Apple's
+        // keychain makes every credential discoverable and synced regardless —
+        // though that is documentation, not something measured here. The
+        // tradeoff was put to the owner and accepted: the sync boundary is the
+        // iCloud account, in exchange for the credential surviving this one
+        // machine.
         residentKey: 'required',
       },
       // Asking for the value at creation as well as enabling the extension.
       // Some authenticators return it straight away, which makes enrolment one
       // prompt rather than two; the rest ignore it and the fallback below asks
       // again. Either is correct — this only saves a fingerprint where it can.
+      //
+      // On the Mac it cannot, yet: enrolment there is two Touch ID prompts
+      // (measured, 2026-08), so Firefox is not passing PRF output back from
+      // create() on macOS even though iCloud Keychain itself can evaluate at
+      // creation (CTAP 2.2) and Firefox grew exactly this for Windows Hello in
+      // 147/148. Left in place for the build where the two meet. Meanwhile the
+      // enrolment form says "twice" out loud — see ui/manager.js — because the
+      // honest fix for an unavoidable second prompt is an expected second
+      // prompt.
       extensions: { prf: { eval: { first: SALT } } },
       timeout: 120000,
     },
