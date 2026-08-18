@@ -251,19 +251,26 @@
 
       <h3 class="settings-group">Sync</h3>
 
-      <label class="setting">
+      <!-- Not a <label>: it holds a button as well as a field, and a click on
+           the button inside a label would be treated as a click on the label
+           and put the cursor back in the box. -->
+      <div class="setting">
         <div class="setting-text">
           <span class="setting-name">Server</span>
           <span class="setting-note">
             Tried first. https, or plain http to a private address — a LAN name
             cannot hold a certificate.
           </span>
+          <span class="settings-note" id="s-endpoint-status"></span>
         </div>
-        <input type="text" id="s-endpoint" class="setting-input wide"
-               placeholder="http://192.168.1.20:8788">
-      </label>
+        <div class="field-with-test">
+          <input type="text" id="s-endpoint" class="setting-input wide"
+                 placeholder="http://192.168.1.20:8788">
+          <button type="button" class="btn btn-sm" id="s-endpoint-test">Test</button>
+        </div>
+      </div>
 
-      <label class="setting">
+      <div class="setting">
         <div class="setting-text">
           <span class="setting-name">Also reachable at</span>
           <span class="setting-note">
@@ -272,10 +279,14 @@
             all; a server that answers with a refusal is not retried here.
             Two <em>different</em> servers would be two vaults taking turns.
           </span>
+          <span class="settings-note" id="s-fallback-status"></span>
         </div>
-        <input type="text" id="s-fallback" class="setting-input wide"
-               placeholder="https://bencpass.your-tailnet.ts.net">
-      </label>
+        <div class="field-with-test">
+          <input type="text" id="s-fallback" class="setting-input wide"
+                 placeholder="https://bencpass.your-tailnet.ts.net">
+          <button type="button" class="btn btn-sm" id="s-fallback-test">Test</button>
+        </div>
+      </div>
 
       <label class="setting">
         <div class="setting-text">
@@ -346,6 +357,10 @@
 
       <h3 class="settings-group">About</h3>
       <dl class="meta" id="s-about"></dl>
+
+      <!-- Quiet on purpose: a house mark at the bottom of a settings page,
+           not a banner over the thing you came here to do. -->
+      <p class="benco-mark"><img src="benco.png" alt="BENCO" width="88"></p>
 
       <p class="settings-error" id="s-error" role="alert" hidden></p>
     </div>

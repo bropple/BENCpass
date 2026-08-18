@@ -867,6 +867,85 @@ async function copyText(text, label, isSecret = false) {
 }
 
 let sayTimer = null;
+// ---- testing an endpoint ------------------------------------------------------
+//
+// Sync failing is the least debuggable thing here: it happens in the
+// background, against an address only the owner knows, and the answer is
+// usually a typo or a machine that is not on. A button that says "answered" or
+// says exactly what went wrong turns that into a five-second check.
+//
+// /v1/health is unauthenticated on purpose, so this works before a device is
+// enrolled — which is precisely when the address is most likely wrong.
+
+function endpointStatus(which, text, kind = '') {
+  const el = $(`s-${which}-status`);
+  el.textContent = text;
+  el.className = `settings-note ${kind}`.trim();
+}
+
+async function testEndpoint(which) {
+  const raw = $(`s-${which}`).value.trim().replace(/\/+$/, '');
+
+  // An empty box is not a failed test, it is no test. Saying "could not reach"
+  // about an address nobody has entered is a wrong answer to a question that
+  // was not asked.
+  if (!raw) {
+    endpointStatus(which, '');
+    return;
+  }
+
+  let url;
+  try {
+    url = new URL(`${raw}/v1/health`);
+  } catch {
+    endpointStatus(which, 'That is not an address.', 'bad');
+    return;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    endpointStatus(which, 'Needs to start with http:// or https://.', 'bad');
+    return;
+  }
+
+  const btn = $(`s-${which}-test`);
+  btn.disabled = true;
+  endpointStatus(which, 'Trying…');
+
+  try {
+    // Time-boxed, because the interesting failure is an address that is simply
+    // not there — which does not refuse, it just never answers, and would
+    // otherwise sit here for the operating system's TCP timeout.
+    const resp = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    if (!resp.ok) {
+      endpointStatus(which, `Answered ${resp.status}, which is not a BENCpass server.`, 'bad');
+      return;
+    }
+    const body = await resp.json().catch(() => null);
+    if (!body || body.ok !== true) {
+      endpointStatus(which, 'Something answered, but not a BENCpass server.', 'bad');
+      return;
+    }
+    endpointStatus(which, `Answered. ${body.seq ?? 0} change${body.seq === 1 ? '' : 's'} stored.`, 'good');
+  } catch (err) {
+    // A timeout and a refusal are different problems with different fixes, and
+    // saying which saves the guess.
+    endpointStatus(
+      which,
+      err?.name === 'TimeoutError'
+        ? 'No answer. Nothing is listening there, or a firewall is eating it.'
+        : 'Could not reach it. Check the address, and that the server is running.',
+      'bad',
+    );
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+for (const which of ['endpoint', 'fallback']) {
+  $(`s-${which}-test`).addEventListener('click', () => testEndpoint(which));
+  // Editing invalidates whatever the last answer was about.
+  $(`s-${which}`).addEventListener('input', () => endpointStatus(which, ''));
+}
+
 // ---- import and export -------------------------------------------------------
 //
 // The only place in the interface that deliberately produces plaintext. It is
@@ -1043,7 +1122,9 @@ async function loadSettings() {
     ['Version', s.version],
     ['Entries', s.records === null ? '—' : String(s.records)],
     ['Device', s.deviceId || 'not enrolled'],
-    ['Helper', bio.hostVersion ? `v${bio.hostVersion}` : 'not installed'],
+    // No "Helper" row. It reported a native host that WebAuthn replaced, from a
+    // field nothing has set since, so it read "not installed" for ever — an
+    // answer to a question nobody was asking about a component that is gone.
   ]) {
     const dt = document.createElement('dt');
     dt.textContent = k;

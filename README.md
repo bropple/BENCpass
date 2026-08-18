@@ -1,6 +1,11 @@
-<!-- BENCpass -->
+<img src="assets/brand/BENCO_Logo_README.png" alt="BENCO" align="right" width="120">
 
 # BENCpass
+
+[![CI](https://github.com/bropple/BENCpass/actions/workflows/ci.yml/badge.svg)](https://github.com/bropple/BENCpass/actions/workflows/ci.yml)
+[![Security](https://github.com/bropple/BENCpass/actions/workflows/security.yml/badge.svg)](https://github.com/bropple/BENCpass/actions/workflows/security.yml)
+[![Server image](https://github.com/bropple/BENCpass/actions/workflows/server-image.yml/badge.svg)](https://github.com/bropple/BENCpass/actions/workflows/server-image.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A self-hosted, end-to-end encrypted password manager for Firefox and Zen, meant
 to replace the browser's built-in one. Your vault syncs between your own
@@ -11,11 +16,15 @@ The server stores ciphertext and holds no key. It cannot read a record, and
 because it cannot read one, it cannot merge either — all merging happens on the
 clients.
 
-> **Not finished.** Everything below the line works and is tested, and the
-> extension now loads and fills. Still missing: the native biometric host,
-> import from Firefox, and the recovery kit. Until a recovery kit exists,
-> forgetting the master password loses the vault with no way back — so keep
-> Firefox's own password manager populated in parallel for now.
+**You do not need the server.** With none configured, nothing is sent anywhere
+and everything below still works; what you give up is having the same vault on
+a second machine. If you run that way, use the export — the vault then lives in
+one browser profile, and a profile is not a thing anyone backs up on purpose.
+
+> **Not finished.** Everything below the line works and is tested. Still
+> missing: the recovery kit. Until one exists, forgetting the master password
+> loses the vault with no way back, and no amount of self-hosting changes that
+> — so keep a recent export somewhere safe.
 
 | | |
 |---|---|
@@ -29,7 +38,8 @@ clients.
 | ✅ Form-field classification, logins and addresses | `src/core/fields.js` |
 | ✅ Address model: every WHATWG token, country and state dropdowns | `src/core/address.js` |
 | ✅ Biometric unlock — Touch ID, Hello or a security key, via WebAuthn PRF | `src/ext/webauthn.js` |
-| ⬜ Import from Firefox, recovery kit | — |
+| ✅ Import and export — BENCpass JSON, Firefox, Chrome, Bitwarden, KeePass | `src/core/transfer.js` |
+| ⬜ Recovery kit | — |
 
 ## Layout
 
@@ -39,7 +49,7 @@ src/ui/       the manager page
 src/vendor/   Argon2 (hash-wasm), vendored as one ES module
 server/       the Go sync server
 tools/        preview harness, icon and build scripts
-hosts/        the native host that puts Touch ID in front of the vault
+hosts/        a native host, built and then abandoned — see the note below
 test/         Node tests, including integration tests against the real server
 build/        everything generated — gitignored whole, safe to delete
 ```
@@ -54,8 +64,8 @@ a stray page ends up inside a packaged extension.
 ## Running things
 
 ```sh
-npm install && npm test     # 187 tests; the sync ones build and run the Go server
-cd server && go test ./...  # 15 tests
+npm install && npm test     # the sync ones build and run the Go server
+cd server && go test ./...  # unit and API tests, plus -race
 
 tools/selftest.sh           # drive the extension in a real browser, unattended
 tools/run-extension.sh      # load into a test profile, open the form-shapes page
@@ -285,50 +295,52 @@ Optional, and per machine. Without it BENCpass asks for the master password,
 which is what it does today and will always keep doing — the fingerprint is a
 shortcut, never the only key.
 
-Nothing appears in the interface until the host is installed — until then
-Settings says so, and says what to run. The manifest belongs to your user
-account rather than to a profile, so the temporarily-installed test extension
-reaches it just as a permanently installed one would:
+**Nothing to install.** It uses WebAuthn's PRF extension, so the browser asks
+the hardware directly: Touch ID on a Mac, Hello on a PC, or a plugged-in FIDO2
+key anywhere. No native binary, no entitlement, no developer account, no
+annual renewal. Turn it on under the gear in the manager.
 
-```sh
-hosts/install.sh            # build the host and register it, then restart the browser
-hosts/install.sh uninstall  # remove the registration
-```
-
-Then turn it on under the gear in the manager. You are asked for the master password **once**,
-at enrolment, and that is not a formality: the vault key lives in a
-non-extractable `CryptoKey` once unlocked, so a second wrapping genuinely
-cannot be made without re-deriving it.
+You are asked for the master password **once**, at enrolment, and that is not a
+formality: the vault key lives in a non-extractable `CryptoKey` once unlocked,
+so a second wrapping genuinely cannot be made without re-deriving it. You are
+also asked for the fingerprint twice, because Firefox does not hand back the
+derived value from the call that creates the credential — measured on both
+macOS and Windows — so it has to be read back with a second prompt. The setup
+panel says so before it starts.
 
 After that the fingerprint is the way in, not one of two equal options. The
-prompt is raised on sight — opening the popup, opening the manager, or clicking
-the menu on a login field — and the master password is put away behind a link
-for when the reader will not play. Cancelling shows the password box and does
-not ask again until the next time the vault locks.
+prompt is raised when you arrive at a locked vault, or when something asks to
+fill a password; the master password is put away behind a link for when the
+reader will not play. Locking deliberately does *not* re-prompt — otherwise the
+only way to lock the vault would be to cancel a dialog you did not ask for.
 
 **How it fits together.** The vault key is wrapped twice, under two independent
-secrets — the master password, and a random 32-byte device secret the operating
-system holds behind a fingerprint. Neither wrapping can produce the other.
-Turning it off drops the second wrapping locally: nothing is re-encrypted, no
-other machine is affected, and the server never knew about it.
-
-The native host is the least interesting component in the system, on purpose.
-It never sees the master password, the vault key, or a record — it is handed 32
-random bytes it cannot interpret and asked for them back later. See
-`hosts/PROTOCOL.md` for the wire format and the rules a host has to follow.
+secrets — the master password, and a 32-byte device secret derived from the
+authenticator. Neither wrapping can produce the other. Turning it off drops the
+second wrapping locally: nothing is re-encrypted, no other machine is affected,
+and the server never knew about it.
 
 | | |
 |---|---|
-| macOS | Touch ID, via a Secure Enclave key with `.biometryCurrentSet` — the secret is sealed to it and kept as ciphertext, so changing your enrolled fingerprints destroys the key and the file becomes unopenable. Not a keychain item: see `hosts/macos/README.md` for the three measurements that ruled that out |
-| Windows | not yet |
-| Linux | deliberately not. There is no equivalent to put in front of the secret: the desktop keyrings unlock with your login password, which would make this a way into the vault *without* a password rather than a stronger one |
+| macOS | Touch ID. The credential is a passkey held by iCloud Keychain, so it is protected by your fingerprint on each device but syncs across the Apple devices signed into that account. Worth knowing rather than assuming: the sync boundary is the iCloud account, not the one Mac. The secret is useless without the vault file it wraps, which is yours |
+| Windows | Hello, via the TPM. Machine-bound; it does not sync |
+| Linux | a plugged-in FIDO2 security key. There is no built-in equivalent — the desktop keyrings unlock with your login password, which would make this a way into the vault *without* a password rather than a stronger one |
 
-The macOS host does not use the keychain at all. A keychain item carrying a
-biometric access control needs a `keychain-access-groups` entitlement, and that
-entitlement is authorised by Apple alone — a self-signed certificate embeds it
-and the kernel then refuses to run the program. Measured three ways on a runner
-rather than reasoned about; the table is in `hosts/macos/README.md`.
+Whether a given machine can actually do it is a fact about that machine, so
+there is a probe rather than a promise: `tools/webauthn-probe/README.md`.
 
-`hosts/install.sh` ad-hoc signs the binary (`codesign --sign -`). That is not
-for distribution — it gives macOS a stable identity to attribute the Touch ID
-prompt to, so a rebuild does not invalidate the stored secret.
+### The native host that isn't
+
+`hosts/` holds a native messaging host that is **not used and not installed**.
+It was the original design — a small program holding the device secret behind
+the OS keystore — and it was built, signed, measured, and then made redundant
+by WebAuthn PRF, which reaches the same hardware through the browser with none
+of the paperwork. The `nativeMessaging` permission has been removed from the
+manifest, so the extension cannot talk to a host even if one were installed.
+
+It is kept because the measurements are the useful part. A macOS keychain item
+with a biometric access control needs a `keychain-access-groups` entitlement
+that Apple alone authorises; a self-signed certificate embeds it happily and
+the kernel then refuses to run the program. That was measured three ways on a
+runner rather than reasoned about, and the table is in `hosts/macos/README.md`.
+Read `hosts/` as a record of a route that was closed, not as something to run.

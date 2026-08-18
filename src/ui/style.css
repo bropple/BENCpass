@@ -418,6 +418,14 @@ select { color: var(--text); font: inherit; }
    under the text on a narrow pane along with everything else, via the rule
    above — flex-direction:column on .setting takes these with it. */
 .setting-actions { display: flex; gap: 8px; flex: none; }
+
+/* A field and the button that tests it, side by side and staying that way. */
+.field-with-test { display: flex; gap: 8px; align-items: flex-start; flex: none; }
+.field-with-test .btn { flex: none; }
+@media (max-width: 620px) {
+  .field-with-test { width: 100%; }
+  .field-with-test input.setting-input.wide { flex: 1; min-width: 0; }
+}
 @media (max-width: 620px) {
   .setting-actions { width: 100%; }
   .setting-actions .btn { flex: 1; }
@@ -428,6 +436,10 @@ select { color: var(--text); font: inherit; }
 .settings-note { color: var(--text-dim); font-size: 13px; margin-top: 12px; min-height: 1.2em; }
 .settings-note.bad { color: var(--bad); }
 .settings-note.good { color: var(--good); }
+
+/* Dimmed, and it stays dimmed — it is a signature, not a control. */
+.benco-mark { margin: 28px 0 4px; opacity: 0.35; }
+.benco-mark img { display: block; height: auto; }
 
 .settings-error { color: var(--bad); margin-top: 16px; }
 

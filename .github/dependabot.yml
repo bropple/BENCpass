@@ -1,0 +1,51 @@
+version: 2
+
+# Dependencies age into vulnerabilities without anyone touching them, which is
+# the whole reason this file exists alongside the scheduled scan in
+# security.yml: that one tells you something is wrong, this one opens the pull
+# request that fixes it.
+#
+# Weekly rather than daily. Nothing here moves fast enough to be worth a daily
+# interruption, and a pile of ignored notifications is worse than none.
+
+updates:
+  # The extension's own dependency tree. Only hash-wasm reaches a user — the
+  # rest is web-ext and never leaves the build machine — but a compromised dev
+  # dependency can still rewrite what gets packaged, so both are watched.
+  #
+  # Note that hash-wasm is also vendored into src/vendor/argon2.js. Bumping it
+  # here is half the job: tools/vendor.sh has to regenerate that file, and the
+  # `vendored` job in security.yml fails the build until it does.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      dev-tooling:
+        dependency-type: development
+
+  - package-ecosystem: gomod
+    directory: /server
+    schedule:
+      interval: weekly
+      day: monday
+
+  # The actions themselves. An action is code that runs with access to the
+  # repository, so a stale one is a supply-chain risk rather than a stale
+  # convenience.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+
+  # The base image the server is built from. The final stage is `scratch`, so
+  # only the builder is exposed — but the builder is what produces the binary
+  # people run.
+  - package-ecosystem: docker
+    directory: /server
+    schedule:
+      interval: weekly
+      day: monday

@@ -1,0 +1,140 @@
+name: Security
+
+# Everything here answers a question that changes over time even when the code
+# does not: a dependency turns out to be vulnerable, a vendored list goes stale,
+# an advisory lands against the Go toolchain. A password manager that was clean
+# on the day it shipped and never looked again is only accurate as history.
+#
+# Runs on every push and pull request, and on a schedule for exactly the reason
+# above — the interesting failures arrive without anybody touching the repo.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays, early. Nothing here is urgent enough for daily noise, and a week
+    # is short enough that an advisory is still news when it surfaces.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+# Read-only by default. Individual jobs ask for more only where they must, and
+# CodeQL is the only one that needs to write anything.
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, go]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          language: ${{ matrix.language }}
+          # security-extended picks up the injection and crypto-misuse queries
+          # that the default set leaves out, which are the ones worth having
+          # here.
+          queries: security-extended
+
+      - uses: github/codeql-action/autobuild@v3
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
+
+  go-vulns:
+    name: Go dependencies and toolchain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false
+
+      # govulncheck reports only vulnerabilities on paths the code actually
+      # reaches, so a finding here is a finding rather than an inventory entry.
+      # It covers the standard library too, which matters: the server's whole
+      # attack surface is net/http and crypto.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+        working-directory: server
+
+  npm-audit:
+    name: npm dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      # Only the runtime tree can reach a user. Everything else in the lockfile
+      # belongs to web-ext and never leaves this machine, so a vulnerability
+      # there is worth knowing and is not worth failing a build over — see the
+      # note on `npm audit` in README.md.
+      - name: Runtime dependencies (fails on anything)
+        run: npm audit --omit=dev --audit-level=low
+
+      - name: Build dependencies (reported, does not fail)
+        run: npm audit || true
+
+  vendored:
+    name: Vendored code matches its source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      # src/vendor/argon2.js is the one file in this repository where a silent
+      # substitution would be catastrophic and invisible: it derives the key
+      # that everything else is encrypted under. The lockfile pins hash-wasm by
+      # integrity hash, so regenerating from it and diffing proves the vendored
+      # copy is still what it claims to be.
+      #
+      # The country table has had this check since it was generated. The crypto
+      # did not, which was the wrong way round.
+      - name: Argon2 has not drifted from the locked dependency
+        run: |
+          tools/vendor.sh
+          git diff --exit-code -- src/vendor/argon2.js
+
+      - name: Country table is current
+        run: node tools/gen-countries.mjs --check
+
+  extension:
+    name: Extension manifest and permissions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      - name: web-ext lint
+        run: npx web-ext lint --source-dir=src --self-hosted
+
+      # A permission that nothing uses is worth catching the week it appears
+      # rather than the week somebody reads the manifest and wonders. This
+      # caught `nativeMessaging` outliving the native host it was added for.
+      - name: Every requested permission is used
+        run: node tools/check-permissions.mjs
