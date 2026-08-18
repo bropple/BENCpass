@@ -459,3 +459,17 @@ test('a record cannot seal its own disappearance', async () => {
   assert.equal(reopened.list().length, 1, 'a record sealed its own disappearance');
   assert.equal(reopened.get(id).title, 'Still here');
 });
+
+test('an imported record cannot seal its own disappearance either', async () => {
+  // The same guard as above, through the other door. `normalise` is what
+  // importRecords runs, and reverting the guard there broke no test at all —
+  // the record stayed visible until the vault was reopened and was gone
+  // afterwards, with its ciphertext intact.
+  const v = await Vault.create({ password: 'hunter2', kdf: FAST });
+  await v.importRecords([{ type: 'login', title: 'Imported', password: 'p', deleted: true }]);
+
+  const reopened = Vault.load(v.toJSON());
+  await reopened.unlock('hunter2');
+  assert.equal(reopened.list().length, 1, 'an imported record sealed its own disappearance');
+  assert.equal(reopened.list()[0].title, 'Imported');
+});

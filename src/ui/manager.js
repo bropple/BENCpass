@@ -1202,31 +1202,49 @@ $('s-autolock').addEventListener('change', () =>
 //
 // It has to run inside the event handler. `permissions.request` needs a user
 // gesture, and awaiting anything first spends it.
-const SYNC_DATA = ['authenticationInfo', 'personallyIdentifyingInfo', 'browsingActivity'];
+// Read from the manifest rather than written twice. A hand-copied list can
+// drift from what is declared, and the drift is silent in the worst direction:
+// the request would ask for less than sync actually sends.
+const SYNC_DATA =
+  globalThis.browser?.runtime?.getManifest?.()?.browser_specific_settings?.gecko
+    ?.data_collection_permissions?.optional ?? [];
 
 async function consentToSync() {
   const api = globalThis.browser?.permissions;
-  // Firefox before 140 has no data_collection in the permissions model. Nothing
-  // to ask, and nothing that would show in about:addons either.
-  if (!api?.request) return true;
+  if (!api?.request || !SYNC_DATA.length) return true;
   try {
     return await api.request({ data_collection: SYNC_DATA });
-  } catch {
-    // An older build that does not know the key rejects rather than returning
-    // false. Not a refusal by the person, so not treated as one.
-    return true;
+  } catch (err) {
+    // A rejection is a refusal, not a formality.
+    //
+    // This used to return true, on the reasoning that a browser too old to know
+    // `data_collection` would throw rather than answer. No such browser can
+    // install this: strict_min_version is 142 and the key shipped in 139. So the
+    // only rejections reachable here are real ones — a spent user gesture above
+    // all — and swallowing them saved the address with no consent recorded at
+    // all, which is precisely the state this function exists to prevent.
+    console.warn('BENCpass: the data-collection prompt failed', err);
+    return false;
   }
 }
 
 /** Save an address, having first asked to send anything to it. */
 async function saveEndpoint(field, key) {
+  const which = field === 's-endpoint' ? 'endpoint' : 'fallback';
   const value = $(field).value.trim();
 
   // Clearing the box is switching sync off. Nothing to consent to.
   if (value && !(await consentToSync())) {
-    $(field).value = '';
-    endpointStatus(field === 's-endpoint' ? 'endpoint' : 'fallback',
-      'Not saved: syncing needs permission to send your passwords and addresses to that server.', 'bad');
+    // The box is put back to what is actually stored rather than blanked. A
+    // blank box beside a still-configured endpoint says sync is off when it is
+    // not, and the refusal above did not turn anything off — it declined to
+    // turn something on.
+    await loadSettings();
+    endpointStatus(
+      which,
+      'Not saved: syncing needs permission to send your passwords and addresses to that server.',
+      'bad',
+    );
     return;
   }
   await saveSetting({ [key]: value });
@@ -1260,7 +1278,9 @@ $('s-sync-btn').addEventListener('click', async () => {
     $('s-sync-note').textContent =
       reply?.reason === 'not-configured'
         ? 'No server set.'
-        : `Failed: ${reply?.message ?? reply?.reason ?? 'error'}`;
+        : reply?.reason === 'no-consent'
+          ? 'Sync is off: permission to send your data was withdrawn in about:addons.'
+          : `Failed: ${reply?.message ?? reply?.reason ?? 'error'}`;
   }
 });
 

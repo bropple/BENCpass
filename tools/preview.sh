@@ -64,6 +64,19 @@ mkdir -p "$root/build/logs"
 rm -f "$complaints"
 RESULT_FILE="$complaints" node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
 server=$!
+
+# Confirm the server answering on this port is the one just started.
+#
+# It was not, once: another serve.mjs already held 8731, this one died of
+# EADDRINUSE with its output going to /dev/null, and every check and every
+# screenshot then ran against a foreign tree — producing a clean, entirely
+# meaningless pass. The port is not proof; the process is.
+sleep 0.5
+if ! kill -0 "$server" 2>/dev/null; then
+  echo "the preview server exited immediately — is port $port already in use?" >&2
+  echo "  try: PORT=8732 $0 $*" >&2
+  exit 1
+fi
 cleanup() { kill $server 2>/dev/null || true; rm -f "$gen" "$toast_gen"; }
 trap cleanup EXIT
 sleep 0.5

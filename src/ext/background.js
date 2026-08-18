@@ -1266,9 +1266,39 @@ function client() {
   });
 }
 
+/**
+ * The data-collection permissions this add-on declares as optional, and whether
+ * they are granted right now.
+ *
+ * Asked before every sync rather than once when the address was entered, and
+ * that difference is the point: these are revocable in about:addons, and
+ * Firefox does not enforce them at the network layer. Without this check,
+ * turning them off there would leave the switches reading off while the vault
+ * carried on syncing — which is exactly the contradiction the runtime prompt
+ * was added to prevent, arrived at from the other end.
+ *
+ * The list is read from the manifest so it cannot drift from what is declared.
+ */
+async function mayTransmit() {
+  const wanted =
+    browser.runtime.getManifest()?.browser_specific_settings?.gecko
+      ?.data_collection_permissions?.optional ?? [];
+  if (!wanted.length) return true;
+  try {
+    return await browser.permissions.contains({ data_collection: wanted });
+  } catch {
+    // A build that does not know the key cannot be enforcing it either, and
+    // strict_min_version means no such build can install this. Fail open only
+    // here, where the alternative is refusing to sync on a browser that has no
+    // opinion; the prompt itself fails closed.
+    return true;
+  }
+}
+
 async function handleSync() {
   const c = client();
   if (!c || !vault) return { ok: false, reason: 'not-configured' };
+  if (!(await mayTransmit())) return { ok: false, reason: 'no-consent' };
   try {
     const result = await syncOnce(vault, c, syncState);
     lastSyncAt = Date.now();
@@ -1287,6 +1317,8 @@ async function handleSync() {
 // so this does not wait for an unlock.
 function scheduleSync() {
   setInterval(() => {
+    // handleSync checks consent itself; this only avoids waking for a machine
+    // with no server configured at all.
     if (client()) handleSync().catch(() => {});
   }, SYNC_INTERVAL_MS);
 }

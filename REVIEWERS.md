@@ -113,9 +113,10 @@ git diff --exit-code -- src/vendor/argon2.js   # byte-identical
 ```
 
 The last two lines run in `.github/workflows/security.yml`, so a tampered copy
-fails the build. The appended export is the whole modification and is visible at
-the end of the file; the UMD wrapper finds no `exports` and no `define` inside an
-ES module, so it takes its global branch.
+fails the build. Both ends of the delta are visible in the file — the provenance
+header at the top, the export at the bottom — and the UMD wrapper in between
+finds no `exports` and no `define` inside an ES module, so it takes its global
+branch.
 
 It is vendored rather than imported because an extension cannot resolve a bare
 specifier and cannot use an import map — that needs an inline
@@ -177,9 +178,19 @@ node tools/gen-countries.mjs --check   # verify, as CI does
 ## No remote code
 
 The package contains no call to `eval`, `new Function`, `document.write`,
-`innerHTML`, `insertAdjacentHTML`, or `Range.createContextualFragment`. Grepping
-for those names returns exactly one line, a comment in `ext/toast.js` noting
-that the sentence below it is built without `innerHTML`.
+`innerHTML`, `insertAdjacentHTML`, or `Range.createContextualFragment`.
+
+Grepping for the five DOM names returns exactly one line — a comment in
+`ext/toast.js` noting that the sentence below it is built without `innerHTML`.
+
+Grepping for `eval` returns more, and none of it is a call, so here is what you
+will see and what each is:
+
+| Where | What |
+|---|---|
+| `manifest.json` | `'wasm-unsafe-eval'` in the CSP, for the Argon2 WASM — see above |
+| `ext/webauthn.js` ×2 | `prf: { eval: { first: SALT } }` — the name of a WebAuthn PRF extension field, not a function |
+| `core/argon2.js`, `ui/manager.js` | prose in comments |
 
 All rendering of record data goes through `textContent` or `createTextNode`,
 including data arriving from the import feature, so a record whose title is

@@ -245,7 +245,13 @@ $('sync-btn').addEventListener('click', async () => {
   say('Syncing…');
   const reply = await send({ type: MSG.SYNC });
   if (!reply?.ok) {
-    say(reply?.reason === 'not-configured' ? 'No server set.' : `Sync failed: ${reply?.reason}`);
+    say(
+      reply?.reason === 'not-configured'
+        ? 'No server set.'
+        : reply?.reason === 'no-consent'
+          ? 'Permission to send your data was withdrawn — see about:addons.'
+          : `Sync failed: ${reply?.reason}`,
+    );
     return;
   }
   say(
