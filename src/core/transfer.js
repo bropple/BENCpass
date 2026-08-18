@@ -98,9 +98,17 @@ function csvCell(value) {
 /**
  * Read our own JSON back.
  *
- * Strict about the envelope and forgiving about the contents: a file that is
- * not one of ours should say so rather than half-importing, while a record from
- * a newer version missing a field this one knows about should still arrive.
+ * Strict about the *shape* and forgiving about everything else. What is
+ * required is a `records` array — or a bare array, which is what several other
+ * managers write. The `format` and `version` fields that `toJson` stamps are
+ * deliberately not checked: they are there so a person finding the file later
+ * can tell what it is, and refusing to import a vault because a header string
+ * did not match would fail exactly the user who most needs the import to work.
+ *
+ * Being permissive here is safe because nothing is trusted on the way in.
+ * `recordFrom` builds each record key by key from the known field set and
+ * coerces every value with String(), so a file's own shape never becomes a
+ * record's shape.
  */
 export function fromJson(text) {
   checkSize(text);
