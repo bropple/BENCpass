@@ -326,7 +326,24 @@ const stubFetch = (behaviour) => {
     // that testable rather than a hang.
     if (outcome === 'hang') {
       return new Promise((_, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(new Error('TimeoutError')));
+        // The keep-alive is not belt and braces, it is what makes this test run
+        // at all. AbortSignal.timeout()'s timer is unref'd, so once the only
+        // pending work is that timer and this unsettled promise, Node decides
+        // it has nothing left to do and exits -- and the runner reports
+        // "Promise resolution is still pending but the event loop has already
+        // resolved" against this test and every one after it in the file.
+        //
+        // It passed locally and failed in CI for three commits, because
+        // concurrent tests happened to keep the loop busy here and did not
+        // there. A ref'd timer removes the coincidence.
+        const keepAlive = setTimeout(
+          () => reject(new Error('the hanging address was never aborted')),
+          5000,
+        );
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(keepAlive);
+          reject(new Error('TimeoutError'));
+        });
       });
     }
     return Promise.resolve(outcome);
