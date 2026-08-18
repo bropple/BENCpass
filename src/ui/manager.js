@@ -11,6 +11,7 @@ import { generate, entropyBits } from '../core/generate.js';
 import { ADDRESS_SCHEMA, countryOptions, countryName, splitName } from '../core/address.js';
 import { toJson, toCsv, parse as parseTransfer, TransferError } from '../core/transfer.js';
 import { LOGIN } from '../core/model.js';
+import { PROTOCOL } from '../core/sync.js';
 import { MSG } from '../ext/protocol.js';
 import * as webauthn from '../ext/webauthn.js';
 
@@ -924,7 +925,29 @@ async function testEndpoint(which) {
       endpointStatus(which, 'Something answered, but not a BENCpass server.', 'bad');
       return;
     }
-    endpointStatus(which, `Answered. ${body.seq ?? 0} change${body.seq === 1 ? '' : 's'} stored.`, 'good');
+
+    // A server speaking a different version of the signed request format is the
+    // failure worth naming. Every request to it comes back 401, and 401 is also
+    // what a wrong device key gives — so without this the answer to "why has
+    // sync stopped" is a credential error pointing at the wrong thing.
+    const theirs = Number(body.protocol ?? 1);
+    if (theirs !== PROTOCOL) {
+      endpointStatus(
+        which,
+        theirs > PROTOCOL
+          ? `That server speaks protocol ${theirs} and this BENCpass speaks ${PROTOCOL}. Update the extension.`
+          : `That server speaks protocol ${theirs} and this BENCpass speaks ${PROTOCOL}. Update the server.`,
+        'bad',
+      );
+      return;
+    }
+
+    const seq = body.seq ?? 0;
+    endpointStatus(
+      which,
+      `Answered. ${seq} change${seq === 1 ? '' : 's'} stored${body.server ? `, server ${body.server}` : ''}.`,
+      'good',
+    );
   } catch (err) {
     // A timeout and a refusal are different problems with different fixes, and
     // saying which saves the guess.

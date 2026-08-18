@@ -41,6 +41,21 @@ const (
 	maxNonce = 64
 )
 
+// Protocol is the version of the signed request format below.
+//
+// Bump it whenever the canonical string changes — a field added, removed,
+// reordered, or reinterpreted — because any of those makes every older client's
+// signature wrong. It has moved three times already:
+//
+//	1  METHOD, path, timestamp, body hash
+//	2  ...plus a nonce and the host, and If-Match folded in
+//
+// The point of the number is not negotiation. It is that a client which cannot
+// speak to this server finds out *why* — sync.js checks it against its own and
+// says so, instead of reporting the 401 that a mismatch otherwise produces and
+// which reads exactly like a wrong key.
+const Protocol = 2
+
 var errUnauthorised = errors.New("unauthorised")
 
 // canonical is the exact string both sides sign. Any disagreement about it —

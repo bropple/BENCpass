@@ -33,6 +33,22 @@ export class SyncError extends Error {
  * listener is left holding a request it can send on. Naming the host in the
  * signature makes that copy good only against the address it already reached.
  */
+/**
+ * The version of the signed format below, mirrored from server/auth.go.
+ *
+ * Bump both together whenever the canonical string changes — a field added,
+ * removed, reordered or reinterpreted — because any of those makes every older
+ * client's signature wrong.
+ *
+ * It exists because of what a mismatch looks like without it. The two sides
+ * disagree about one string, every request comes back 401, and 401 is also what
+ * a wrong device key returns; the format has already moved three times and each
+ * time the symptom was identical to a credential problem. /v1/health reports
+ * this number without a signature, so a client can find out that it is speaking
+ * the wrong language rather than being told its key is bad.
+ */
+export const PROTOCOL = 2;
+
 export function canonical(method, host, uri, ts, nonce, ifMatch, bodyHashHex) {
   return `${method}\n${host}\n${uri}\n${ts}\n${nonce}\n${ifMatch}\n${bodyHashHex}`;
 }
@@ -221,9 +237,43 @@ export class SyncClient {
     return { status: resp.status, body: out };
   }
 
+  /**
+   * What is at this address, and can we talk to it?
+   *
+   * Unauthenticated, so it answers before a device is enrolled — which is when
+   * the address is most likely to be wrong.
+   */
   async health() {
     const resp = await this.fetch(`${this.endpoint}/v1/health`);
     return resp.json();
+  }
+
+  /**
+   * Check the server speaks our protocol, and say plainly when it does not.
+   *
+   * Returns `{ ok }` when it does, and otherwise a `reason` a person can act
+   * on. A server that predates the protocol field reports nothing; that is
+   * treated as protocol 1, because it is.
+   */
+  async checkProtocol() {
+    let body;
+    try {
+      body = await this.health();
+    } catch (err) {
+      return { ok: false, reason: 'unreachable', detail: String(err?.message ?? err) };
+    }
+    if (!body?.ok) return { ok: false, reason: 'not-bencpass' };
+
+    const theirs = Number(body.protocol ?? 1);
+    if (theirs === PROTOCOL) return { ok: true, protocol: theirs, server: body.server };
+
+    return {
+      ok: false,
+      reason: theirs > PROTOCOL ? 'client-too-old' : 'server-too-old',
+      protocol: theirs,
+      ours: PROTOCOL,
+      server: body.server,
+    };
   }
 
   async mintCode() {

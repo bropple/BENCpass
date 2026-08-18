@@ -137,8 +137,26 @@ func fail(w http.ResponseWriter, code int, msg string) {
 
 // ---- handlers --------------------------------------------------------------
 
+// health says what this server is and what it speaks, without a signature.
+//
+// The protocol number is the useful part. A client and a server that disagree
+// about the signed string produce a 401 and nothing else — the wire format has
+// already changed three times, and each time the symptom was indistinguishable
+// from a wrong device key. Saying the number out loud, unauthenticated, lets a
+// client tell "we disagree about the protocol" from "your key is wrong", and
+// lets the Test button in Settings answer the question a person actually has.
+//
+// Unauthenticated on purpose: it has to work before a device is enrolled, which
+// is exactly when an address is most likely wrong. It reveals only that a
+// BENCpass server is here and how far along it is — which anyone able to reach
+// it can infer from its refusals anyway.
 func (s *server) health(w http.ResponseWriter, r *http.Request) {
-	send(w, http.StatusOK, map[string]any{"ok": true, "seq": s.store.Seq()})
+	send(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"seq":      s.store.Seq(),
+		"protocol": Protocol,
+		"server":   version,
+	})
 }
 
 func (s *server) enrol(w http.ResponseWriter, r *http.Request) {

@@ -7,7 +7,14 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Vault } from '../src/core/vault.js';
-import { SyncClient, syncOnce, emptySyncState, SyncError, canonical } from '../src/core/sync.js';
+import {
+  SyncClient,
+  syncOnce,
+  emptySyncState,
+  SyncError,
+  canonical,
+  PROTOCOL,
+} from '../src/core/sync.js';
 
 // These run against the real Go binary rather than a stub. The point is to
 // prove the two implementations agree on the canonical signing string — a mock
@@ -641,4 +648,65 @@ test('a remembered address that is no longer configured is ignored', async () =>
   });
   await client.request('GET', '/v1/changes?since=0');
   assert.ok(fetch.seen[0].startsWith('http://lan:8788'));
+});
+
+// ---- protocol version -------------------------------------------------------
+//
+// The wire format has changed three times, and each time a client and server
+// that disagreed produced a 401 — the same answer as a wrong device key. These
+// pin that the disagreement can be told apart from a credential problem, which
+// is the whole reason the number is reported at all.
+
+test('the client and the real server agree on the protocol number', { ...skip }, async (t) => {
+  // Against the real binary, so the two constants cannot drift apart unnoticed:
+  // the Go one and the JavaScript one are separate declarations of one fact.
+  const { endpoint } = await startServer(t);
+  const client = new SyncClient({ endpoint, deviceId: 'd', key: new Uint8Array(32) });
+
+  const health = await client.health();
+  assert.equal(health.protocol, PROTOCOL, 'server and client disagree about the protocol version');
+
+  const check = await client.checkProtocol();
+  assert.equal(check.ok, true);
+});
+
+test('a server speaking a newer protocol says so instead of failing as a bad key', async () => {
+  const client = new SyncClient({
+    endpoint: 'https://newer.example',
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch: async () => okResponse({ ok: true, seq: 3, protocol: PROTOCOL + 1, server: '9.9.9' }),
+  });
+  const check = await client.checkProtocol();
+  assert.equal(check.ok, false);
+  assert.equal(check.reason, 'client-too-old');
+  assert.equal(check.protocol, PROTOCOL + 1);
+});
+
+test('a server predating the protocol field is read as the version it is', async () => {
+  // No field at all means the first format, because that is what it was.
+  const client = new SyncClient({
+    endpoint: 'https://older.example',
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch: async () => okResponse({ ok: true, seq: 0 }),
+  });
+  const check = await client.checkProtocol();
+  assert.equal(check.ok, false);
+  assert.equal(check.reason, 'server-too-old');
+  assert.equal(check.protocol, 1);
+});
+
+test('an address with nothing behind it is unreachable, not a protocol problem', async () => {
+  const client = new SyncClient({
+    endpoint: 'https://nothing.example',
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch: async () => {
+      throw new Error('connection refused');
+    },
+  });
+  const check = await client.checkProtocol();
+  assert.equal(check.ok, false);
+  assert.equal(check.reason, 'unreachable');
 });
