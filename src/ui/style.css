@@ -441,6 +441,20 @@ select { color: var(--text); font: inherit; }
 .benco-mark { margin: 28px 0 4px; opacity: 0.35; }
 .benco-mark img { display: block; height: auto; }
 
+/* A button that reads as a link: the gate's "or join a server instead", which
+   switches what the form does rather than navigating anywhere. */
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.linkish:hover { color: var(--text); }
+.gate-switch { margin-top: 14px; text-align: center; font-size: 13px; }
+
 .settings-error { color: var(--bad); margin-top: 16px; }
 
 /* The master-password confirmation, which appears in place rather than as a

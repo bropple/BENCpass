@@ -51,6 +51,7 @@ export const MSG = Object.freeze({
   // manager -> background
   SETTINGS_GET: 'settings-get',
   SETTINGS_SET: 'settings-set',
+  JOIN: 'join', // "adopt the vault this server is already carrying"
 
   // manager -> background. The device secret is derived in the page by WebAuthn
   // and crosses as bytes; the background never asks anything for it.

@@ -168,6 +168,10 @@ async function boot() {
   state.vault = vaultHost.vault;
 
   if (!state.vault) {
+    // Setup by default, with the join offered beside it. Guessing which one
+    // somebody wants from whether a server happens to be configured would be
+    // wrong as often as right: a machine can have an address saved and still be
+    // the one that creates the vault.
     setGate('setup');
     return;
   }
@@ -446,19 +450,91 @@ $('s-bio-form').addEventListener('submit', async (e) => {
 
 function setGate(mode) {
   const setup = mode === 'setup';
+  const join = mode === 'join';
+
   $('gate-confirm-field').hidden = !setup;
   $('gate-pw2').required = setup;
-  $('gate-go').textContent = setup ? 'Create vault' : 'Unlock';
-  $('gate-hint').textContent = setup ? 'No vault on this machine.' : 'Locked.';
+  $('gate-join-fields').hidden = !join;
+  $('gate-server').required = join;
+  $('gate-code').required = join;
+
+  $('gate-go').textContent = setup ? 'Create vault' : join ? 'Join' : 'Unlock';
+  $('gate-hint').textContent = setup
+    ? 'No vault on this machine.'
+    : join
+      ? 'Join the vault on your server.'
+      : 'Locked.';
+
   $('gate-note').textContent = setup
     ? 'The master password is not recoverable. Nothing here, and nothing on the server, can open the vault without it.'
-    : '';
+    : join
+      ? 'The same master password as your other machine. This pulls that vault down rather than making a new one — a new one could never read its records.'
+      : '';
+
+  // Offered only when there is no vault here. With one, "join" would mean
+  // replacing it, which is not a thing to put behind a link on a lock screen.
+  const offer = setup || join;
+  $('gate-switch').hidden = !offer;
+  $('gate-switch-btn').textContent = join
+    ? 'Or create a new vault on this machine'
+    : 'Already have a vault on a server? Join it';
+
   $('gate-pw').autocomplete = setup ? 'new-password' : 'current-password';
   $('gate').dataset.mode = mode;
   $('gate-pw').focus();
 }
 
+$('gate-switch-btn').addEventListener('click', () => {
+  setGate($('gate').dataset.mode === 'join' ? 'setup' : 'join');
+  $('gate-error').hidden = true;
+});
+
 // ---- gate ------------------------------------------------------------------
+
+/**
+ * Adopt the vault that is already on a server.
+ *
+ * Three things happen in order, and the order matters: the address is saved so
+ * there is somewhere to redeem against, the code is redeemed for a device
+ * credential, and only then is the header pulled and opened with the master
+ * password. Each step's failure is reported as itself rather than as whatever
+ * the next step made of it.
+ *
+ * The vault key that comes out of this is the *same* one the other machine
+ * uses. That is the whole difference between joining and starting again: a new
+ * vault would have its own key and could never read a record the other machine
+ * wrote.
+ */
+async function joinExisting(password) {
+  const server = $('gate-server').value.trim();
+  const code = $('gate-code').value.trim();
+  if (!server) throw new Error('Where is the server?');
+  if (!code) throw new Error('Paste the code the server printed.');
+
+  // Consent first: this is the moment the machine agrees to send anything
+  // anywhere, and asking after the vault is open would be asking too late.
+  if (!(await consentToSync())) {
+    throw new Error('Joining needs permission to send your passwords and addresses to that server.');
+  }
+
+  const saved = await askBackground(MSG.SETTINGS_SET, { endpoint: server, enrolment: code });
+  if (!saved?.ok) {
+    const why = {
+      'bad-endpoint': 'That is not a URL.',
+      'insecure-endpoint':
+        'Plain http is only allowed to a private address. Use https, or a LAN or Tailscale name.',
+      'bad-code': 'The server did not accept that code. They are single-use and expire after 30 minutes.',
+      'bad-enrolment': 'That is not a code. Paste what the server printed, or a `device-id:key` pair.',
+      unreachable: 'Nothing answered at that address.',
+    };
+    throw new Error(why[saved?.reason] ?? `Could not enrol: ${saved?.reason ?? 'error'}`);
+  }
+
+  const joined = await askBackground(MSG.JOIN, { password });
+  if (!joined?.ok) throw new Error(joined?.message ?? 'Could not join that vault.');
+
+  state.vault = vaultHost.vault;
+}
 
 $('gate-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -481,6 +557,8 @@ $('gate-form').addEventListener('submit', async (e) => {
       state.vault = await Vault.create({ password: pw });
       vaultHost.setVault(state.vault);
       await persist();
+    } else if ($('gate').dataset.mode === 'join') {
+      await joinExisting(pw);
     } else {
       await state.vault.unlock(pw);
     }
@@ -1166,7 +1244,9 @@ async function saveSetting(patch) {
       'Plain http is only allowed to a private address. Use https, or a LAN or Tailscale name.',
     unreachable: 'Neither address answered.',
     'bad-autolock': 'Between 1 minute and 24 hours.',
-    'bad-enrolment': 'An enrollment code looks like `device-id:key`.',
+    'bad-enrolment': 'That is not a code. Paste what the server printed, or a `device-id:key` pair.',
+    'no-endpoint-for-code': 'Set the server address first — a code has to be redeemed somewhere.',
+    'bad-code': 'The server did not accept that code. They are single-use and expire after 30 minutes.',
   };
   if (!reply?.ok) {
     $('s-error').textContent = problems[reply?.reason] ?? 'Could not save that.';

@@ -43,10 +43,33 @@
         <input type="password" id="gate-pw2" autocomplete="new-password">
       </label>
 
+      <!-- Joining a vault that is already on a server. Two things this machine
+           does not have yet: where the server is, and the credential that lets
+           it speak to it. The master password above is the third, and is the
+           one that actually opens the vault. -->
+      <div id="gate-join-fields" hidden>
+        <label class="field">
+          <span class="label">Server address</span>
+          <input type="text" id="gate-server" autocomplete="off"
+                 placeholder="http://10.0.0.20:8788">
+        </label>
+
+        <label class="field">
+          <span class="label">Enrolment code</span>
+          <input type="text" id="gate-code" autocomplete="off"
+                 placeholder="the code the server printed, or device-id:key">
+        </label>
+      </div>
+
       <p class="gate-error" id="gate-error" role="alert" hidden></p>
 
       <button type="submit" class="btn btn-primary" id="gate-go">Unlock</button>
     </form>
+
+    <!-- Offered only where it makes sense: there is no vault here yet. -->
+    <p class="gate-switch" id="gate-switch" hidden>
+      <button type="button" class="linkish" id="gate-switch-btn"></button>
+    </p>
 
     <p class="gate-note" id="gate-note"></p>
   </div>

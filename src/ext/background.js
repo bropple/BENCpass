@@ -27,7 +27,7 @@ import {
   addressSummary,
 } from '../core/address.js';
 import { generate } from '../core/generate.js';
-import { SyncClient, syncOnce, loadSyncState, dumpSyncState } from '../core/sync.js';
+import { SyncClient, syncOnce, joinVault, loadSyncState, dumpSyncState } from '../core/sync.js';
 import { MSG, publicCandidate, publicAddress, isMessage, asString, asId } from './protocol.js';
 
 const AUTOLOCK_MS = 15 * 60 * 1000;
@@ -270,6 +270,8 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleSettingsGet();
     case MSG.SETTINGS_SET:
       return handleSettingsSet(msg);
+    case MSG.JOIN:
+      return handleJoin(msg, sender);
     case MSG.BIO_STATE:
       return handleBioState();
     case MSG.BIO_ENROL:
@@ -905,6 +907,77 @@ const suggestAddressName = (a) =>
 const MIN_AUTOLOCK_MS = 60 * 1000;
 const MAX_AUTOLOCK_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * What this machine calls itself when enrolling.
+ *
+ * The server lists devices by this, and "device 3" tells nobody which machine
+ * to stop trusting. The platform is the most it can honestly know.
+ */
+async function deviceName() {
+  const os = await browser.runtime
+    .getPlatformInfo()
+    .then((i) => i.os)
+    .catch(() => '');
+  return { mac: 'mac', win: 'windows', linux: 'linux' }[os] ?? 'browser';
+}
+
+/**
+ * Adopt the vault a configured server is already carrying.
+ *
+ * Only ever the first vault on a machine: replacing an existing one would throw
+ * away whatever it holds, and no path in the interface asks for that. The
+ * refusal is explicit rather than implied by an overwrite.
+ */
+async function handleJoin(msg, sender) {
+  if (!isExtensionPage(sender)) return { ok: false };
+  if (vault) {
+    return { ok: false, reason: 'already-a-vault', message: 'There is already a vault on this machine.' };
+  }
+
+  const password = asString(msg.password, 1024);
+  if (!password) return { ok: false, reason: 'no-password', message: 'Enter the master password.' };
+
+  const c = client();
+  if (!c) {
+    return {
+      ok: false,
+      reason: 'not-configured',
+      message: 'Set the server address and an enrolment code first.',
+    };
+  }
+
+  let joined;
+  try {
+    joined = await joinVault({ client: c, password, Vault });
+  } catch (err) {
+    // joinVault tells "no vault there" apart from "that password does not open
+    // it", and both are worth more than a bare failure.
+    return { ok: false, reason: err?.code ?? 'error', message: String(err?.message ?? err) };
+  }
+
+  vault = joined;
+  // A joined vault starts from nothing and pulls everything, so its sync state
+  // has to start from nothing too: an inherited high-water mark would refuse
+  // the very first pull as a rollback.
+  syncState = loadSyncState(null);
+  await persistVault();
+  await persistSettings();
+
+  bumpAutolock();
+  paintBadge();
+  broadcastLockState();
+
+  // The records come down the ordinary path, so there is one route that moves
+  // them rather than two.
+  try {
+    await handleSync();
+  } catch {
+    // Joined regardless: the vault is open and the next sync fetches. Reporting
+    // a failure here would be wrong about what happened.
+  }
+  return { ok: true };
+}
+
 async function handleSettingsGet() {
   return {
     endpoint: settings.endpoint,
@@ -966,13 +1039,41 @@ async function handleSettingsSet(msg) {
 
   if (msg.allowInsecure !== undefined) patch.allowInsecure = Boolean(msg.allowInsecure);
 
-  // An enrolment code from the server, as one string. Split here rather than
-  // asking someone to paste two halves into two boxes.
+  // What the server hands out, in either of the two shapes a person can have.
+  //
+  // A bare code is what the server prints at startup and what an enrolled
+  // device mints for the next one; it is redeemed here for a device id and key.
+  // A `device-id:key` pair is the result of having redeemed one already.
+  //
+  // The box used to accept only the second while its own hint told people to
+  // paste the first, so the code the server actually printed was rejected with
+  // "an enrolment code looks like device-id:key" — and the answer was to go and
+  // find curl.
   if (typeof msg.enrolment === 'string' && msg.enrolment.trim()) {
-    const parts = asString(msg.enrolment, 512).trim().split(/[:\s]+/).filter(Boolean);
-    if (parts.length !== 2) return { ok: false, reason: 'bad-enrolment' };
-    patch.deviceId = parts[0];
-    patch.deviceKey = parts[1];
+    const raw = asString(msg.enrolment, 512).trim();
+    const parts = raw.split(/[:\s]+/).filter(Boolean);
+
+    if (parts.length === 2) {
+      patch.deviceId = parts[0];
+      patch.deviceKey = parts[1];
+    } else if (parts.length === 1) {
+      const endpoint = patch.endpoint ?? settings.endpoint;
+      const fallback = patch.fallbackEndpoint ?? settings.fallbackEndpoint;
+      if (!endpoint && !fallback) return { ok: false, reason: 'no-endpoint-for-code' };
+      try {
+        const { deviceId, key } = await SyncClient.enrol({
+          endpoints: [endpoint, fallback].filter(Boolean),
+          code: parts[0],
+          name: await deviceName(),
+        });
+        patch.deviceId = deviceId;
+        patch.deviceKey = btoa(String.fromCharCode(...key));
+      } catch (err) {
+        return { ok: false, reason: err?.code === 'unreachable' ? 'unreachable' : 'bad-code' };
+      }
+    } else {
+      return { ok: false, reason: 'bad-enrolment' };
+    }
   }
 
   settings = { ...settings, ...patch };
