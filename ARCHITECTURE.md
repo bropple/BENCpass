@@ -276,11 +276,44 @@ GET  /v1/records?since=<seq>     → { seq, records[] }
 PUT  /v1/records                 → { seq } | 409
      If-Match: <seq>               body: { records[] }
 GET  /v1/meta                    → { kdfParams, wrappedVaultKey, seq }
-POST /v1/enroll                  → device registration, one-time code
+PUT  /v1/meta                    → { seq } | 409
+     If-Match: <seq>               body: { meta }
+POST /v1/codes                   → { code, ttlSeconds }
+POST /v1/enrol                   → device registration, one-time code
 ```
 
-Every request is signed with a **per-device HMAC key** issued at enrollment.
+Every request is signed with a **per-device HMAC key** issued at enrolment.
 Revoking a lost laptop is deleting one device key, not rotating the vault.
+
+### What is signed
+
+```
+HMAC-SHA256( METHOD \n host \n /path?query \n unix-millis \n nonce \n sha256(body) )
+```
+
+Three of those six are there for reasons worth stating, because each closes
+something the others do not:
+
+**`nonce`** — the server accepts each one once, remembering them for as long as
+the clock window. Without it a captured request could simply be sent again
+inside those five minutes. Compare-and-swap on the sequence covers a replayed
+record write, since the second one loses the race, but not every authenticated
+request is a write: minting an enrolment code returns a *fresh* code every time
+it is called, so a replayed mint used to hand out as many device keys as anyone
+cared to ask for. The nonce is what makes the LAN address safe to expose.
+
+**`host`** — a client holds two addresses for one server and moves between them.
+Whatever answers the first address can read a complete signed request and then
+drop the connection: the client sees an unreachable address, succeeds quietly
+against the second, and the listener keeps a usable request. Naming the host
+makes that copy good only where it already arrived. It also means a reverse
+proxy that rewrites `Host` will break every signature.
+
+**`If-Match` on `/v1/meta`** — this carries the wrapped vault key, so a write
+landing out of order reinstates an old wrapping, and after a master password
+change that brings the old password back. The client cannot catch it on its own:
+it watches for the sequence going backwards, and a stale header written late
+arrives with the sequence going forwards like anything else.
 
 **Merge rule** — causal, not chronological. Each client keeps a `syncedRev` map:
 for every record, the `rev` it last agreed with the server on. That is the

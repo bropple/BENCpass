@@ -53,9 +53,21 @@ func main() {
 
 	s := &server{store: store}
 	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           s.routes(),
+		Addr:    *addr,
+		Handler: s.routes(),
+
+		// Headers arrive promptly or not at all. The rest is deliberately
+		// generous: a body is capped at 32 MiB and the client's last attempt is
+		// not time-boxed on purpose, because a large vault over a slow link is a
+		// slow sync rather than a failure. Two minutes is far more than a real
+		// vault needs — they run to kilobytes — while still putting a bound on
+		// how long a connection that has gone quiet can hold anything open.
+		// Without these, a body sent one byte at a time holds a connection for
+		// as long as it likes once the headers are through.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	// Bind first and report the address the listener actually got, not the one
@@ -173,7 +185,27 @@ func (s *server) putMeta(w http.ResponseWriter, r *http.Request, body []byte) {
 		fail(w, http.StatusBadRequest, "bad request")
 		return
 	}
-	seq, err := s.store.PutMeta(req.Meta)
+	// The same If-Match as records, for the same reason and then some: this is
+	// the wrapped vault key, and a write that lands out of order puts an old
+	// wrapping back.
+	ifMatch := int64(-1)
+	if v := r.Header.Get("If-Match"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			fail(w, http.StatusBadRequest, "bad If-Match")
+			return
+		}
+		ifMatch = n
+	} else if s.store.Seq() != 0 {
+		fail(w, http.StatusPreconditionRequired, "If-Match required")
+		return
+	}
+
+	seq, err := s.store.PutMeta(req.Meta, ifMatch)
+	if errors.Is(err, ErrConflict) {
+		fail(w, http.StatusConflict, "sequence moved on")
+		return
+	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "cannot write")
 		return

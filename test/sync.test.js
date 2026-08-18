@@ -444,6 +444,45 @@ test('a client with no address at all refuses to be built', () => {
   assert.throws(() => new SyncClient({ endpoints: ['', null], deviceId: 'd', key: new Uint8Array(32) }));
 });
 
+test('each attempt is signed for the address it is actually sent to', async () => {
+  // The reason this matters is the failover itself. Something sitting on the
+  // first address can read a whole signed request and then drop the
+  // connection: the client sees an unreachable address, succeeds quietly
+  // against the second, and the listener keeps a complete request. If the
+  // signature did not name the host, that copy would work against the real
+  // server.
+  const sent = [];
+  const fetch = (url, init) => {
+    sent.push({ url, headers: init.headers });
+    if (url.startsWith('http://lan')) return Promise.reject(new Error('unreachable'));
+    return Promise.resolve(okResponse({}));
+  };
+
+  const client = new SyncClient({
+    endpoints: ['http://lan:8788', 'https://tail.ts.net'],
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch,
+    probeTimeoutMs: 20,
+  });
+  await client.request('GET', '/v1/changes?since=0');
+
+  assert.equal(sent.length, 2, 'both addresses should have been tried');
+  const [first, second] = sent;
+
+  // A nonce is spent once. Reusing it across the two attempts would make the
+  // retry look exactly like the replay the server now refuses.
+  assert.notEqual(
+    first.headers['X-Bencpass-Nonce'],
+    second.headers['X-Bencpass-Nonce'],
+    'the second attempt reused the first attempt nonce',
+  );
+  assert.match(first.headers['X-Bencpass-Nonce'], /^[0-9a-f]{32}$/);
+
+  // Different host, different nonce, so necessarily a different signature.
+  assert.notEqual(first.headers['X-Bencpass-Sig'], second.headers['X-Bencpass-Sig']);
+});
+
 test('an address that hangs is abandoned rather than waited out', async () => {
   // A LAN address on a foreign network does not refuse; there is nothing there
   // to refuse. Without a bound on the attempt this is a TCP timeout every sync.

@@ -55,13 +55,17 @@ type Store struct {
 	dir  string
 	keep int
 	d    data
+
+	// Nonces already spent, so a captured request cannot be sent twice. Not
+	// part of `data` and never written to disk — see replay.go.
+	seen *seen
 }
 
 func OpenStore(dir string, keep int) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(dir, "snapshots"), 0o700); err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir, keep: keep, d: data{
+	s := &Store{dir: dir, keep: keep, seen: newSeen(), d: data{
 		Records: map[string]Envelope{},
 		Devices: map[string]Device{},
 		Codes:   map[string]int64{},
@@ -224,9 +228,25 @@ func (s *Store) Meta() (json.RawMessage, int64) {
 	return s.d.Meta, s.d.Seq
 }
 
-func (s *Store) PutMeta(meta json.RawMessage) (int64, error) {
+// PutMeta replaces the vault header, under the same compare-and-swap as records.
+//
+// The check is not ceremony. This header carries the wrapped vault key, so a
+// write that lands out of order reinstates an old wrapping — and after a master
+// password change that means the new password stops opening the vault and the
+// old one starts again. The client cannot notice on its own: it watches for the
+// sequence going *backwards*, and a stale header written late arrives with a
+// sequence going forwards like any other write.
+//
+// ifMatch < 0 means the caller is not checking, which is only legitimate for the
+// first write to a fresh store.
+func (s *Store) PutMeta(meta json.RawMessage, ifMatch int64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if ifMatch >= 0 && ifMatch != s.d.Seq {
+		return s.d.Seq, ErrConflict
+	}
+
 	s.d.Meta = meta
 	s.d.Seq++
 	if err := s.save(); err != nil {

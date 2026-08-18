@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,11 +17,12 @@ import (
 )
 
 type client struct {
-	t    *testing.T
-	srv  *httptest.Server
-	id   string
-	key  []byte
-	skew time.Duration // deliberately wrong clock, for the replay-window test
+	t     *testing.T
+	srv   *httptest.Server
+	id    string
+	key   []byte
+	skew  time.Duration // deliberately wrong clock, for the replay-window test
+	nonce string        // pinned, so a test can deliberately send the same one twice
 }
 
 func newServer(t *testing.T) (*httptest.Server, *Store, string) {
@@ -75,9 +78,20 @@ func (c *client) do(method, path string, body any, headers map[string]string) (i
 		c.t.Fatal(err)
 	}
 	ts := strconv.FormatInt(time.Now().Add(c.skew).UnixMilli(), 10)
+	// A fresh nonce per call, because the server accepts each one once. Tests
+	// that want to replay a request capture the headers and send them again.
+	nonce := c.nonce
+	if nonce == "" {
+		var b [16]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			c.t.Fatal(err)
+		}
+		nonce = hex.EncodeToString(b[:])
+	}
 	req.Header.Set(hdrDevice, c.id)
 	req.Header.Set(hdrTime, ts)
-	req.Header.Set(hdrSig, sign(c.key, method, path, ts, raw))
+	req.Header.Set(hdrNonce, nonce)
+	req.Header.Set(hdrSig, sign(c.key, method, req.Host, path, ts, nonce, raw))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -173,6 +187,153 @@ func TestUnsignedRequestIsRefused(t *testing.T) {
 	}
 }
 
+func TestMetaWriteNeedsTheSequenceItSaw(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	// First write to a fresh store: no sequence to match yet.
+	status, out := c.do("PUT", "/v1/meta", map[string]any{"meta": map[string]any{"wrap": "v1"}}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("first meta write refused: %d", status)
+	}
+	first := int64(out["seq"].(float64))
+
+	// A master password change: same store, new wrapping, matching the sequence.
+	status, out = c.do("PUT", "/v1/meta", map[string]any{"meta": map[string]any{"wrap": "v2"}},
+		map[string]string{"If-Match": strconv.FormatInt(first, 10)})
+	if status != http.StatusOK {
+		t.Fatalf("rotation refused: %d", status)
+	}
+
+	// Now the write that used to slip through: an old header arriving late.
+	// Without compare-and-swap it lands, the sequence goes *up*, and the client
+	// -- which only watches for the sequence going down -- serves the old
+	// wrapped key to the next machine that bootstraps from it.
+	status, _ = c.do("PUT", "/v1/meta", map[string]any{"meta": map[string]any{"wrap": "v1"}},
+		map[string]string{"If-Match": strconv.FormatInt(first, 10)})
+	if status != http.StatusConflict {
+		t.Fatalf("a stale meta write was accepted: %d", status)
+	}
+
+	status, out = c.do("GET", "/v1/meta", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("meta read failed: %d", status)
+	}
+	if got := out["meta"].(map[string]any)["wrap"]; got != "v2" {
+		t.Fatalf("the header was rolled back to %v", got)
+	}
+}
+
+func TestMetaWriteRequiresIfMatchOnceTheStoreIsNotEmpty(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	if status, _ := c.do("PUT", "/v1/meta", map[string]any{"meta": map[string]any{"wrap": "v1"}}, nil); status != http.StatusOK {
+		t.Fatalf("first meta write refused: %d", status)
+	}
+	// A client that skips the check entirely, rather than getting it wrong.
+	status, _ := c.do("PUT", "/v1/meta", map[string]any{"meta": map[string]any{"wrap": "v9"}}, nil)
+	if status != http.StatusPreconditionRequired {
+		t.Fatalf("a meta write with no If-Match was accepted: %d", status)
+	}
+}
+
+func TestReplayedRequestIsRefused(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	// The exact bytes of one signed mint, sent twice. The first send is the real
+	// device asking for an enrolment code; the second is anyone who was on the
+	// network while it did, since the LAN address is plain HTTP by design.
+	//
+	// This is the shape that made the timestamp window insufficient on its own:
+	// minting is not a write under compare-and-swap, so nothing else was going
+	// to stop the second one. Every replay used to return a *fresh* code, and
+	// each code buys a device key.
+	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	const nonce = "a-nonce-used-once"
+
+	send := func() (int, map[string]any) {
+		r, err := http.NewRequest("POST", srv.URL+"/v1/codes", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set(hdrDevice, c.id)
+		r.Header.Set(hdrTime, ts)
+		r.Header.Set(hdrNonce, nonce)
+		r.Header.Set(hdrSig, sign(c.key, "POST", r.Host, "/v1/codes", ts, nonce, nil))
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+
+	status, first := send()
+	if status != http.StatusOK {
+		t.Fatalf("the genuine request was refused: %d", status)
+	}
+	if first["code"] == nil || first["code"] == "" {
+		t.Fatal("no code in the genuine reply")
+	}
+
+	status, second := send()
+	if status != http.StatusUnauthorized {
+		t.Fatalf("a captured mint was honoured a second time: %d, code %v", status, second["code"])
+	}
+}
+
+func TestNonceIsRequired(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	// An older client, or anything hoping the check can be skipped by leaving
+	// the header off. Signed correctly for everything else.
+	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	r, _ := http.NewRequest("POST", srv.URL+"/v1/codes", nil)
+	r.Header.Set(hdrDevice, c.id)
+	r.Header.Set(hdrTime, ts)
+	r.Header.Set(hdrSig, sign(c.key, "POST", r.Host, "/v1/codes", ts, "", nil))
+
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a request with no nonce was accepted: %d", resp.StatusCode)
+	}
+}
+
+func TestSignatureIsBoundToTheHost(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	// What a hostile first address harvests: a complete, correctly signed
+	// request that it read before dropping the connection. Sending it on to the
+	// real server has to fail, or the two-address failover hands an eavesdropper
+	// a working request every time the LAN address is unreachable.
+	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	const nonce = "harvested"
+	r, _ := http.NewRequest("POST", srv.URL+"/v1/codes", nil)
+	r.Header.Set(hdrDevice, c.id)
+	r.Header.Set(hdrTime, ts)
+	r.Header.Set(hdrNonce, nonce)
+	r.Header.Set(hdrSig, sign(c.key, "POST", "somewhere-else.invalid:8788", "/v1/codes", ts, nonce, nil))
+
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a request signed for another address was accepted: %d", resp.StatusCode)
+	}
+}
+
 func TestTamperedBodyIsRefused(t *testing.T) {
 	srv, _, code := newServer(t)
 	c := enrol(t, srv, code, "laptop")
@@ -181,12 +342,12 @@ func TestTamperedBodyIsRefused(t *testing.T) {
 	// flight would do. The signature covers the body's hash, so it fails.
 	raw, _ := json.Marshal(map[string]any{"records": []Envelope{env("a", 1)}})
 	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
-	good := sign(c.key, "PUT", "/v1/records", ts, raw)
-
 	evil, _ := json.Marshal(map[string]any{"records": []Envelope{env("a", 99)}})
 	req, _ := http.NewRequest("PUT", srv.URL+"/v1/records", bytes.NewReader(evil))
+	good := sign(c.key, "PUT", req.Host, "/v1/records", ts, "tamper-nonce", raw)
 	req.Header.Set(hdrDevice, c.id)
 	req.Header.Set(hdrTime, ts)
+	req.Header.Set(hdrNonce, "tamper-nonce")
 	req.Header.Set(hdrSig, good)
 
 	resp, err := http.DefaultClient.Do(req)

@@ -22,12 +22,17 @@ const (
 	hdrDevice = "X-Bencpass-Device"
 	hdrTime   = "X-Bencpass-Time"
 	hdrSig    = "X-Bencpass-Sig"
+	hdrNonce  = "X-Bencpass-Nonce"
 
 	// Tolerance on the client's clock. Wide enough for a machine that has not
-	// reached an NTP server yet, narrow enough that a captured request is not
-	// replayable for long. Writes are additionally protected by compare-and-swap
-	// on the sequence, so a replayed PUT loses the race with the real one.
+	// reached an NTP server yet, narrow enough that the set of nonces the server
+	// has to remember stays small — see replay.go, which is what actually stops
+	// a captured request being sent twice.
 	maxSkew = 5 * time.Minute
+
+	// Long enough that two clients cannot pick the same one, short enough to
+	// bound what an attacker can make the server remember. 16 bytes, hex.
+	maxNonce = 64
 )
 
 var errUnauthorised = errors.New("unauthorised")
@@ -37,15 +42,27 @@ var errUnauthorised = errors.New("unauthorised")
 // with nothing to point at the cause, so it is defined in one place and the
 // JavaScript client mirrors it literally.
 //
-//	METHOD \n /path?query \n unix-millis \n sha256(body) in lowercase hex
-func canonical(method, uri, ts string, body []byte) string {
+//	METHOD \n host \n /path?query \n unix-millis \n nonce \n sha256(body) in lowercase hex
+//
+// The host is in there because a client with two addresses for one server will
+// try the second when the first does not answer — and "does not answer" is not
+// the same as "did not receive". Something sitting on the LAN address can read
+// a whole signed request and then drop the connection, leaving the client to
+// succeed quietly against the real address while the eavesdropper keeps a
+// perfectly good request. Binding the host makes what it kept useless anywhere
+// but the address it was already sent to.
+//
+// A consequence worth knowing when deploying: a reverse proxy that rewrites the
+// Host header will break every signature, because the client signs the address
+// it dialled and the server checks the one it was handed.
+func canonical(method, host, uri, ts, nonce string, body []byte) string {
 	sum := sha256.Sum256(body)
-	return method + "\n" + uri + "\n" + ts + "\n" + hex.EncodeToString(sum[:])
+	return method + "\n" + host + "\n" + uri + "\n" + ts + "\n" + nonce + "\n" + hex.EncodeToString(sum[:])
 }
 
-func sign(key []byte, method, uri, ts string, body []byte) string {
+func sign(key []byte, method, host, uri, ts, nonce string, body []byte) string {
 	m := hmac.New(sha256.New, key)
-	m.Write([]byte(canonical(method, uri, ts, body)))
+	m.Write([]byte(canonical(method, host, uri, ts, nonce, body)))
 	return base64.StdEncoding.EncodeToString(m.Sum(nil))
 }
 
@@ -55,7 +72,8 @@ func (s *Store) authenticate(r *http.Request, body []byte) (Device, error) {
 	id := r.Header.Get(hdrDevice)
 	ts := r.Header.Get(hdrTime)
 	got := r.Header.Get(hdrSig)
-	if id == "" || ts == "" || got == "" {
+	nonce := r.Header.Get(hdrNonce)
+	if id == "" || ts == "" || got == "" || nonce == "" || len(nonce) > maxNonce {
 		return Device{}, errUnauthorised
 	}
 
@@ -76,9 +94,16 @@ func (s *Store) authenticate(r *http.Request, body []byte) (Device, error) {
 		return Device{}, errUnauthorised
 	}
 
-	want := sign(key, r.Method, r.URL.RequestURI(), ts, body)
+	want := sign(key, r.Method, r.Host, r.URL.RequestURI(), ts, nonce, body)
 	// Constant time, because the comparison is against a value the caller chose.
 	if !hmac.Equal([]byte(want), []byte(got)) {
+		return Device{}, errUnauthorised
+	}
+
+	// Last, and only once the signature has been proved. A nonce recorded before
+	// that would let anyone on the network fill the set with values they never
+	// had to sign for.
+	if !s.seen.use(id, nonce, time.Now()) {
 		return Device{}, errUnauthorised
 	}
 	return dev, nil

@@ -24,11 +24,27 @@ export class SyncError extends Error {
  * pointing at the cause. That is why the integration test runs against the real
  * Go binary rather than a mock of it.
  *
- *   METHOD \n /path?query \n unix-millis \n sha256(body) in lowercase hex
+ *   METHOD \n host \n /path?query \n unix-millis \n nonce \n sha256(body) in hex
+ *
+ * The host is signed because this client holds two addresses for one server and
+ * moves between them. Something listening on the address it tries first can
+ * read a complete signed request and then drop the connection: the client sees
+ * an unreachable address, quietly succeeds against the other one, and the
+ * listener is left holding a request it can send on. Naming the host in the
+ * signature makes that copy good only against the address it already reached.
  */
-export function canonical(method, uri, ts, bodyHashHex) {
-  return `${method}\n${uri}\n${ts}\n${bodyHashHex}`;
+export function canonical(method, host, uri, ts, nonce, bodyHashHex) {
+  return `${method}\n${host}\n${uri}\n${ts}\n${nonce}\n${bodyHashHex}`;
 }
+
+/**
+ * A value this request will not use twice.
+ *
+ * The server remembers these for as long as the clock window and refuses a
+ * repeat, which is what stops a captured request being replayed inside it. 16
+ * bytes, so two of them never collide by accident.
+ */
+const newNonce = () => toHex(crypto.getRandomValues(new Uint8Array(16)));
 
 async function sha256Hex(bytes) {
   return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
@@ -99,7 +115,7 @@ export class SyncClient {
    * the noise — so only a thrown fetch, meaning nothing was reachable, moves on
    * to the next address.
    */
-  async #reach(path, init) {
+  async #reach(path, makeInit) {
     const order = [
       ...this.endpoints.slice(this.preferred),
       ...this.endpoints.slice(0, this.preferred),
@@ -118,6 +134,13 @@ export class SyncClient {
         // The last attempt gets as long as it needs: by then there is nothing
         // to fall back to, and a real sync of a large vault over a slow link is
         // not a failure.
+        // Signed here, per address, rather than once for the whole attempt:
+        // the host is part of what is signed, so a request built for one
+        // address is not valid at the other. Each attempt also draws its own
+        // nonce, which is what makes a retry after a genuine timeout work —
+        // the server refuses a nonce it has already seen, and a retry that
+        // reused one would look exactly like the replay this defends against.
+        const init = await makeInit(base);
         const resp = await this.fetch(base + path, {
           ...init,
           signal: last ? init?.signal : AbortSignal.timeout(this.probeTimeoutMs),
@@ -163,19 +186,30 @@ export class SyncClient {
     // Serialise once and sign those exact bytes — re-stringifying for the send
     // could reorder keys and invalidate the signature.
     const raw = body === null ? new Uint8Array(0) : utf8(JSON.stringify(body));
-    const ts = String(Date.now());
-    const sig = await hmacB64(this.key, canonical(method, path, ts, await sha256Hex(raw)));
+    const bodyHash = await sha256Hex(raw);
 
-    const resp = await this.#reach(path, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Bencpass-Device': this.deviceId,
-        'X-Bencpass-Time': ts,
-        'X-Bencpass-Sig': sig,
-        ...headers,
-      },
-      body: method === 'GET' ? undefined : raw,
+    const resp = await this.#reach(path, async (base) => {
+      const ts = String(Date.now());
+      const nonce = newNonce();
+      // `host` and not the whole base: it is what the server reads back out of
+      // the Host header, port and all, and the two have to agree exactly.
+      const host = new URL(base).host;
+      const sig = await hmacB64(
+        this.key,
+        canonical(method, host, path, ts, nonce, bodyHash),
+      );
+      return {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Bencpass-Device': this.deviceId,
+          'X-Bencpass-Time': ts,
+          'X-Bencpass-Sig': sig,
+          'X-Bencpass-Nonce': nonce,
+          ...headers,
+        },
+        body: method === 'GET' ? undefined : raw,
+      };
     });
 
     const out = await resp.json().catch(() => ({}));
@@ -211,8 +245,17 @@ export class SyncClient {
     return body;
   }
 
-  async putMeta(meta) {
-    const { status, body } = await this.request('PUT', '/v1/meta', { meta });
+  /**
+   * Replace the vault header, passing the sequence it is replacing.
+   *
+   * `ifMatch` is null only for the first write to a fresh server. Everything
+   * else has to say what it saw, because this carries the wrapped vault key: a
+   * write that lands out of order puts an old wrapping back, and after a master
+   * password change that quietly restores the previous password.
+   */
+  async putMeta(meta, ifMatch = null) {
+    const headers = ifMatch === null ? {} : { 'If-Match': String(ifMatch) };
+    const { status, body } = await this.request('PUT', '/v1/meta', { meta }, headers);
     if (status !== 200) throw new SyncError(`meta push failed (${status})`, 'meta');
     return body.seq;
   }
