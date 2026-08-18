@@ -119,6 +119,27 @@ same endpoint works on the LAN and from outside it.
 Keep the container's published port on the LAN and let Tailscale reach it. Do
 not forward 8788 from your router.
 
+**Use the `https://` name, not the Tailscale IP.** The extension accepts plain
+http only to an address it can identify as private — `10.x`, `192.168.x`,
+`172.16–31.x`, loopback, `.local`. Tailscale's own addresses are in
+`100.64.0.0/10`, and that range is *not* on the list, so
+`http://100.x.x.x:8788` is refused with "Plain http is only allowed to a private
+address".
+
+That is deliberate and will not be relaxed. `100.64.0.0/10` is shared CGNAT
+space: Tailscale uses it, and so do ISPs for carrier-grade NAT. From inside an
+extension there is no way to tell which one you are on — no access to the
+routing table, no way to ask whether Tailscale is running — so allowing plain
+http there would allow it equally on an ISP's NAT, where nothing is encrypted.
+
+With `https://box.tailnet.ts.net` nothing has to be verified by us: the
+certificate proves the name, only someone controlling it in your tailnet can
+obtain one, and the browser checks it before the extension sees a byte. That is
+why `tailscale serve` above is the answer rather than an exception in the
+matcher.
+
+The MagicDNS name alone is not enough — it is the `https` that makes it work.
+
 If you run Tailscale as a TrueNAS app rather than on the host, note that the
 container gets its own tailnet identity — which changes the name clients
 connect to, and is a common half-hour of confusion.

@@ -278,6 +278,9 @@
             you are not at home. Used only when the first cannot be reached at
             all; a server that answers with a refusal is not retried here.
             Two <em>different</em> servers would be two vaults taking turns.
+            Use the <code>https://</code> name: a Tailscale <em>IP</em> over
+            plain http is refused, because that range is shared with ISP NAT
+            and cannot be told apart from it.
           </span>
           <span class="settings-note" id="s-fallback-status"></span>
         </div>
