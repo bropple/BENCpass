@@ -17,6 +17,7 @@ import {
   sealRecord,
   openRecord,
 } from './crypto.js';
+import { normalise as normaliseCode, CODE_LENGTH } from './recovery.js';
 import { toB64, fromB64 } from './bytes.js';
 import {
   newRecord,
@@ -165,6 +166,73 @@ export class Vault {
     const masterKey = await deriveMasterKey(password, fromB64(kdf.salt), kdf);
     const vaultKeyBytes = await unwrapVaultKey(this.meta.wraps.password, masterKey);
     this.meta.wraps.biometric = await wrapVaultKey(vaultKeyBytes, secretBytes, 'biometric');
+  }
+
+  /**
+   * Wrap the vault key a third time, under a recovery code.
+   *
+   * The same shape as the fingerprint wrapping and for the same reason: an
+   * independent secret that reaches the same key. The difference is what it is
+   * for — the fingerprint saves you typing, this one saves you from having
+   * forgotten.
+   *
+   * Costs the master password, because the vault key is a non-extractable
+   * CryptoKey once unlocked and there is no way to a second wrapping except by
+   * deriving it again. That is also the guarantee: only somebody who can
+   * already open the vault can mint a way back into it.
+   *
+   * The code gets its own salt. Sharing the password's would mean one Argon2
+   * derivation served both, so cracking either would be cracking both.
+   */
+  async enrolRecovery(password, code, now = Date.now()) {
+    if (!password) throw new Error('a master password is required');
+    const cleaned = normaliseCode(code);
+    if (cleaned.length < CODE_LENGTH) throw new Error('that is not a full recovery code');
+
+    const { kdf } = this.meta;
+    const masterKey = await deriveMasterKey(password, fromB64(kdf.salt), kdf);
+    const vaultKeyBytes = await unwrapVaultKey(this.meta.wraps.password, masterKey);
+
+    const salt = newSalt();
+    const recoveryKey = await deriveMasterKey(cleaned, salt, kdf);
+    this.meta.wraps.recovery = {
+      ...(await wrapVaultKey(vaultKeyBytes, recoveryKey, 'recovery')),
+      salt: toB64(salt),
+      created: now,
+    };
+  }
+
+  /** Is there a way back in without the master password? */
+  get hasRecovery() {
+    return Boolean(this.meta.wraps?.recovery);
+  }
+
+  /**
+   * Open the vault with the recovery code instead of the master password.
+   *
+   * Deliberately does not then change the password. Recovering and choosing a
+   * new password are two decisions, and doing the second silently would mean a
+   * mistyped recovery attempt could leave somebody locked out of a vault they
+   * had just opened.
+   */
+  async unlockWithRecoveryCode(code) {
+    const wrap = this.meta.wraps?.recovery;
+    if (!wrap) throw new Error('this vault has no recovery wrapping');
+
+    const cleaned = normaliseCode(code);
+    const recoveryKey = await deriveMasterKey(cleaned, fromB64(wrap.salt), this.meta.kdf);
+    const vaultKeyBytes = await unwrapVaultKey(wrap, recoveryKey);
+    await this.unlockWithVaultKey(vaultKeyBytes);
+  }
+
+  /**
+   * Drop the recovery wrapping.
+   *
+   * Local, like forgetting a fingerprint: it removes this vault's way back,
+   * and touches neither the password wrapping nor any other machine.
+   */
+  forgetRecovery() {
+    this.meta.wraps.recovery = null;
   }
 
   /** Unlock from the device secret the OS keystore just released. */
