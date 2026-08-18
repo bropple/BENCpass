@@ -368,58 +368,88 @@ func probe() -> [String: Any] {
     ]
 }
 
-/// Can a Secure Enclave key be created and kept, without a keychain group?
+/// Which ways of keeping a Secure Enclave key this machine will allow.
 ///
-/// This is the other shape the feature could take, and it needs no access group
-/// if it works. Rather than putting the secret in the keychain behind a
-/// biometric access control — which needs an entitlement only Apple can
-/// authorise — generate a key *in the enclave* whose use is gated by a
-/// fingerprint, and keep the device secret as ciphertext in an ordinary file.
-/// The file is then worthless without the enclave, and the enclave will not act
-/// without the fingerprint.
+/// The enclave itself is not the problem: it makes the key. What fails is
+/// `kSecAttrIsPermanent`, which writes the key's reference into the keychain and
+/// so runs into the same entitlement that closed the keychain route —
+/// "failed to add key to keychain", -34018.
 ///
-/// Whether the enclave will keep a key for a binary with no entitlement is the
-/// same kind of question as the one above, and gets the same treatment.
-func probeSecureEnclave() -> [String: Any] {
-    var accessError: Unmanaged<CFError>?
-    guard
-        let access = SecAccessControlCreateWithFlags(
-            nil,
-            kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
-            [.privateKeyUsage, .biometryCurrentSet],
-            &accessError
-        )
-    else {
-        return ["created": false, "error": "access control refused"]
+/// These are the combinations that might not. Each is tried and reported;
+/// anything that persists is deleted again. A machine with no fingerprint
+/// enrolled fails the biometric variants before reaching the keychain at all,
+/// with "bio catacomb", which is why this has to be run somewhere with Touch ID
+/// to mean anything.
+func probeSecureEnclave() -> [[String: Any]] {
+    struct Variant {
+        let name: String
+        let flags: SecAccessControlCreateFlags
+        let permanent: Bool
+        let dataProtection: Bool?
     }
 
-    let tag = "net.ropple.bencpass.probe.\(UInt32.random(in: 0..<UInt32.max))".data(using: .utf8)!
-    let attributes: [String: Any] = [
-        kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-        kSecAttrKeySizeInBits as String: 256,
-        kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
-        kSecPrivateKeyAttrs as String: [
-            kSecAttrIsPermanent as String: true,
-            kSecAttrApplicationTag as String: tag,
-            kSecAttrAccessControl as String: access,
-        ],
+    let variants = [
+        Variant(name: "biometry, permanent, default keychain",
+                flags: [.privateKeyUsage, .biometryCurrentSet], permanent: true, dataProtection: nil),
+        Variant(name: "biometry, permanent, file keychain",
+                flags: [.privateKeyUsage, .biometryCurrentSet], permanent: true, dataProtection: false),
+        Variant(name: "biometry, permanent, data-protection keychain",
+                flags: [.privateKeyUsage, .biometryCurrentSet], permanent: true, dataProtection: true),
+        Variant(name: "biometry, not permanent",
+                flags: [.privateKeyUsage, .biometryCurrentSet], permanent: false, dataProtection: nil),
+        // Without biometry, to separate "the enclave will not keep a key at all"
+        // from "the enclave will not keep a biometric one".
+        Variant(name: "no biometry, permanent, default keychain",
+                flags: [.privateKeyUsage], permanent: true, dataProtection: nil),
+        Variant(name: "no biometry, permanent, file keychain",
+                flags: [.privateKeyUsage], permanent: true, dataProtection: false),
     ]
 
-    var error: Unmanaged<CFError>?
-    guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
-        let e = error?.takeRetainedValue()
-        return ["created": false, "error": String(describing: e)]
-    }
+    var out: [[String: Any]] = []
+    for v in variants {
+        var accessError: Unmanaged<CFError>?
+        guard
+            let access = SecAccessControlCreateWithFlags(
+                nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, v.flags, &accessError)
+        else {
+            out.append(["variant": v.name, "ok": false, "error": "access control refused"])
+            continue
+        }
 
-    // Clean up: this was only ever a question.
-    SecItemDelete(
-        [
-            kSecClass as String: kSecClassKey,
+        let tag = Data("net.ropple.bencpass.probe.\(UInt32.random(in: 0..<UInt32.max))".utf8)
+        var priv: [String: Any] = [
+            kSecAttrIsPermanent as String: v.permanent,
             kSecAttrApplicationTag as String: tag,
-        ] as CFDictionary
-    )
-    _ = key
-    return ["created": true]
+            kSecAttrAccessControl as String: access,
+        ]
+        if let dp = v.dataProtection { priv[kSecUseDataProtectionKeychain as String] = dp }
+
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+            kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
+            kSecPrivateKeyAttrs as String: priv,
+        ]
+
+        var error: Unmanaged<CFError>?
+        if SecKeyCreateRandomKey(attributes as CFDictionary, &error) != nil {
+            out.append(["variant": v.name, "ok": true])
+            var del: [String: Any] = [
+                kSecClass as String: kSecClassKey,
+                kSecAttrApplicationTag as String: tag,
+            ]
+            if let dp = v.dataProtection { del[kSecUseDataProtectionKeychain as String] = dp }
+            SecItemDelete(del as CFDictionary)
+        } else {
+            let e = error?.takeRetainedValue()
+            out.append([
+                "variant": v.name,
+                "ok": false,
+                "error": String(describing: e).replacingOccurrences(of: "\n", with: " "),
+            ])
+        }
+    }
+    return out
 }
 
 // ---- dispatch ---------------------------------------------------------------
