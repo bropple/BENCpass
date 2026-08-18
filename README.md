@@ -22,10 +22,10 @@ and everything below still works; what you give up is having the same vault on
 a second machine. If you run that way, use the export — the vault then lives in
 one browser profile, and a profile is not a thing anyone backs up on purpose.
 
-> **Not finished.** Everything below the line works and is tested. Still
-> missing: the recovery kit. Until one exists, forgetting the master password
-> loses the vault with no way back, and no amount of self-hosting changes that
-> — so keep a recent export somewhere safe.
+> **Not finished**, but the gap that mattered most is closed: there is a
+> recovery kit now, so forgetting the master password no longer loses
+> everything on every machine at once. Print the code when it is offered — it
+> is shown once and stored nowhere, which is what makes it safe to print.
 
 | | |
 |---|---|
@@ -40,7 +40,7 @@ one browser profile, and a profile is not a thing anyone backs up on purpose.
 | ✅ Address model: every WHATWG token, country and state dropdowns | `src/core/address.js` |
 | ✅ Biometric unlock — Touch ID, Hello or a security key, via WebAuthn PRF | `src/ext/webauthn.js` |
 | ✅ Import and export — BENCpass JSON, Firefox, Chrome, Bitwarden, KeePass | `src/core/transfer.js` |
-| ⬜ Recovery kit | — |
+| ✅ Recovery kit — a printable code that opens the vault without the password | `src/core/recovery.js` |
 
 Reviewing this, or just want the short version of how it holds together?
 [`REVIEWERS.md`](REVIEWERS.md) answers the questions the source raises — what
