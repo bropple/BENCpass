@@ -25,13 +25,15 @@ rm -f "$result"
 echo "browser: $BROWSER_BIN"
 profile=$(mktemp -d)
 
-RESULT_FILE="$result" node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
+BIND=localhost RESULT_FILE="$result" node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
 server=$!
 cleanup() { kill $server 2>/dev/null || true; rm -rf "$profile"; }
 trap cleanup EXIT
 sleep 0.5
 
-url="http://127.0.0.1:$port/tools/webauthn-probe/index.html"
+# localhost, not 127.0.0.1. Both are secure contexts, but an IP address is not a
+# registrable domain and WebAuthn will not accept an RP ID from one.
+url="http://localhost:$port/tools/webauthn-probe/index.html"
 
 # Reading capabilities needs no window. Actually creating a credential needs a
 # user gesture and raises a prompt, so that half cannot be headless — and it is

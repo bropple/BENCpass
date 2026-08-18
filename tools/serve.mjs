@@ -65,6 +65,11 @@ createServer(async (req, res) => {
   } catch {
     res.writeHead(404).end('not found');
   }
-}).listen(port, '127.0.0.1', () => {
+// 127.0.0.1 by default, so a local server is not exposed to the network. The
+// WebAuthn probe overrides it to `localhost`, because an IP address is not a
+// registrable domain and WebAuthn will not accept an RP ID from one — and
+// binding to 127.0.0.1 while the browser resolves localhost to ::1 is a
+// connection refused that looks like the server never started.
+}).listen(port, process.env.BIND ?? '127.0.0.1', () => {
   console.log(`serving ${root} on http://127.0.0.1:${port}`);
 });

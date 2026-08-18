@@ -28,10 +28,18 @@ const $ = (id) => document.getElementById(id);
 const show = () => { $('out').textContent = JSON.stringify(out, null, 2); };
 const post = () => fetch('/__result', { method: 'POST', body: JSON.stringify(out, null, 2) });
 
-// An RP ID has to be a registrable domain. Nothing is contacted — WebAuthn does
-// not resolve it — but it must be well formed, and it is what a credential is
-// bound to, so it has to be stable for the life of the vault.
-const RP_ID = 'bencpass.local';
+// The relying party is the page's own origin, and deliberately not a name of
+// our choosing. An RP ID must be a registrable domain suffix of the origin, so
+// asserting `bencpass.local` from a page served at 127.0.0.1 is refused with
+// "SecurityError: The operation is insecure" — as is any RP ID at all from an
+// IP address, which is not a registrable domain.
+//
+// Serving from localhost and leaving `rp.id` unset makes the browser default to
+// the origin's domain, which is always valid. The real extension has a
+// different problem to solve here — a moz-extension:// page has no registrable
+// domain either, and Firefox 150 added the ability to assert an RP ID for a
+// domain the extension holds host permissions for — but that is a question for
+// after this one is answered.
 
 (async () => {
   out.userAgent = navigator.userAgent;
@@ -78,7 +86,7 @@ $('go').addEventListener('click', async () => {
     // 1. Make a credential that carries PRF, on the built-in authenticator.
     const created = await navigator.credentials.create({
       publicKey: {
-        rp: { id: RP_ID, name: 'BENCpass' },
+        rp: { name: 'BENCpass' },
         user: { id: random(16), name: 'probe', displayName: 'probe' },
         challenge: random(32),
         pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
@@ -101,7 +109,6 @@ $('go').addEventListener('click', async () => {
     const evaluate = async () => {
       const got = await navigator.credentials.get({
         publicKey: {
-          rpId: RP_ID,
           challenge: random(32),
           allowCredentials: [{ type: 'public-key', id: created.rawId }],
           userVerification: 'required',
