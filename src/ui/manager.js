@@ -347,12 +347,17 @@ function renderBioSetting() {
     return;
   }
 
-  // No authenticator, or a browser without PRF. Nothing to install and nothing
-  // to fix here — it is a property of the machine in front of you.
+  // No authenticator, or a browser that will not derive a key from the one that
+  // is there. Nothing to install and nothing to fix in either case, but they
+  // are not the same sentence: the second is a browser that has not caught up,
+  // and saying "no authenticator" to someone looking at their own fingerprint
+  // reader reads as BENCpass failing to see hardware that plainly works.
   $('s-bio-note').textContent =
     bio.reason === 'no-webauthn'
       ? 'This browser does not support WebAuthn.'
-      : 'No authenticator on this machine. A Mac with Touch ID, a PC with Windows Hello, or a plugged-in security key would each do.';
+      : bio.reason === 'no-prf'
+        ? `${name} is here, but this browser will not derive a key from it, so it cannot unlock the vault. Your master password still works.`
+        : 'No authenticator on this machine. A Mac with Touch ID, a PC with Windows Hello, or a plugged-in security key would each do.';
 }
 
 $('s-bio-btn').addEventListener('click', async () => {

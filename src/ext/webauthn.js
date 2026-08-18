@@ -80,7 +80,17 @@ export async function available() {
     /* left unknown */
   }
 
-  return { ok: platform && prf !== false, platform, prf, reason: platform ? '' : 'no-authenticator' };
+  // Two different noes, and they need different words. No sensor is a fact
+  // about the machine; a sensor the browser will not derive a key from is a
+  // fact about the browser, and telling someone with Windows Hello sitting
+  // right there that they have no authenticator is how a working machine looks
+  // broken.
+  return {
+    ok: platform && prf !== false,
+    platform,
+    prf,
+    reason: !platform ? 'no-authenticator' : prf === false ? 'no-prf' : '',
+  };
 }
 
 /**
