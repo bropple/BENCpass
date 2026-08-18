@@ -832,7 +832,7 @@ async function saveSetting(patch) {
       'Plain http is only allowed to a private address. Use https, or a LAN or Tailscale name.',
     unreachable: 'Neither address answered.',
     'bad-autolock': 'Between 1 minute and 24 hours.',
-    'bad-enrolment': 'An enrolment code looks like `device-id:key`.',
+    'bad-enrolment': 'An enrollment code looks like `device-id:key`.',
   };
   if (!reply?.ok) {
     $('s-error').textContent = problems[reply?.reason] ?? 'Could not save that.';
