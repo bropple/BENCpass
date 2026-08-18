@@ -57,8 +57,8 @@ const bioName = (os) =>
   os === 'mac' ? 'Touch ID' : os === 'win' ? 'Windows Hello' : 'your security key';
 
 // Never raised on its own here. WebAuthn wants a user gesture, and opening a
-// popup is not reliably one — so this is a button, and pressing it is the
-// gesture. The manager can prompt on sight because it is a page.
+// popup is not reliably one — so this is a button. What pressing it does is
+// the surprising part; see unlockWithBiometrics.
 const here = { available: false, checked: false };
 
 async function renderLocked() {
@@ -83,28 +83,31 @@ async function renderLocked() {
 
 let showPasswordBox = false;
 
+// The prompt is not raised here, and cannot be. A browserAction popup is
+// destroyed the moment it loses focus, and on a Mac the Touch ID sheet takes
+// focus the moment it appears — so calling navigator.credentials.get() from
+// this document tore the document down mid-call, the promise never settled,
+// and nothing was ever drawn. Which is exactly what "it does not work", with
+// no error anywhere, looked like from the outside. Firefox has known the shape
+// of this since 2019 (bug 1562620, a U2F prompt closing Bitwarden's popup);
+// there is no keep-alive to ask for, and no error handling inside a document
+// that no longer exists was ever going to help.
+//
+// So the button routes to a surface that survives the sheet. The sidebar is
+// the right one: it is docked rather than focus-scoped, it prompts on sight
+// when locked (refreshBiometrics in ui/manager.js — the path measured working
+// on the same Mac this popup failed on), and the click on this button is the
+// user gesture sidebarAction.open() demands. Where there is no sidebar to
+// open, the manager in a tab prompts the same way — the same arrangement the
+// overlay reaches for, and for the same class of reason; see the long note in
+// overlay.js.
 async function unlockWithBiometrics() {
-  const bio = state.bio ?? {};
-  $('bio-text').textContent = 'Waiting for you…';
   try {
-    const secret = await webauthn.derive({ credentialId: bio.credentialId });
-    const reply = await send({
-      type: MSG.BIO_UNLOCK,
-      secret: btoa(String.fromCharCode(...secret)),
-    });
-    if (reply?.ok) {
-      await refresh();
-      return;
-    }
-    $('bio-text').textContent =
-      reply?.reason === 'stale-secret'
-        ? 'That no longer matches this vault. Use your master password.'
-        : `Could not unlock (${reply?.reason ?? 'error'}).`;
-  } catch (err) {
-    $('bio-text').textContent = err?.name === 'NotAllowedError' ? 'Cancelled.' : 'Not available.';
+    await browser.sidebarAction.open();
+  } catch {
+    await send({ type: MSG.OPEN_MANAGER });
   }
-  showPasswordBox = true;
-  renderLocked();
+  window.close();
 }
 
 $('bio-retry').addEventListener('click', unlockWithBiometrics);
