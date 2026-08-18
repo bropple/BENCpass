@@ -10,6 +10,7 @@ import { pickStorage } from '../core/storage.js';
 import { generate, entropyBits } from '../core/generate.js';
 import { ADDRESS_SCHEMA, countryOptions, countryName, splitName } from '../core/address.js';
 import { toJson, toCsv, parse as parseTransfer, TransferError } from '../core/transfer.js';
+import { newRecoveryCode } from '../core/recovery.js';
 import { LOGIN } from '../core/model.js';
 import { PROTOCOL } from '../core/sync.js';
 import { MSG } from '../ext/protocol.js';
@@ -254,6 +255,7 @@ async function refreshBiometrics() {
   }
 
   renderBioSetting();
+  renderRecoverySetting();
 
   // Ask straight away rather than waiting to be clicked. Opening the manager
   // while locked *is* the request to unlock it; making someone press one more
@@ -452,24 +454,43 @@ function setGate(mode) {
   const setup = mode === 'setup';
   const join = mode === 'join';
 
+  const recover = mode === 'recover';
+
   $('gate-confirm-field').hidden = !setup;
   $('gate-pw2').required = setup;
   $('gate-join-fields').hidden = !join;
   $('gate-server').required = join;
   $('gate-code').required = join;
 
-  $('gate-go').textContent = setup ? 'Create vault' : join ? 'Join' : 'Unlock';
+  // In recovery the code replaces the password rather than joining it: asking
+  // for both would be asking for the thing they have just told us they lost.
+  $('gate-recovery-field').hidden = !recover;
+  $('gate-recovery').required = recover;
+  $('gate-pw').closest('.field').hidden = recover;
+  $('gate-pw').required = !recover;
+
+  $('gate-go').textContent = setup
+    ? 'Create vault'
+    : join
+      ? 'Join'
+      : recover
+        ? 'Recover'
+        : 'Unlock';
   $('gate-hint').textContent = setup
     ? 'No vault on this machine.'
     : join
       ? 'Join the vault on your server.'
-      : 'Locked.';
+      : recover
+        ? 'Open it with your recovery code.'
+        : 'Locked.';
 
   $('gate-note').textContent = setup
     ? 'The master password is not recoverable. Nothing here, and nothing on the server, can open the vault without it.'
     : join
       ? 'The same master password as your other machine. This pulls that vault down rather than making a new one — a new one could never read its records.'
-      : '';
+      : recover
+        ? 'The code printed when this vault was set up. It opens the vault; it does not change the master password, which you can do afterwards under the gear.'
+        : '';
 
   // Offered only when there is no vault here. With one, "join" would mean
   // replacing it, which is not a thing to put behind a link on a lock screen.
@@ -479,6 +500,13 @@ function setGate(mode) {
     ? 'Or create a new vault on this machine'
     : 'Already have a vault on a server? Join it';
 
+  // Only where there is a vault to recover, and only if it has a way back.
+  const canRecover = Boolean(state.vault?.hasRecovery);
+  $('gate-recovery-switch').hidden = !(canRecover && (mode === 'unlock' || recover));
+  $('gate-recovery-btn').textContent = recover
+    ? 'Use the master password instead'
+    : 'Forgotten the master password? Use a recovery code';
+
   $('gate-pw').autocomplete = setup ? 'new-password' : 'current-password';
   $('gate').dataset.mode = mode;
   $('gate-pw').focus();
@@ -487,6 +515,81 @@ function setGate(mode) {
 $('gate-switch-btn').addEventListener('click', () => {
   setGate($('gate').dataset.mode === 'join' ? 'setup' : 'join');
   $('gate-error').hidden = true;
+});
+
+$('gate-recovery-btn').addEventListener('click', () => {
+  setGate($('gate').dataset.mode === 'recover' ? 'unlock' : 'recover');
+  $('gate-error').hidden = true;
+});
+
+// ---- the recovery sheet -----------------------------------------------------
+//
+// A code that wraps the vault key a third time, generated once and shown once.
+// It is not stored anywhere, which is exactly what makes it safe to print and
+// exactly why it cannot be shown again — so the sheet insists on being
+// acknowledged rather than letting somebody click past it.
+
+let sheetDone;
+
+/**
+ * Mint a recovery code, enrol it, and put it on screen until it is confirmed.
+ *
+ * Failing to enrol is not a reason to stop: a vault with no way back is the
+ * state everything was in until today, and it is better than refusing to
+ * finish setup. The sheet says so rather than pretending it worked.
+ */
+async function showRecoverySheet(password) {
+  const code = newRecoveryCode();
+  let enrolled = false;
+  try {
+    await state.vault.enrolRecovery(password, code);
+    await persist();
+    enrolled = true;
+  } catch (err) {
+    // A wrong master password is the caller's to report — at setup it cannot
+    // happen, and from Settings it is the whole answer. Anything else is ours,
+    // and setup carries on without a code rather than refusing to finish.
+    if (err?.code === 'unwrap-failed') throw err;
+    console.error('BENCpass: could not enrol the recovery code', err);
+  }
+
+  $('kit-code').textContent = enrolled ? code : '';
+  $('kit-created').textContent = new Date().toLocaleDateString();
+  $('kit-device').textContent = navigator.platform || 'this machine';
+
+  if (!enrolled) {
+    $('kit-status').textContent =
+      'A recovery code could not be created. Your vault is fine and your master password works — you can make one later under the gear.';
+    $('kit-ack').checked = true;
+    $('kit-done').disabled = false;
+  }
+
+  $('kit').hidden = false;
+  await new Promise((resolve) => {
+    sheetDone = resolve;
+  });
+  $('kit').hidden = true;
+  $('kit-code').textContent = '';
+}
+
+$('kit-ack').addEventListener('change', () => {
+  $('kit-done').disabled = !$('kit-ack').checked;
+});
+
+$('kit-done').addEventListener('click', () => sheetDone?.());
+
+$('kit-print').addEventListener('click', () => window.print());
+
+$('kit-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('kit-code').textContent);
+    // Said plainly: a clipboard is not where this belongs, and a clipboard
+    // manager will have kept a copy whatever happens next.
+    $('kit-status').textContent =
+      'Copied. Paste it somewhere permanent now — the clipboard is not a safe place to leave it.';
+  } catch {
+    $('kit-status').textContent = 'Could not copy. Write it down instead.';
+  }
 });
 
 // ---- gate ------------------------------------------------------------------
@@ -567,8 +670,14 @@ $('gate-form').addEventListener('submit', async (e) => {
       state.vault = await Vault.create({ password: pw });
       vaultHost.setVault(state.vault);
       await persist();
+      // Before the app, not after: this is the one moment the code exists in
+      // memory and the person is still paying attention to setup.
+      await showRecoverySheet(pw);
     } else if ($('gate').dataset.mode === 'join') {
       await joinExisting(pw);
+    } else if ($('gate').dataset.mode === 'recover') {
+      await state.vault.unlockWithRecoveryCode($('gate-recovery').value);
+      $('gate-recovery').value = '';
     } else {
       await state.vault.unlock(pw);
     }
@@ -579,7 +688,9 @@ $('gate-form').addEventListener('submit', async (e) => {
     // whether a guess was close.
     err.textContent =
       ex.code === 'unwrap-failed'
-        ? 'Wrong password, or this vault is damaged.'
+        ? $('gate').dataset.mode === 'recover'
+          ? 'That recovery code did not open this vault. Check it against what you printed — the dashes and the case do not matter.'
+          : 'Wrong password, or this vault is damaged.'
         : ex.message;
     err.hidden = false;
   } finally {
@@ -956,6 +1067,51 @@ async function copyText(text, label, isSecret = false) {
 }
 
 let sayTimer = null;
+// ---- the recovery code, after setup -----------------------------------------
+
+function renderRecoverySetting() {
+  const has = Boolean(state.vault?.hasRecovery);
+  $('s-recovery-note').textContent = has
+    ? 'Set up. Making a new one replaces it — the old code stops working, so anything printed from it becomes waste paper.'
+    : 'None. Without one, forgetting the master password loses this vault on every machine at once.';
+  $('s-recovery-btn').textContent = has ? 'Replace' : 'Create';
+}
+
+$('s-recovery-btn').addEventListener('click', () => {
+  $('s-recovery-form').hidden = false;
+  $('s-recovery-error').textContent = '';
+  $('s-recovery-pw').value = '';
+  $('s-recovery-pw').focus();
+});
+
+$('s-recovery-cancel').addEventListener('click', () => {
+  $('s-recovery-form').hidden = true;
+  $('s-recovery-pw').value = '';
+});
+
+$('s-recovery-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pw = $('s-recovery-pw').value;
+  if (!pw) return;
+
+  $('s-recovery-error').textContent = 'Deriving key…';
+  try {
+    // showRecoverySheet mints, enrols and displays. Replacing goes through the
+    // same path as setup so there is one place a code is ever shown, and one
+    // place that insists it was written down.
+    await showRecoverySheet(pw);
+  } catch (err) {
+    $('s-recovery-error').textContent =
+      err?.code === 'unwrap-failed' ? 'Wrong master password.' : String(err?.message ?? err);
+    return;
+  }
+  $('s-recovery-form').hidden = true;
+  $('s-recovery-pw').value = '';
+  $('s-recovery-error').textContent = '';
+  renderRecoverySetting();
+  say('Recovery code replaced.');
+});
+
 // ---- testing an endpoint ------------------------------------------------------
 //
 // Sync failing is the least debuggable thing here: it happens in the

@@ -467,3 +467,61 @@ select { color: var(--text); font: inherit; }
 .split { position: relative; }
 
 .btn-icon { padding: 5px 8px; line-height: 0; }
+
+
+/* ---- the recovery sheet ---------------------------------------------------
+ *
+ * Shown once and meant to leave the screen on paper, so it is laid out for
+ * both: a readable panel here, and a print rule below that strips everything
+ * which is not the code.
+ */
+.kit {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+  z-index: 20;
+}
+.kit-panel { max-width: 560px; width: 100%; }
+.kit-title { font-size: 20px; font-weight: normal; letter-spacing: 1px; margin: 0 0 12px; }
+.kit-lede { color: var(--text-dim); line-height: 1.6; margin: 0 0 20px; }
+
+/* The code itself: big, spaced, and monospace, because it is going to be read
+   back character by character off a piece of paper. */
+.kit-code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 22px;
+  letter-spacing: 2px;
+  line-height: 1.8;
+  text-align: center;
+  padding: 18px 12px;
+  border: 1px solid var(--border);
+  background: var(--panel, rgba(255, 255, 255, 0.03));
+  word-break: break-all;
+  margin: 0 0 18px;
+}
+
+.kit-meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; font-size: 13px; margin: 0 0 18px; }
+.kit-meta dt { color: var(--text-dim); }
+.kit-meta dd { margin: 0; }
+
+.kit-warn { color: var(--bad); line-height: 1.6; margin: 0 0 20px; }
+.kit-actions { display: flex; gap: 8px; margin-bottom: 20px; }
+.kit-confirm { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 16px; line-height: 1.5; }
+.kit-confirm input { margin-top: 3px; }
+.kit-status { color: var(--text-dim); font-size: 13px; min-height: 1.2em; margin: 12px 0 0; }
+
+/* On paper: the code, what it is for, and nothing else. Buttons and
+   checkboxes print as meaningless furniture, and the dark theme would empty a
+   cartridge. */
+@media print {
+  body { background: #fff; color: #000; }
+  #gate, #app, .kit-actions, .kit-confirm, #kit-done, .kit-status { display: none !important; }
+  .kit { position: static; background: #fff; color: #000; padding: 0; }
+  .kit-code { border: 2px solid #000; background: #fff; color: #000; font-size: 24px; }
+  .kit-warn, .kit-lede, .kit-meta dt { color: #000; }
+}

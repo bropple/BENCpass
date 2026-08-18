@@ -61,6 +61,15 @@
         </label>
       </div>
 
+      <!-- The way in when the master password is gone. Hidden until asked
+           for: it is not an alternative to the password, it is what you reach
+           for having lost it. -->
+      <label class="field" id="gate-recovery-field" hidden>
+        <span class="label">Recovery code</span>
+        <input type="text" id="gate-recovery" autocomplete="off"
+               placeholder="ABCDE-FGHJK-…" spellcheck="false">
+      </label>
+
       <p class="gate-error" id="gate-error" role="alert" hidden></p>
 
       <button type="submit" class="btn btn-primary" id="gate-go">Unlock</button>
@@ -71,11 +80,60 @@
       <button type="button" class="linkish" id="gate-switch-btn"></button>
     </p>
 
+    <p class="gate-switch" id="gate-recovery-switch" hidden>
+      <button type="button" class="linkish" id="gate-recovery-btn">
+        Forgotten the master password? Use a recovery code
+      </button>
+    </p>
+
     <p class="gate-note" id="gate-note"></p>
   </div>
 </div>
 
 <!-- ------------------------------------------------------------------ -->
+
+<!-- ------------------------------------------------------------------ -->
+<!-- The recovery sheet. Shown once, when there is still time for it to be
+     written down, and never retrievable afterwards — the code is not stored
+     anywhere, which is the whole reason it is worth having. -->
+
+<div id="kit" class="kit" hidden>
+  <div class="kit-panel">
+    <h1 class="kit-title">Your recovery code</h1>
+
+    <p class="kit-lede">
+      This is the only way back into your vault if you forget the master
+      password. Write it down or print it, and keep it where you keep
+      important paper — not on this machine.
+    </p>
+
+    <p class="kit-code" id="kit-code"></p>
+
+    <dl class="kit-meta">
+      <dt>Vault created</dt><dd id="kit-created"></dd>
+      <dt>Machine</dt><dd id="kit-device"></dd>
+    </dl>
+
+    <p class="kit-warn">
+      BENCpass cannot show you this again. It is not saved anywhere — that is
+      what makes it safe to print.
+    </p>
+
+    <div class="kit-actions">
+      <button type="button" class="btn" id="kit-print">Print</button>
+      <button type="button" class="btn" id="kit-copy">Copy</button>
+    </div>
+
+    <label class="kit-confirm">
+      <input type="checkbox" id="kit-ack">
+      <span>I have written it down somewhere safe.</span>
+    </label>
+
+    <button type="button" class="btn btn-primary" id="kit-done" disabled>Continue</button>
+
+    <p class="kit-status" id="kit-status" role="status"></p>
+  </div>
+</div>
 
 <div id="app" class="app" hidden>
   <header class="bar">
@@ -344,6 +402,29 @@
         </div>
         <input type="checkbox" id="s-insecure" class="setting-check">
       </label>
+
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Recovery code</span>
+          <span class="setting-note" id="s-recovery-note"></span>
+        </div>
+        <div class="setting-actions">
+          <button type="button" class="btn btn-sm" id="s-recovery-btn">Create</button>
+        </div>
+      </div>
+
+      <!-- Making one costs the master password, for the same reason enrolling a
+           fingerprint does: the vault key is non-extractable once unlocked, so a
+           new wrapping cannot be made without deriving it again. -->
+      <form class="bio-confirm" id="s-recovery-form" hidden>
+        <div class="input-row">
+          <input type="password" id="s-recovery-pw" placeholder="Master password"
+                 autocomplete="current-password">
+          <button type="submit" class="btn btn-sm">Confirm</button>
+          <button type="button" class="btn btn-sm" id="s-recovery-cancel">Cancel</button>
+        </div>
+        <p class="settings-note" id="s-recovery-error"></p>
+      </form>
 
       <h3 class="settings-group">Your data</h3>
 
