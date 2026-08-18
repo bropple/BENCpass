@@ -114,6 +114,52 @@ const SAMPLES = [
   },
 ];
 
+// Anything that goes wrong while the real manager loads, reported where it can
+// be read. A module that fails to import leaves the gate as inert markup, which
+// looks exactly like a wrong password.
+const complain = (what) => {
+  what = { where: location.search || '(no query)', ...what };
+  fetch('/__result', { method: 'POST', body: JSON.stringify(what, null, 2) }).catch(() => {});
+  // On screen as well as posted: a screenshot is the only output some of these
+  // runs produce, and an empty gate looks the same whether the script failed to
+  // load or the password was wrong.
+  let box = document.getElementById('preview-complaints');
+  if (!box) {
+    box = document.createElement('pre');
+    box.id = 'preview-complaints';
+    box.style.cssText =
+      'position:fixed;inset:0;z-index:99999;background:#300;color:#fdd;padding:20px;' +
+      'font:12px monospace;white-space:pre-wrap;overflow:auto;margin:0';
+    document.body?.append(box);
+  }
+  // Appended, not replaced. The first complaint is the useful one and a later
+  // one drawn over the top of it hides exactly what was wanted.
+  box.textContent += JSON.stringify(what, null, 2) + '\n\n';
+};
+
+for (const [event, pick] of [
+  [
+    'error',
+    (e) => ({
+      error: String(e.message),
+      file: e.filename,
+      line: e.lineno,
+      stack: String(e.error?.stack ?? '').split('\n').slice(0, 5),
+    }),
+  ],
+  // Firefox's .stack carries no message, so both are taken — a bare stack
+  // says where and never what.
+  [
+    'unhandledrejection',
+    (e) => ({
+      error: `${e.reason?.name ?? 'Error'}: ${e.reason?.message ?? e.reason}`,
+      stack: String(e.reason?.stack ?? '').split('\n').slice(0, 4),
+    }),
+  ],
+]) {
+  window.addEventListener(event, (e) => complain(pick(e)));
+}
+
 const q = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
 
@@ -175,6 +221,11 @@ if (!q.has('fresh')) {
 
 await import('../src/ui/manager.js');
 
+setTimeout(() => {
+  const mode = document.getElementById('gate')?.dataset.mode;
+  if (!mode) complain({ error: 'boot() never set a gate mode — it did not finish' });
+}, 1500);
+
 // ?open drives the real unlock path rather than bypassing it, so a screenshot
 // shows a vault that genuinely decrypted. ?wrong exercises the failure text.
 if (q.has('open') || q.has('wrong')) {
@@ -188,8 +239,11 @@ if (q.has('open') || q.has('wrong')) {
 }
 
 if (q.has('section')) {
+  // Waits for the app, not merely for the button: the buttons are in the static
+  // markup and exist before the vault is open, so clicking on sight raced the
+  // unlock and asked a locked vault for its records.
   when(
-    () => document.querySelector(`.seg-btn[data-section="${q.get('section')}"]`),
+    () => !$('app').hidden && document.querySelector(`.seg-btn[data-section="${q.get('section')}"]`),
     () => document.querySelector(`.seg-btn[data-section="${q.get('section')}"]`).click(),
   );
 }

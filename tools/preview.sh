@@ -18,6 +18,7 @@ port=${PORT:-8731}
 out_dir="$root/build/preview"
 gen="$out_dir/manager.html"
 toast_gen="$out_dir/toast.html"
+complaints="$root/build/logs/preview-errors.json"
 mkdir -p "$out_dir"
 
 # The preview page is the real manager.html with its script swapped, so the
@@ -47,7 +48,9 @@ build_toast() {
   fi
 }
 
-node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
+mkdir -p "$root/build/logs"
+rm -f "$complaints"
+RESULT_FILE="$complaints" node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
 server=$!
 cleanup() { kill $server 2>/dev/null || true; rm -f "$gen" "$toast_gen"; }
 trap cleanup EXIT
@@ -114,6 +117,18 @@ if [ "${1:-}" = "shot" ]; then
   toast 21-toast-save    '?kind=login'          330,104
   toast 22-toast-update  '?kind=login&update'   330,104
   toast 23-toast-address '?kind=address'        330,148
+
+  # Any error the pages hit on the way, reported by the harness. This turns a
+  # screenshot run into a check that the UI actually boots — which is worth
+  # having, because a manager whose module fails to load renders its own static
+  # markup and looks exactly like a locked vault waiting for a password.
+  if [ -s "$complaints" ]; then
+    echo >&2
+    echo "The UI reported errors while these were taken:" >&2
+    sed 's/^/  /' "$complaints" >&2
+    exit 1
+  fi
+  echo "  (no errors reported by the pages)"
   exit 0
 fi
 
