@@ -141,7 +141,9 @@ group-with-team|<key>keychain-access-groups</key><array><string>$team.net.ropple
 group-team-only|<key>keychain-access-groups</key><array><string>$team</string></array>
 group-plus-appid|<key>keychain-access-groups</key><array><string>$team.net.ropple.bencpass</string></array><key>com.apple.application-identifier</key><string>$team.net.ropple.bencpass</string>"
 
-winner=""
+# No `winner` variable to collect the answer in: the loop below is piped, so it
+# runs in a subshell and anything it set would be gone by the time this script
+# read it. The verdict is printed as each variant is tried instead.
 echo "$variants" | while IFS='|' read -r vname body; do
   [ -n "$vname" ] || continue
 

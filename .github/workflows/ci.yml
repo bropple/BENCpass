@@ -47,3 +47,30 @@ jobs:
 
       - name: shell scripts parse
         run: for f in tools/*.sh hosts/*.sh; do sh -n "$f" || exit 1; done
+
+      # `sh -n` is syntax only — it accepts `rm -rf $UNSET/important` without
+      # complaint. These scripts start browsers and servers and delete
+      # directories, and the one bug that mattered in them (cleanup handlers
+      # killing web-ext while the browser it detached kept running) was a
+      # logic error that parsed perfectly.
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=warning tools/*.sh hosts/*.sh
+
+      # The manifest is what users see and what Firefox orders updates by. It
+      # said 0.10.3 while package.json said 0.1.0, and had done for most of the
+      # project's life.
+      - name: one version, agreed
+        run: node tools/check-version.mjs
+
+      # The shipped artefact. CI linted the source and never once produced the
+      # thing people install, so nothing proved it could be built at all.
+      - name: build the extension
+        run: npx web-ext build --source-dir=src --artifacts-dir=build/ext --overwrite-dest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencpass-extension
+          path: build/ext/*.zip
+          if-no-files-found: error

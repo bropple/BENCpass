@@ -24,7 +24,13 @@ function sources(dir, out = []) {
     const path = join(dir, name);
     if (statSync(path).isDirectory()) {
       if (name !== 'vendor') sources(path, out);
-    } else if (name.endsWith('.js') || name.endsWith('.html')) {
+      // .js only. An API can only be called from script, and the extension CSP
+      // forbids inline script — so an HTML file cannot use a permission, and
+      // reading them only creates a way to *fake* usage. It did: prose in a
+      // page ("we used to call browser.bookmarks.getTree()") counted, because
+      // stripProse removes quoted strings and comments but element text is
+      // neither. Narrowing the input removes the hole rather than patching it.
+    } else if (name.endsWith('.js')) {
       out.push(readFileSync(path, 'utf8'));
     }
   }

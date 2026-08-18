@@ -1,4 +1,9 @@
 // Design preview harness. Never shipped — it lives in tools/ so that no seeding
+
+// The version the settings pane shows, handed in by preview.sh from the real
+// manifest. It was a hardcoded 0.7.1 here for three releases, and was then read
+// off a screenshot and believed — so it is not written down twice any more.
+const MANIFEST_VERSION = globalThis.__BENCPASS_VERSION__ ?? 'dev';
 // or auto-unlock code can end up inside the extension by accident.
 //
 // It seeds localStorage with a throwaway vault and then imports the real
@@ -193,7 +198,7 @@ globalThis.browser = {
           deviceId: q.has('nosync') ? '' : 'workshop-mac',
           enrolled: !q.has('nosync'),
           lastSync: Date.now() - 12 * 60 * 1000,
-          version: '0.7.1',
+          version: MANIFEST_VERSION,
           records: SAMPLES.length,
         };
       }

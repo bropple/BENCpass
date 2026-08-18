@@ -25,8 +25,20 @@ mkdir -p "$out_dir"
 # markup cannot drift between what is previewed and what ships. The held script
 # is added only for screenshots; see tools/serve.mjs for why.
 build_page() {
+  # The version the preview shows comes from the manifest, handed to the script
+  # through the page rather than written into the script. It was a literal in
+  # tools/preview.js, went stale across three releases, and was then read off a
+  # screenshot and believed.
+  #
+  # Injected here rather than by generating a copy of preview.js: that copy
+  # would sit in build/, and preview.js imports ../src/core/vault.js, which
+  # resolves from tools/ and not from build/preview/. Moving the file silently
+  # 404s the import and the page renders as a locked vault — which is exactly
+  # what the screenshots showed when it was tried.
+  version=$(node -p "require('$root/src/manifest.json').version")
   sed -e 's|src="manager.js"|src="/tools/preview.js"|' \
       -e 's|href="style.css"|href="/src/ui/style.css"|' \
+      -e "s|<head>|<head><script>globalThis.__BENCPASS_VERSION__ = '$version';</script>|" \
     "$root/src/ui/manager.html" > "$gen"
   if [ -n "${1:-}" ]; then
     sed -i "s|</body>|<script defer src=\"/__hold?ms=$1\"></script></body>|" "$gen"
@@ -56,6 +68,31 @@ cleanup() { kill $server 2>/dev/null || true; rm -f "$gen" "$toast_gen"; }
 trap cleanup EXIT
 sleep 0.5
 
+# Every script the generated page asks for must actually be there.
+#
+# "No errors reported" does not cover this: a module that 404s never runs, so it
+# throws nothing, and the page renders as a locked vault that looks like a
+# perfectly good screenshot of a locked vault. That is exactly what happened
+# when preview.js was moved into build/ and its `../src/core/vault.js` import
+# stopped resolving — twenty-three screenshots, no errors, all wrong.
+check_scripts() {
+  # `for` over a command substitution, deliberately, and not `... | while read`.
+  # A piped loop runs in a subshell, so its `exit 1` leaves the subshell and the
+  # caller carries on with a zero status — which is how the first version of
+  # this check printed the failure and passed anyway.
+  missing=''
+  for path in $(grep -o 'src="/[^"]*"' "$1" | sed 's|src="||;s|"||' | sort -u); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port$path")
+    [ "$code" = "200" ] || missing="$missing  $path -> HTTP $code
+"
+  done
+  if [ -n "$missing" ]; then
+    printf '%s' "$missing" >&2
+    echo "the preview page asks for a script that is not being served" >&2
+    return 1
+  fi
+}
+
 base="http://127.0.0.1:$port/build/preview/manager.html"
 toast_base="http://127.0.0.1:$port/build/preview/toast.html"
 
@@ -76,7 +113,9 @@ if [ "${1:-}" = "shot" ]; then
     echo "  screenshots/$1.png"
   }
 
-  echo "screenshots:"
+    check_scripts "$gen" || exit 1
+
+echo "screenshots:"
   # Gate states, at the size the gate is actually used at.
   shot 01-setup      '?fresh'                        900,700
   shot 02-locked     ''                              900,700
