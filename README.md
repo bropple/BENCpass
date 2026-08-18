@@ -65,8 +65,11 @@ The manifest says so in the form Firefox checks:
 configured, and in that state it makes no network request at all.
 
 **Optional names what sync sends** when you do configure one:
-`authenticationInfo` for the passwords and `personallyIdentifyingInfo` for the
-names, addresses, phone numbers and email in address records.
+`authenticationInfo` for the passwords, `personallyIdentifyingInfo` for the
+names, addresses, phone numbers and email in address records, and
+`browsingActivity` for the site addresses saved against each login — a list of
+the sites you hold accounts on is what that category describes, even though it
+is nobody's browsing history.
 
 Both are declared even though the server only ever receives ciphertext and holds
 no key. Mozilla's rule is about the boundary, not the destination or the

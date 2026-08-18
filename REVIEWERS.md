@@ -26,7 +26,7 @@ records. The declaration is:
 ```json
 "data_collection_permissions": {
   "required": ["none"],
-  "optional": ["authenticationInfo", "personallyIdentifyingInfo"]
+  "optional": ["authenticationInfo", "personallyIdentifyingInfo", "browsingActivity"]
 }
 ```
 
@@ -34,8 +34,24 @@ records. The declaration is:
 in that state transmits nothing.
 
 `optional` names what sync carries when the user sets one up: passwords
-(`authenticationInfo`) and the names, addresses, phone numbers and email in
-address records (`personallyIdentifyingInfo`).
+(`authenticationInfo`), the names, addresses, phone numbers and email in address
+records (`personallyIdentifyingInfo`), and the site addresses saved against each
+login (`browsingActivity`).
+
+That third one is declared on the literal reading rather than the comfortable
+one. A login record carries the URLs it applies to, and the category covers
+"information about the websites users visit, such as specific URLs". It would be
+arguable that a site address is part of the credential rather than browsing
+data — you cannot have a password manager entry without knowing what it is for —
+but a list of the sites someone holds accounts on is what the words describe, so
+it is declared. No browsing history, no visit records, and no page content is
+collected or transmitted: only the addresses the user attached to an entry.
+
+These are requested at runtime with `permissions.request({ data_collection })`
+at the moment a server address is entered, and a refusal means the address is
+not saved. They are therefore visible and revocable in about:addons under
+Permissions and Data, which would otherwise show them off while the vault
+synced.
 
 Both are declared **even though the server receives only ciphertext and never
 holds a key**. The policy is about the boundary rather than the destination —

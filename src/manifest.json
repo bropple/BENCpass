@@ -14,7 +14,8 @@
         ],
         "optional": [
           "authenticationInfo",
-          "personallyIdentifyingInfo"
+          "personallyIdentifyingInfo",
+          "browsingActivity"
         ]
       }
     }

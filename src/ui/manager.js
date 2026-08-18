@@ -1202,7 +1202,7 @@ $('s-autolock').addEventListener('change', () =>
 //
 // It has to run inside the event handler. `permissions.request` needs a user
 // gesture, and awaiting anything first spends it.
-const SYNC_DATA = ['authenticationInfo', 'personallyIdentifyingInfo'];
+const SYNC_DATA = ['authenticationInfo', 'personallyIdentifyingInfo', 'browsingActivity'];
 
 async function consentToSync() {
   const api = globalThis.browser?.permissions;
