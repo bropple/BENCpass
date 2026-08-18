@@ -1,0 +1,136 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WebAuthn capability probe</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, Consolas, monospace; background: #0c1420;
+         color: #c3d9ee; margin: 0; padding: 24px; }
+  h1 { font-size: 18px; font-weight: normal; letter-spacing: 1px; }
+  button { font: inherit; background: #3d7dbf; color: #06101c; border: 0;
+           border-radius: 3px; padding: 8px 16px; cursor: pointer; }
+  pre { background: #141d2a; border: 1px solid #1e2c3d; padding: 12px;
+        white-space: pre-wrap; word-break: break-all; }
+  .good { color: #78b946; } .bad { color: #d84a3a; }
+</style>
+<body>
+<h1>Can this browser derive a key from the fingerprint sensor?</h1>
+<p id="summary">reading capabilities…</p>
+<p><button id="go" hidden>Test it — this will ask for your fingerprint</button></p>
+<pre id="out"></pre>
+
+<script>
+// Served over http://127.0.0.1, a secure context, so WebAuthn is available.
+//
+// Two halves. Reading capabilities raises no prompt and needs no gesture, so it
+// runs on load. Actually creating a credential does both, so it waits for a
+// click — the browser will refuse it otherwise.
+const out = {};
+const $ = (id) => document.getElementById(id);
+const show = () => { $('out').textContent = JSON.stringify(out, null, 2); };
+const post = () => fetch('/__result', { method: 'POST', body: JSON.stringify(out, null, 2) });
+
+// An RP ID has to be a registrable domain. Nothing is contacted — WebAuthn does
+// not resolve it — but it must be well formed, and it is what a credential is
+// bound to, so it has to be stable for the life of the vault.
+const RP_ID = 'bencpass.local';
+
+(async () => {
+  out.userAgent = navigator.userAgent;
+  out.hasPublicKeyCredential = typeof PublicKeyCredential !== 'undefined';
+
+  if (out.hasPublicKeyCredential) {
+    if (typeof PublicKeyCredential.getClientCapabilities === 'function') {
+      try { out.clientCapabilities = await PublicKeyCredential.getClientCapabilities(); }
+      catch (e) { out.clientCapabilitiesError = String(e); }
+    }
+    if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function') {
+      try {
+        out.platformAuthenticator =
+          await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+      } catch (e) { out.platformAuthenticatorError = String(e); }
+    }
+  }
+  show();
+  await post();
+
+  const prf = out.clientCapabilities?.['extension:prf'];
+  const platform = out.platformAuthenticator;
+
+  if (prf && platform) {
+    $('summary').innerHTML =
+      '<span class="good">PRF supported, and there is a built-in authenticator.</span> ' +
+      'Press the button to find out whether they work together.';
+    $('go').hidden = false;
+  } else if (!platform) {
+    $('summary').innerHTML =
+      '<span class="bad">No built-in authenticator on this machine</span> — ' +
+      'no Touch ID, no Hello. Nothing to test here.';
+  } else {
+    $('summary').innerHTML = '<span class="bad">This browser does not support PRF.</span>';
+  }
+})();
+
+$('go').addEventListener('click', async () => {
+  $('go').disabled = true;
+  $('summary').textContent = 'asking the authenticator…';
+  const random = (n) => crypto.getRandomValues(new Uint8Array(n));
+
+  try {
+    // 1. Make a credential that carries PRF, on the built-in authenticator.
+    const created = await navigator.credentials.create({
+      publicKey: {
+        rp: { id: RP_ID, name: 'BENCpass' },
+        user: { id: random(16), name: 'probe', displayName: 'probe' },
+        challenge: random(32),
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection: {
+          authenticatorAttachment: 'platform',
+          userVerification: 'required',
+          residentKey: 'required',
+        },
+        extensions: { prf: {} },
+        timeout: 120000,
+      },
+    });
+    const createdExt = created.getClientExtensionResults();
+    out.created = { id: created.id, prfEnabled: createdExt?.prf?.enabled ?? null };
+    show();
+
+    // 2. Ask it to evaluate PRF over a fixed input. This is the part that would
+    //    become the device secret — the same input must give the same bytes
+    //    every time, or it is no use as a key.
+    const evaluate = async () => {
+      const got = await navigator.credentials.get({
+        publicKey: {
+          rpId: RP_ID,
+          challenge: random(32),
+          allowCredentials: [{ type: 'public-key', id: created.rawId }],
+          userVerification: 'required',
+          extensions: { prf: { eval: { first: new TextEncoder().encode('bencpass:v1:device') } } },
+          timeout: 120000,
+        },
+      });
+      const r = got.getClientExtensionResults()?.prf?.results?.first;
+      return r ? [...new Uint8Array(r)].map((b) => b.toString(16).padStart(2, '0')).join('') : null;
+    };
+
+    const first = await evaluate();
+    out.prfFirst = first ? `${first.slice(0, 16)}… (${first.length / 2} bytes)` : null;
+    show();
+
+    // 3. And again, because a secret that changes each time is not a key.
+    const second = await evaluate();
+    out.prfStable = Boolean(first && second && first === second);
+    out.verdict = out.prfStable
+      ? 'WORKS — a stable key can be derived from this machine\'s own sensor'
+      : 'PRF returned nothing usable';
+  } catch (e) {
+    out.error = String(e);
+    out.verdict = 'FAILED — see error';
+  }
+
+  show();
+  await post();
+  $('summary').textContent = out.verdict ?? 'done';
+  document.title = 'probe done';
+});
+</script>
