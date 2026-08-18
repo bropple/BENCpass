@@ -28,7 +28,7 @@ clients.
 | ✅ Origin matching against the Public Suffix List | `src/core/match.js` |
 | ✅ Form-field classification, logins and addresses | `src/core/fields.js` |
 | ✅ Address model: every WHATWG token, country and state dropdowns | `src/core/address.js` |
-| 🔶 Native host: Touch ID (macOS) — Windows Hello still to come | `hosts/` |
+| 🔶 Native host: built and tested; macOS parked on an Apple provisioning profile, Windows Hello to come | `hosts/` |
 | ⬜ Import from Firefox, recovery kit | — |
 
 ## Layout

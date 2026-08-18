@@ -1010,7 +1010,14 @@ async function handleBioState() {
     // Whether this machine could have it at all, which is a different question
     // from whether it does. Linux is a deliberate no — see hosts/install.sh —
     // and saying "not set up" there would be an invitation to a dead end.
-    possible: os === 'mac' || os === 'win',
+    possible: os === 'win',
+    // Not "impossible": parked. macOS can do all of it except authorise the
+    // entitlement, which needs an Apple provisioning profile embedded in an
+    // .app bundle — measured, see hosts/macos/README.md. The host, the sealing,
+    // the second wrapping and this whole path are built and tested; what is
+    // missing is paperwork from Apple. Saying "not set up yet, run the
+    // installer" would send someone down a road that ends in a killed process.
+    blocked: os === 'mac' ? 'needs-apple-profile' : '',
   };
 }
 

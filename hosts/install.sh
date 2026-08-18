@@ -86,6 +86,21 @@ case $platform in
       fi
     done
 
+    cat <<'NOTE'
+Note: biometric unlock is parked on macOS, not abandoned.
+
+Everything is built — the host, the Secure Enclave key, the sealing, the second
+wrapping of the vault key. What macOS will not do is authorise the keychain
+entitlement without an Apple provisioning profile embedded in an .app bundle,
+which needs a paid developer account and renewing every year. Measured three
+ways; see hosts/macos/README.md.
+
+Installing anyway is still useful: `probe` works, and the day a profile exists
+this is the binary it will sign. BENCpass will show it as unavailable until then
+rather than offering a switch that cannot work.
+
+NOTE
+
     echo "building $binary"
     mkdir -p "$(dirname "$binary")"
     swiftc -O -o "$binary" "$root/macos/main.swift"

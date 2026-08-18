@@ -190,6 +190,7 @@ const bio = {
   biometrics: 'none',
   possible: false,
   reason: '',
+  blocked: '',
   hostVersion: '',
 };
 
@@ -223,6 +224,7 @@ async function refreshBiometrics() {
     biometrics: reply?.biometrics ?? 'none',
     possible: Boolean(reply?.possible),
     reason: reply?.reason ?? '',
+    blocked: reply?.blocked ?? '',
     hostVersion: reply?.hostVersion ?? '',
   });
 
@@ -303,6 +305,13 @@ function renderBioSetting() {
     $('s-bio-note').textContent = bio.enrolled
       ? `On for this machine. Your master password still works, and still opens it anywhere else.`
       : `Available on this machine. You will be asked for your master password once.`;
+    return;
+  }
+
+  if (bio.blocked === 'needs-apple-profile') {
+    // Built, tested, and waiting on Apple rather than on us.
+    $('s-bio-note').textContent =
+      'Not available on macOS yet. Everything for it is built — the host, the Secure Enclave key, the sealing — but macOS will only authorise the keychain entitlement with an Apple provisioning profile, which needs a paid developer account and an annual renewal. Software-enforced Touch ID was the alternative and is not worth having. See hosts/macos/README.md.';
     return;
   }
 
