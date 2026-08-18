@@ -42,7 +42,7 @@ var errUnauthorised = errors.New("unauthorised")
 // with nothing to point at the cause, so it is defined in one place and the
 // JavaScript client mirrors it literally.
 //
-//	METHOD \n host \n /path?query \n unix-millis \n nonce \n sha256(body) in lowercase hex
+//	METHOD \n host \n /path?query \n unix-millis \n nonce \n If-Match \n sha256(body) in hex
 //
 // The host is in there because a client with two addresses for one server will
 // try the second when the first does not answer — and "does not answer" is not
@@ -55,14 +55,21 @@ var errUnauthorised = errors.New("unauthorised")
 // A consequence worth knowing when deploying: a reverse proxy that rewrites the
 // Host header will break every signature, because the client signs the address
 // it dialled and the server checks the one it was handed.
-func canonical(method, host, uri, ts, nonce string, body []byte) string {
+// If-Match is signed because it decides whether the write is checked at all.
+// Left out, an attacker on the path could take an otherwise perfectly valid
+// request — right device, right nonce, right body — and change only that header
+// without disturbing the signature, turning a compare-and-swap into an
+// unconditional overwrite. The header is carried in the signature rather than
+// merely validated so that it cannot be edited in flight at all.
+func canonical(method, host, uri, ts, nonce, ifMatch string, body []byte) string {
 	sum := sha256.Sum256(body)
-	return method + "\n" + host + "\n" + uri + "\n" + ts + "\n" + nonce + "\n" + hex.EncodeToString(sum[:])
+	return method + "\n" + host + "\n" + uri + "\n" + ts + "\n" + nonce + "\n" +
+		ifMatch + "\n" + hex.EncodeToString(sum[:])
 }
 
-func sign(key []byte, method, host, uri, ts, nonce string, body []byte) string {
+func sign(key []byte, method, host, uri, ts, nonce, ifMatch string, body []byte) string {
 	m := hmac.New(sha256.New, key)
-	m.Write([]byte(canonical(method, host, uri, ts, nonce, body)))
+	m.Write([]byte(canonical(method, host, uri, ts, nonce, ifMatch, body)))
 	return base64.StdEncoding.EncodeToString(m.Sum(nil))
 }
 
@@ -94,7 +101,7 @@ func (s *Store) authenticate(r *http.Request, body []byte) (Device, error) {
 		return Device{}, errUnauthorised
 	}
 
-	want := sign(key, r.Method, r.Host, r.URL.RequestURI(), ts, nonce, body)
+	want := sign(key, r.Method, r.Host, r.URL.RequestURI(), ts, nonce, r.Header.Get("If-Match"), body)
 	// Constant time, because the comparison is against a value the caller chose.
 	if !hmac.Equal([]byte(want), []byte(got)) {
 		return Device{}, errUnauthorised

@@ -26,6 +26,24 @@ import (
 	"time"
 )
 
+// How long a nonce is remembered.
+//
+// Twice the clock window, and the factor of two is the whole point. A request
+// is accepted while |now - ts| <= maxSkew, which is a *ten* minute span: five
+// minutes either side of the timestamp it carries. But a nonce is recorded when
+// it arrives, not when it claims to have been sent — so remembering it for only
+// maxSkew leaves a gap whenever the client's clock runs ahead.
+//
+// Concretely, with a client δ ahead: the request arrives at T, is remembered
+// until T+maxSkew, and stays timestamp-valid until T+δ+maxSkew. Between those
+// two the nonce has been forgotten and the request is still good, which is the
+// replay this file exists to stop — reopened by exactly the unsynchronised
+// clock maxSkew was widened to tolerate in the first place.
+//
+// Retaining for 2*maxSkew covers the entire validity window from either
+// direction, and costs one more sweep interval of entries.
+const nonceLifetime = 2 * maxSkew
+
 // seen remembers which nonces have been used, per device, until they age out.
 //
 // Deliberately in memory and not written to disk. It holds at most a few
@@ -59,14 +77,14 @@ func (s *seen) use(device, nonce string, now time.Time) bool {
 	// the traffic around it.
 	if now.Sub(s.swept) > time.Minute {
 		for k, t := range s.when {
-			if now.Sub(t) > maxSkew {
+			if now.Sub(t) > nonceLifetime {
 				delete(s.when, k)
 			}
 		}
 		s.swept = now
 	}
 
-	if t, ok := s.when[key]; ok && now.Sub(t) <= maxSkew {
+	if t, ok := s.when[key]; ok && now.Sub(t) <= nonceLifetime {
 		return false
 	}
 	s.when[key] = now

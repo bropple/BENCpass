@@ -24,7 +24,7 @@ export class SyncError extends Error {
  * pointing at the cause. That is why the integration test runs against the real
  * Go binary rather than a mock of it.
  *
- *   METHOD \n host \n /path?query \n unix-millis \n nonce \n sha256(body) in hex
+ *   METHOD \n host \n /path?query \n unix-millis \n nonce \n If-Match \n sha256(body)
  *
  * The host is signed because this client holds two addresses for one server and
  * moves between them. Something listening on the address it tries first can
@@ -33,8 +33,8 @@ export class SyncError extends Error {
  * listener is left holding a request it can send on. Naming the host in the
  * signature makes that copy good only against the address it already reached.
  */
-export function canonical(method, host, uri, ts, nonce, bodyHashHex) {
-  return `${method}\n${host}\n${uri}\n${ts}\n${nonce}\n${bodyHashHex}`;
+export function canonical(method, host, uri, ts, nonce, ifMatch, bodyHashHex) {
+  return `${method}\n${host}\n${uri}\n${ts}\n${nonce}\n${ifMatch}\n${bodyHashHex}`;
 }
 
 /**
@@ -194,9 +194,14 @@ export class SyncClient {
       // `host` and not the whole base: it is what the server reads back out of
       // the Host header, port and all, and the two have to agree exactly.
       const host = new URL(base).host;
+      // If-Match is signed, not merely sent: it decides whether the write is
+      // checked at all, so leaving it outside the signature would let anyone on
+      // the path turn a compare-and-swap into an overwrite without touching
+      // anything the signature covers.
+      const ifMatch = headers['If-Match'] ?? '';
       const sig = await hmacB64(
         this.key,
-        canonical(method, host, path, ts, nonce, bodyHash),
+        canonical(method, host, path, ts, nonce, ifMatch, bodyHash),
       );
       return {
         method,

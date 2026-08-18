@@ -288,10 +288,10 @@ Revoking a lost laptop is deleting one device key, not rotating the vault.
 ### What is signed
 
 ```
-HMAC-SHA256( METHOD \n host \n /path?query \n unix-millis \n nonce \n sha256(body) )
+HMAC-SHA256( METHOD \n host \n /path?query \n unix-millis \n nonce \n If-Match \n sha256(body) )
 ```
 
-Three of those six are there for reasons worth stating, because each closes
+Four of those seven are there for reasons worth stating, because each closes
 something the others do not:
 
 **`nonce`** — the server accepts each one once, remembering them for as long as
@@ -314,6 +314,23 @@ landing out of order reinstates an old wrapping, and after a master password
 change that brings the old password back. The client cannot catch it on its own:
 it watches for the sequence going backwards, and a stale header written late
 arrives with the sequence going forwards like anything else.
+
+**`If-Match` in the signature** — the header decides whether the write is
+checked at all, so it cannot be left outside what is signed. Otherwise someone
+on the path takes a request that is valid in every other respect and edits only
+that header, turning a compare-and-swap into an unconditional overwrite without
+holding any key. A negative value is refused outright for the same reason: below
+the handler, negative means "not checking", which is legitimate only for the
+first write to an empty store — reached by omitting the header, never by sending
+a number.
+
+A note on the nonce's lifetime, because getting it wrong is silent. A request is
+good while `|now - ts| <= maxSkew`, which is a ten-minute span; a nonce is
+recorded when it *arrives*. Remembering it for only `maxSkew` therefore leaves a
+gap for any client whose clock runs ahead — the exact case the wide window
+exists to tolerate — during which the nonce has been forgotten and the request
+is still valid. They are kept for `2 * maxSkew`, which covers the whole window
+from either direction.
 
 **Merge rule** — causal, not chronological. Each client keeps a `syncedRev` map:
 for every record, the `rev` it last agreed with the server on. That is the

@@ -91,10 +91,12 @@ func (c *client) do(method, path string, body any, headers map[string]string) (i
 	req.Header.Set(hdrDevice, c.id)
 	req.Header.Set(hdrTime, ts)
 	req.Header.Set(hdrNonce, nonce)
-	req.Header.Set(hdrSig, sign(c.key, method, req.Host, path, ts, nonce, raw))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	// Signed after the caller's headers are on, because If-Match is one of them
+	// and it is part of what gets signed.
+	req.Header.Set(hdrSig, sign(c.key, method, req.Host, path, ts, nonce, req.Header.Get("If-Match"), raw))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -187,6 +189,66 @@ func TestUnsignedRequestIsRefused(t *testing.T) {
 	}
 }
 
+func TestNegativeIfMatchCannotSwitchOffTheCheck(t *testing.T) {
+	for _, path := range []string{"/v1/meta", "/v1/records"} {
+		// A server each: the first write below is the one that is allowed to go
+		// without If-Match, and it is only allowed while the store is empty.
+		srv, _, code := newServer(t)
+		c := enrol(t, srv, code, "laptop")
+
+		body := map[string]any{"meta": map[string]any{"wrap": "v1"}}
+		if path == "/v1/records" {
+			body = map[string]any{"records": []Envelope{env("a", 1)}}
+		}
+		if status, _ := c.do("PUT", path, body, nil); status != http.StatusOK {
+			t.Fatalf("%s: first write refused: %d", path, status)
+		}
+
+		// Below the handler, a negative ifMatch means "not checking" -- which is
+		// only ever legitimate for the first write to an empty store, and is
+		// reached by leaving the header off rather than by sending a number. A
+		// client asking for it by name is asking to skip compare-and-swap.
+		for _, v := range []string{"-1", "-5"} {
+			status, _ := c.do("PUT", path, body, map[string]string{"If-Match": v})
+			if status != http.StatusBadRequest {
+				t.Fatalf("%s: If-Match %s switched off the check: %d", path, v, status)
+			}
+		}
+	}
+}
+
+func TestIfMatchCannotBeChangedInFlight(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	if status, _ := c.do("PUT", "/v1/meta", map[string]any{"meta": map[string]any{"wrap": "v1"}}, nil); status != http.StatusOK {
+		t.Fatalf("first write refused: %d", status)
+	}
+
+	// Everything correct -- right device, fresh nonce, untouched body -- except
+	// that the header deciding whether the write is checked has been altered on
+	// the way. If it is not part of what was signed, this succeeds and
+	// compare-and-swap has been removed by somebody who never held the key.
+	raw, _ := json.Marshal(map[string]any{"meta": map[string]any{"wrap": "evil"}})
+	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	const nonce = "in-flight"
+	req, _ := http.NewRequest("PUT", srv.URL+"/v1/meta", bytes.NewReader(raw))
+	req.Header.Set(hdrDevice, c.id)
+	req.Header.Set(hdrTime, ts)
+	req.Header.Set(hdrNonce, nonce)
+	req.Header.Set(hdrSig, sign(c.key, "PUT", req.Host, "/v1/meta", ts, nonce, "999", raw))
+	req.Header.Set("If-Match", "-1") // signed as 999, sent as -1
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("If-Match was altered in flight and the write was accepted")
+	}
+}
+
 func TestMetaWriteNeedsTheSequenceItSaw(t *testing.T) {
 	srv, _, code := newServer(t)
 	c := enrol(t, srv, code, "laptop")
@@ -261,7 +323,7 @@ func TestReplayedRequestIsRefused(t *testing.T) {
 		r.Header.Set(hdrDevice, c.id)
 		r.Header.Set(hdrTime, ts)
 		r.Header.Set(hdrNonce, nonce)
-		r.Header.Set(hdrSig, sign(c.key, "POST", r.Host, "/v1/codes", ts, nonce, nil))
+		r.Header.Set(hdrSig, sign(c.key, "POST", r.Host, "/v1/codes", ts, nonce, "", nil))
 		resp, err := http.DefaultClient.Do(r)
 		if err != nil {
 			t.Fatal(err)
@@ -296,7 +358,7 @@ func TestNonceIsRequired(t *testing.T) {
 	r, _ := http.NewRequest("POST", srv.URL+"/v1/codes", nil)
 	r.Header.Set(hdrDevice, c.id)
 	r.Header.Set(hdrTime, ts)
-	r.Header.Set(hdrSig, sign(c.key, "POST", r.Host, "/v1/codes", ts, "", nil))
+	r.Header.Set(hdrSig, sign(c.key, "POST", r.Host, "/v1/codes", ts, "", "", nil))
 
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
@@ -322,7 +384,7 @@ func TestSignatureIsBoundToTheHost(t *testing.T) {
 	r.Header.Set(hdrDevice, c.id)
 	r.Header.Set(hdrTime, ts)
 	r.Header.Set(hdrNonce, nonce)
-	r.Header.Set(hdrSig, sign(c.key, "POST", "somewhere-else.invalid:8788", "/v1/codes", ts, nonce, nil))
+	r.Header.Set(hdrSig, sign(c.key, "POST", "somewhere-else.invalid:8788", "/v1/codes", ts, nonce, "", nil))
 
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
@@ -344,7 +406,7 @@ func TestTamperedBodyIsRefused(t *testing.T) {
 	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	evil, _ := json.Marshal(map[string]any{"records": []Envelope{env("a", 99)}})
 	req, _ := http.NewRequest("PUT", srv.URL+"/v1/records", bytes.NewReader(evil))
-	good := sign(c.key, "PUT", req.Host, "/v1/records", ts, "tamper-nonce", raw)
+	good := sign(c.key, "PUT", req.Host, "/v1/records", ts, "tamper-nonce", "", raw)
 	req.Header.Set(hdrDevice, c.id)
 	req.Header.Set(hdrTime, ts)
 	req.Header.Set(hdrNonce, "tamper-nonce")

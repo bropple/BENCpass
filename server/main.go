@@ -191,7 +191,12 @@ func (s *server) putMeta(w http.ResponseWriter, r *http.Request, body []byte) {
 	ifMatch := int64(-1)
 	if v := r.Header.Get("If-Match"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
+		// Negative is refused rather than passed on. Below, a negative ifMatch
+		// means "not checking", which is only ever legitimate for the first
+		// write to an empty store — reached by the absent-header path just
+		// below, never by anything a client sends. Forwarded, it would let any
+		// caller turn compare-and-swap off by asking.
+		if err != nil || n < 0 {
 			fail(w, http.StatusBadRequest, "bad If-Match")
 			return
 		}
@@ -237,7 +242,12 @@ func (s *server) putRecords(w http.ResponseWriter, r *http.Request, body []byte)
 	ifMatch := int64(-1)
 	if v := r.Header.Get("If-Match"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
+		// Negative is refused rather than passed on. Below, a negative ifMatch
+		// means "not checking", which is only ever legitimate for the first
+		// write to an empty store — reached by the absent-header path just
+		// below, never by anything a client sends. Forwarded, it would let any
+		// caller turn compare-and-swap off by asking.
+		if err != nil || n < 0 {
 			fail(w, http.StatusBadRequest, "bad If-Match")
 			return
 		}
