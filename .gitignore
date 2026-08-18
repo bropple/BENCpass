@@ -26,6 +26,13 @@ screenshots/
 # Anything the server has been asked to store while running locally
 server/data/
 
+# `go build` with no -o drops the binary beside its source, and it is not
+# covered by build/ above. Twelve megabytes of it reached two commits before
+# anyone noticed, carrying the absolute paths of the machine that compiled it.
+# tools/build-server.sh writes to build/ and is the way to produce one.
+server/server
+server/*.exe
+
 # Editors and operating systems, which scatter these through a working tree and
 # have never once been worth committing.
 .DS_Store
