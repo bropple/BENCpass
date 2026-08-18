@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -46,17 +47,35 @@ func TestNoncesAreRememberedPerDevice(t *testing.T) {
 
 func TestTheSweepDoesNotForgetWhatItShouldKeep(t *testing.T) {
 	// The sweep runs at most once a minute, so entries can outlive their
-	// lifetime by up to that — harmless, since keeping one too long only ever
+	// lifetime by up to that -- harmless, since keeping one too long only ever
 	// refuses a replay. What must never happen is the reverse.
+	//
+	// The span deliberately runs past nonceLifetime so the sweep actually
+	// deletes something; an earlier version stayed inside it and so never
+	// exercised the branch it claimed to be testing.
 	s := newSeen()
 	start := time.Now()
-	for i := 0; i < 200; i++ {
-		if !s.use("device", string(rune('a'+i%26))+string(rune('a'+i/26)), start.Add(time.Duration(i)*time.Second)) {
-			t.Fatalf("a fresh nonce was refused at step %d", i)
+
+	if !s.use("device", "first", start) {
+		t.Fatal("a fresh nonce was refused")
+	}
+
+	// Traffic either side of the boundary, enough of it to trigger sweeps.
+	for i := 1; i <= 40; i++ {
+		at := start.Add(time.Duration(i) * time.Minute / 2)
+		if !s.use("device", "n"+strconv.Itoa(i), at) {
+			t.Fatalf("a fresh nonce was refused at %v", at)
 		}
 	}
-	// Sweeps have run by now. The earliest nonce is still inside its lifetime.
-	if s.use("device", "aa", start.Add(199*time.Second)) {
+
+	// Still inside its lifetime despite every sweep that has run since.
+	if s.use("device", "n38", start.Add(20*time.Minute)) {
 		t.Fatal("the sweep dropped a nonce that was still within its lifetime")
+	}
+
+	// And the map does not grow for ever: the first one is long past its
+	// lifetime by now and has been let go.
+	if len(s.when) > 40 {
+		t.Fatalf("the sweep is not collecting: %d entries held", len(s.when))
 	}
 }

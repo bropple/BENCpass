@@ -228,7 +228,15 @@ func TestIfMatchCannotBeChangedInFlight(t *testing.T) {
 	// Everything correct -- right device, fresh nonce, untouched body -- except
 	// that the header deciding whether the write is checked has been altered on
 	// the way. If it is not part of what was signed, this succeeds and
-	// compare-and-swap has been removed by somebody who never held the key.
+	// compare-and-swap has been steered by somebody who never held the key.
+	//
+	// Both values are positive and well-formed, which is the point. An earlier
+	// version signed 999 and sent -1, and still passed with the signing removed
+	// entirely: the handler's negative check was refusing it, so the test proved
+	// nothing about signing at all. The real attack is positive to positive --
+	// take a stale write held back on the wire and move its If-Match from the
+	// sequence it was built for to the one the server is on now, and it lands
+	// past a compare-and-swap that was working perfectly.
 	raw, _ := json.Marshal(map[string]any{"meta": map[string]any{"wrap": "evil"}})
 	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	const nonce = "in-flight"
@@ -236,16 +244,20 @@ func TestIfMatchCannotBeChangedInFlight(t *testing.T) {
 	req.Header.Set(hdrDevice, c.id)
 	req.Header.Set(hdrTime, ts)
 	req.Header.Set(hdrNonce, nonce)
-	req.Header.Set(hdrSig, sign(c.key, "PUT", req.Host, "/v1/meta", ts, nonce, "999", raw))
-	req.Header.Set("If-Match", "-1") // signed as 999, sent as -1
+	req.Header.Set(hdrSig, sign(c.key, "PUT", req.Host, "/v1/meta", ts, nonce, "1", raw))
+	req.Header.Set("If-Match", "9999") // signed for one sequence, sent for another
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		t.Fatal("If-Match was altered in flight and the write was accepted")
+	// 401 specifically. A 409 would mean it got past authentication and
+	// compare-and-swap happened to catch it -- which is exactly what happens
+	// when If-Match is left out of the signature, and is what made the earlier
+	// version of this test pass for the wrong reason.
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("If-Match was altered in flight and the signature did not notice: %d", resp.StatusCode)
 	}
 }
 
