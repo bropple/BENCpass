@@ -55,6 +55,7 @@ export const MSG = Object.freeze({
   DEVICES: 'devices', // "which machines are enrolled?"
   DEVICE_FORGET: 'device-forget', // "cut that machine off"
   DEVICE_RENAME: 'device-rename', // "call that machine something else"
+  SYNC_FORGET: 'sync-forget', // "forget what was synced; this server was rebuilt"
 
   // manager -> background. The device secret is derived in the page by WebAuthn
   // and crosses as bytes; the background never asks anything for it.

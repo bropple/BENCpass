@@ -1186,6 +1186,27 @@ async function revokeDevice(dev, mine) {
   await loadDevices();
 }
 
+$('s-rebuilt-btn').addEventListener('click', async () => {
+  if (
+    !window.confirm(
+      'Forget what this machine has already synced?\n\n' +
+        'Only do this if you rebuilt or restored the server yourself. If you did not, ' +
+        'the server is not the one you think it is, and this would let it feed you an old copy.\n\n' +
+        'Your vault is untouched. Everything in it will be sent again.',
+    )
+  ) {
+    return;
+  }
+
+  const reply = await askBackground(MSG.SYNC_FORGET);
+  if (!reply?.ok) {
+    $('s-sync-note').textContent = `Could not forget: ${reply?.reason ?? 'error'}`;
+    return;
+  }
+  $('s-rebuilt').hidden = true;
+  $('s-sync-note').textContent = 'Forgotten. Press Sync to send everything again.';
+});
+
 $('s-devices-refresh').addEventListener('click', loadDevices);
 
 // ---- the recovery code, after setup -----------------------------------------
@@ -1634,6 +1655,7 @@ $('s-enrolment').addEventListener('change', async () => {
 
 $('s-sync-btn').addEventListener('click', async () => {
   $('s-sync-note').textContent = 'Syncing…';
+  $('s-rebuilt').hidden = true;
   const reply = await askBackground(MSG.SYNC);
   if (reply?.ok) {
     const conflicts = reply.conflicts ? ` ${reply.conflicts} conflict(s) kept.` : '';
@@ -1647,7 +1669,13 @@ $('s-sync-btn').addEventListener('click', async () => {
         ? 'No server set.'
         : reply?.reason === 'no-consent'
           ? 'Sync is off: permission to send your data was withdrawn in about:addons.'
-          : `Failed: ${reply?.message ?? reply?.reason ?? 'error'}`;
+          : reply?.reason === 'rollback'
+            ? 'The server is reporting fewer changes than this machine has already seen. See below.'
+            : `Failed: ${reply?.message ?? reply?.reason ?? 'error'}`;
+
+    // Offered only once a sync has genuinely been refused as a rollback, and
+    // hidden again the moment one succeeds.
+    $('s-rebuilt').hidden = reply?.reason !== 'rollback';
   }
 });
 

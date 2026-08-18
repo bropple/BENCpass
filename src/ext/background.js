@@ -278,6 +278,8 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleDeviceForget(msg, sender);
     case MSG.DEVICE_RENAME:
       return handleDeviceRename(msg, sender);
+    case MSG.SYNC_FORGET:
+      return handleSyncForget(sender);
     case MSG.BIO_STATE:
       return handleBioState();
     case MSG.BIO_ENROL:
@@ -991,6 +993,33 @@ async function handleJoin(msg, sender) {
  * row is how somebody locks themselves out of their own vault, and "linux"
  * three times over gives them no way to tell.
  */
+/**
+ * Forget what this machine believes it has already synced.
+ *
+ * For one situation, and it is worth being exact about which: the server was
+ * rebuilt, restored from an older backup, or replaced. Its sequence then starts
+ * lower than the number this machine has already seen, and the rollback guard
+ * refuses every sync — correctly. That guard is what stops a rolled-back or
+ * impostor server quietly resurrecting deleted records, so it does not get a
+ * reset button sitting next to it on the off chance.
+ *
+ * What this discards is only the bookkeeping: which revision of each record was
+ * last agreed with the server. The vault is untouched. The next sync therefore
+ * treats every local record as new and pushes it, which is right for a server
+ * that has lost its copy.
+ *
+ * What it cannot recover is anything that existed *only* on the server — a
+ * record another machine wrote that this one never pulled. That is gone with
+ * the server's data, and no amount of forgetting here brings it back.
+ */
+async function handleSyncForget(sender) {
+  if (!isExtensionPage(sender)) return { ok: false };
+
+  syncState = loadSyncState(null);
+  await persistSettings();
+  return { ok: true };
+}
+
 async function handleDevices(sender) {
   if (!isExtensionPage(sender)) return { ok: false };
   const c = client();

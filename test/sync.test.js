@@ -811,3 +811,39 @@ test('two machines cannot both publish the first header', { ...skip }, async (t)
     'the published header belongs to neither machine',
   );
 });
+
+// ---- recovering from a rebuilt server ---------------------------------------
+
+test('a rebuilt server is refused, and forgetting the sync state recovers it', { ...skip }, async (t) => {
+  // Machine with a vault and a history of syncing.
+  const { endpoint, code } = await startServer(t);
+  const client = await device(endpoint, 'laptop', code);
+  const vault = await mkVault();
+  const state = emptySyncState();
+  await vault.add({ title: 'Bank', password: 'hunter2' });
+  await syncOnce(vault, client, state);
+  assert.ok(state.highestSeq > 0, 'the first sync recorded nothing');
+
+  // The server is rebuilt: new data directory, new enrolment, sequence back to
+  // zero. Everything the machine remembers about what it synced is now wrong.
+  const rebuilt = await startServer(t);
+  const toRebuilt = await device(rebuilt.endpoint, 'laptop', rebuilt.code);
+
+  await assert.rejects(
+    () => syncOnce(vault, toRebuilt, state),
+    (err) => err.code === 'rollback',
+    'a server reporting a lower sequence was accepted',
+  );
+
+  // Forgetting is exactly this: drop the bookkeeping, keep the vault.
+  const forgotten = emptySyncState();
+  const result = await syncOnce(vault, toRebuilt, forgotten);
+
+  assert.equal(result.pushed, 1, 'the record was not sent to the rebuilt server');
+  assert.equal(vault.list().length, 1, 'the vault lost a record');
+  assert.equal(vault.list()[0].password, 'hunter2');
+
+  // And the rebuilt server is carrying the vault header again, so another
+  // machine could still join it.
+  assert.ok((await toRebuilt.getMeta()).meta, 'the header was not republished');
+});

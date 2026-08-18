@@ -389,6 +389,28 @@
         <button class="btn btn-sm" id="s-sync-btn">Sync</button>
       </div>
 
+      <!-- Shown only when a sync has actually been refused as a rollback.
+           The guard it clears is what stops a rolled-back or impostor server
+           resurrecting deleted records, so it is not a button that sits about
+           on the off chance. -->
+      <div class="setting" id="s-rebuilt" hidden>
+        <div class="setting-text">
+          <span class="setting-name">This server was rebuilt</span>
+          <span class="setting-note">
+            The server is reporting fewer changes than this machine has already
+            seen, so syncing has stopped. That is what a restored backup, a
+            rebuilt server — or an impostor — looks like from here.
+            <strong>If you did not rebuild it, do not press this.</strong>
+            Forgetting only affects what this machine believes it has already
+            sent; your vault is untouched, and everything in it will be pushed
+            again. Anything that existed only on the server is gone with it.
+          </span>
+        </div>
+        <div class="setting-actions">
+          <button type="button" class="btn btn-sm" id="s-rebuilt-btn">Forget and re-sync</button>
+        </div>
+      </div>
+
       <div class="setting">
         <div class="setting-text">
           <span class="setting-name">Machines</span>
