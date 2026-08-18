@@ -256,12 +256,21 @@ server reports sequence 0, lower than the 1 already seen — refusing a rollback
 ```
 
 That guard is correct: it is what stops a rolled-back or impostor server
-resurrecting deleted records. But there is no reset button in the extension
-today, so recovery means clearing the extension's storage on each machine — in
-practice a fresh profile — and joining again.
+resurrecting deleted records.
 
-Your vault survives all of this: it lives in each browser, and any machine can
-publish its header to a fresh server. But it is an afternoon you did not need.
+To recover on purpose: re-enrol the machine with a code from the rebuilt server,
+press **Sync**, and when it refuses, a **This server was rebuilt** row appears
+under Settings → Sync. Forgetting there drops only this machine's record of
+what it had already sent; the vault is untouched and everything in it is pushed
+again.
+
+**If you did not rebuild the server, do not press it.** From the extension's
+side a restored backup and an impostor look exactly the same, which is why the
+button appears only after a refusal rather than sitting there permanently.
+
+What no button recovers is anything that existed *only* on the server — a
+record another machine wrote that this one never pulled. That is gone with the
+data directory.
 
 **Snapshot the dataset.** ZFS snapshots are the whole answer here.
 
