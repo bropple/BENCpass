@@ -9,7 +9,11 @@
 # building, and Go then cross-compiles to $TARGETARCH. Without it, buildx runs
 # the whole compiler under qemu emulation for the foreign architecture, which is
 # both far slower and an extra dependency to install.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+# Pinned to the patch, not the minor. govulncheck found four standard-library
+# advisories -- crypto/tls, net/http, html/template, encoding/asn1 -- all fixed
+# in 1.26.6, and a floating `golang:1.26-alpine` had been quietly building the
+# published image against a toolchain that carried them.
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS build
 ARG TARGETOS TARGETARCH VERSION=dev
 WORKDIR /src
 
