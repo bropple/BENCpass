@@ -164,6 +164,11 @@ echo "screenshots:"
   shot 19-settings   '?open&settings'                    1280,1000
   shot 20-settings-bio '?open&settings&bio=ready'        1280,1000
   shot 20b-settings-narrow '?open&settings&bio=ready'    460,1000
+  # The recovery kit: the sheet shown once at setup, the gate offering the code
+  # instead of the password, and the settings row once one exists.
+  shot 24-recovery-sheet   '?fresh&kit'                     900,1000
+  shot 25-recovery-gate    '?recovery'                      900,700
+  shot 26-recovery-setting '?open&settings&recovery'        1280,1000
 
   # The save prompt, at the size the content script frames it at.
   toast() {

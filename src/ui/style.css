@@ -511,6 +511,11 @@ select { color: var(--text); font: inherit; }
 
 .kit-warn { color: var(--bad); line-height: 1.6; margin: 0 0 20px; }
 .kit-actions { display: flex; gap: 8px; margin-bottom: 20px; }
+
+/* A disabled button has to look disabled. The recovery sheet's Continue is
+   disabled until the box is ticked, and a primary button that looks pressable
+   while ignoring clicks reads as broken rather than as waiting. */
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .kit-confirm { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 16px; line-height: 1.5; }
 .kit-confirm input { margin-top: 3px; }
 .kit-status { color: var(--text-dim); font-size: 13px; min-height: 1.2em; margin: 12px 0 0; }

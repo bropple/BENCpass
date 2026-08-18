@@ -221,6 +221,9 @@ localStorage.clear();
 if (!q.has('fresh')) {
   const vault = await Vault.create({ password: PASSWORD });
   if (!q.has('empty')) await vault.importRecords(SAMPLES);
+  // ?recovery gives the vault a way back in, so the gate's recovery link and
+  // the settings row can be seen in the state that matters.
+  if (q.has('recovery')) await vault.enrolRecovery(PASSWORD, 'ABCDE-FGHJK-MNPQR-STUVW-XYZ23-45678');
   localStorage.setItem('bencpass.vault', JSON.stringify(vault.toJSON()));
 }
 
@@ -230,6 +233,20 @@ setTimeout(() => {
   const mode = document.getElementById('gate')?.dataset.mode;
   if (!mode) complain({ error: 'boot() never set a gate mode — it did not finish' });
 }, 1500);
+
+// ?kit drives the real setup path to the recovery sheet. It is shown exactly
+// once in a vault's life, so without this there is no way to look at it twice —
+// which is precisely the kind of screen that rots unseen.
+if (q.has('kit')) {
+  when(
+    () => $('gate').dataset.mode === 'setup',
+    () => {
+      $('gate-pw').value = PASSWORD;
+      $('gate-pw2').value = PASSWORD;
+      $('gate-form').requestSubmit();
+    },
+  );
+}
 
 // ?open drives the real unlock path rather than bypassing it, so a screenshot
 // shows a vault that genuinely decrypted. ?wrong exercises the failure text.
