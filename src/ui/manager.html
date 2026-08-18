@@ -308,6 +308,42 @@
         <input type="checkbox" id="s-insecure" class="setting-check">
       </label>
 
+      <h3 class="settings-group">Your data</h3>
+
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Export</span>
+          <span class="setting-note">
+            Writes a file with your passwords <strong>in plain text</strong>.
+            That is what makes it a backup and what makes it dangerous: keep it
+            somewhere you would keep the passwords themselves, and delete it
+            when you are done. JSON keeps everything, including addresses; CSV
+            keeps logins only, for handing to another program.
+          </span>
+        </div>
+        <div class="setting-actions">
+          <button type="button" class="btn" id="s-export-json">JSON</button>
+          <button type="button" class="btn" id="s-export-csv">CSV</button>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Import</span>
+          <span class="setting-note">
+            A file exported from BENCpass, Firefox, Chrome, Bitwarden or
+            KeePass. Entries are added; nothing already here is replaced or
+            overwritten.
+          </span>
+        </div>
+        <div class="setting-actions">
+          <input type="file" id="s-import-file" accept=".json,.csv,.txt,text/csv,application/json" hidden>
+          <button type="button" class="btn" id="s-import">Choose a file</button>
+        </div>
+      </div>
+
+      <p class="settings-note" id="s-transfer-status" role="status"></p>
+
       <h3 class="settings-group">About</h3>
       <dl class="meta" id="s-about"></dl>
 

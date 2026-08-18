@@ -414,6 +414,21 @@ select { color: var(--text); font: inherit; }
   .setting input.setting-input.wide { width: 100%; text-align: left; }
   .setting > .btn, .setting > .setting-check { align-self: flex-start; }
 }
+/* Buttons sit where a control would, and stay on one line as a pair. They wrap
+   under the text on a narrow pane along with everything else, via the rule
+   above — flex-direction:column on .setting takes these with it. */
+.setting-actions { display: flex; gap: 8px; flex: none; }
+@media (max-width: 620px) {
+  .setting-actions { width: 100%; }
+  .setting-actions .btn { flex: 1; }
+}
+
+/* Says how an import or export went. Not an error style: it carries "42 added"
+   as often as it carries a refusal, and it colours itself when it is the latter. */
+.settings-note { color: var(--text-dim); font-size: 13px; margin-top: 12px; min-height: 1.2em; }
+.settings-note.bad { color: var(--bad); }
+.settings-note.good { color: var(--good); }
+
 .settings-error { color: var(--bad); margin-top: 16px; }
 
 /* The master-password confirmation, which appears in place rather than as a

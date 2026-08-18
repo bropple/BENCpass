@@ -9,6 +9,8 @@ import { Vault } from '../core/vault.js';
 import { pickStorage } from '../core/storage.js';
 import { generate, entropyBits } from '../core/generate.js';
 import { ADDRESS_SCHEMA, countryOptions, countryName, splitName } from '../core/address.js';
+import { toJson, toCsv, parse as parseTransfer, TransferError } from '../core/transfer.js';
+import { LOGIN } from '../core/model.js';
 import { MSG } from '../ext/protocol.js';
 import * as webauthn from '../ext/webauthn.js';
 
@@ -865,6 +867,124 @@ async function copyText(text, label, isSecret = false) {
 }
 
 let sayTimer = null;
+// ---- import and export -------------------------------------------------------
+//
+// The only place in the interface that deliberately produces plaintext. It is
+// worth the risk, and the reason is the people running without a server: their
+// vault exists in exactly one browser profile, which is not a thing anyone
+// backs up on purpose. An export is the difference between a lost profile
+// being an inconvenience and being the loss of every password they have.
+//
+// So the wording does not soften it. The file is dangerous, it says so on the
+// button and again inside the file, and the rest is up to the person holding
+// it.
+
+function transferStatus(text, kind = '') {
+  const el = $('s-transfer-status');
+  el.textContent = text;
+  el.className = `settings-note ${kind}`.trim();
+}
+
+/**
+ * Hand the file to the browser.
+ *
+ * An object URL and a synthetic click, rather than browser.downloads — this
+ * page runs in a sidebar as well as a tab, and the download permission is one
+ * more thing to ask for to do something an anchor already does. The URL is
+ * revoked straight after; it points at plaintext and there is no reason for it
+ * to outlive the click.
+ */
+function offerFile(name, text, mime) {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+const stamp = () => new Date().toISOString().slice(0, 10);
+
+function exportVault(kind) {
+  if (!state.vault || state.vault.locked) return;
+  const records = state.vault.list();
+  if (!records.length) {
+    transferStatus('Nothing to export yet.', 'bad');
+    return;
+  }
+
+  if (kind === 'csv') {
+    const logins = records.filter((r) => r.type === LOGIN);
+    if (!logins.length) {
+      transferStatus('No logins to export. Addresses only go out as JSON.', 'bad');
+      return;
+    }
+    offerFile(`bencpass-${stamp()}.csv`, toCsv(records), 'text/csv');
+    const addresses = records.length - logins.length;
+    transferStatus(
+      addresses
+        ? `Exported ${logins.length} login${logins.length === 1 ? '' : 's'}. ${addresses} address${addresses === 1 ? '' : 'es'} left out — CSV has nowhere to put them.`
+        : `Exported ${logins.length} login${logins.length === 1 ? '' : 's'} in plain text.`,
+      'good',
+    );
+    return;
+  }
+
+  offerFile(`bencpass-${stamp()}.json`, toJson(records), 'application/json');
+  transferStatus(`Exported ${records.length} entries in plain text. Mind where it lands.`, 'good');
+}
+
+$('s-export-json').addEventListener('click', () => exportVault('json'));
+$('s-export-csv').addEventListener('click', () => exportVault('csv'));
+
+$('s-import').addEventListener('click', () => $('s-import-file').click());
+
+$('s-import-file').addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  // Cleared straight away so choosing the same file twice still fires a change.
+  e.target.value = '';
+  if (!file) return;
+  if (!state.vault || state.vault.locked) return;
+
+  transferStatus('Reading…');
+  let records;
+  try {
+    records = parseTransfer(await file.text());
+  } catch (err) {
+    // A TransferError already says something a person can act on. Anything else
+    // is ours and gets named as such rather than dressed up as the file's fault.
+    transferStatus(
+      err instanceof TransferError ? err.message : `Could not read that file: ${err?.message ?? err}`,
+      'bad',
+    );
+    return;
+  }
+
+  // Added rather than merged, and never overwriting: a duplicate is a nuisance
+  // somebody can delete, and a silently replaced password is one they cannot
+  // get back. Deciding which of two entries is the better one is not a decision
+  // to make on their behalf at three hundred records a second.
+  let added = 0;
+  try {
+    for (const r of records) {
+      const { type, created, updated, lastUsed, timesUsed, passwordChanged, history, ...fields } = r;
+      await state.vault.add({ ...fields, type });
+      added++;
+    }
+    await persist();
+  } catch (err) {
+    await persist();
+    transferStatus(`Added ${added} before failing: ${err?.message ?? err}`, 'bad');
+    render();
+    return;
+  }
+
+  render();
+  transferStatus(`Added ${added} ${added === 1 ? 'entry' : 'entries'}. Nothing was replaced.`, 'good');
+});
+
 function say(msg) {
   $('status').textContent = msg;
   clearTimeout(sayTimer);
