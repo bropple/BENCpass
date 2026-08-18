@@ -212,15 +212,6 @@ const askBackground = async (type, extra = {}) => {
 const bioName = () =>
   bio.os === 'mac' ? 'Touch ID' : bio.os === 'win' ? 'Windows Hello' : 'your security key';
 
-/**
- * Does enrolling here cost two prompts rather than one?
- *
- * Only where the browser will not hand back the PRF output from create() and
- * it has to be read back with a second call. That is the Mac today; Windows
- * Hello gets it at creation, and an unknown platform is not promised a second
- * prompt it may never raise.
- */
-const twicePrompted = () => bio.os === 'mac';
 
 // Raised once when the gate appears. A prompt that returns the instant it is
 // dismissed cannot be dismissed.
@@ -333,17 +324,17 @@ function renderBioSetting() {
 
   if (bio.available) {
     // "Twice" is a promise, not an apology: a second prompt nobody warned you
-    // about reads as the first one having failed. It is said only where it is
-    // true, though. On the Mac the second fingerprint is unavoidable — Firefox
-    // does not return PRF output from create() there, so the secret has to be
-    // read back with a second prompt (measured; see enrol() in
-    // ext/webauthn.js). Firefox does pass it back for Windows Hello, so
-    // promising a second prompt there would be its own small lie.
+    // about reads as the first one having failed.
+    //
+    // Said unconditionally, because it was measured on both platforms that have
+    // one — Touch ID and Windows Hello each ask twice. Firefox does not hand
+    // back the PRF output from create() on either, so the secret has to be read
+    // back with a second call; see enrol() in ext/webauthn.js. This was briefly
+    // conditional on the Mac, on the strength of a release note saying Windows
+    // got create-time PRF in 147. The machine says otherwise.
     $('s-bio-note').textContent = bio.enrolled
       ? `On for this machine. Your master password still works, and still opens it anywhere else.`
-      : `Available on this machine. You will be asked for your master password once, and for ${name}${
-          twicePrompted() ? ' twice — once to create the key, once to read it back' : ' once'
-        }.`;
+      : `Available on this machine. You will be asked for your master password once, and for ${name} twice — once to create the key, once to read it back.`;
     return;
   }
 
@@ -391,9 +382,7 @@ $('s-bio-form').addEventListener('submit', async (e) => {
   const password = $('s-bio-pw').value;
   if (!password) return;
 
-  $('s-bio-error').textContent = twicePrompted()
-    ? `Asking for ${bioName()} — twice, the second to read the new key back…`
-    : `Asking for ${bioName()}…`;
+  $('s-bio-error').textContent = `Asking for ${bioName()} — twice, the second to read the new key back…`;
   let enrolled;
   try {
     // Here rather than in the background, because WebAuthn needs a document and

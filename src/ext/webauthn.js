@@ -132,14 +132,14 @@ export async function enrol({ rpId = RP_ID, name = 'BENCpass' } = {}) {
       // prompt rather than two; the rest ignore it and the fallback below asks
       // again. Either is correct — this only saves a fingerprint where it can.
       //
-      // On the Mac it cannot, yet: enrolment there is two Touch ID prompts
-      // (measured, 2026-08), so Firefox is not passing PRF output back from
-      // create() on macOS even though iCloud Keychain itself can evaluate at
-      // creation (CTAP 2.2) and Firefox grew exactly this for Windows Hello in
-      // 147/148. Left in place for the build where the two meet. Meanwhile the
-      // enrolment form says "twice" out loud — see ui/manager.js — because the
-      // honest fix for an unavoidable second prompt is an expected second
-      // prompt.
+      // Nowhere yet, on the evidence. Enrolment is two prompts on macOS and two
+      // on Windows Hello (both measured, 2026-08), so Firefox is not passing
+      // PRF output back from create() on either — whatever the authenticators
+      // can do, and whatever the release notes say about Windows getting this
+      // in 147. Left in place for the build where they meet; it costs nothing
+      // to ask. Meanwhile the enrolment form says "twice" out loud — see
+      // ui/manager.js — because the honest fix for an unavoidable second prompt
+      // is an expected second prompt.
       extensions: { prf: { eval: { first: SALT } } },
       timeout: 120000,
     },
