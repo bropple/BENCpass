@@ -42,6 +42,44 @@ one browser profile, and a profile is not a thing anyone backs up on purpose.
 | ✅ Import and export — BENCpass JSON, Firefox, Chrome, Bitwarden, KeePass | `src/core/transfer.js` |
 | ⬜ Recovery kit | — |
 
+Reviewing this, or just want the short version of how it holds together?
+[`REVIEWERS.md`](REVIEWERS.md) answers the questions the source raises — what
+leaves the machine, why each permission is asked for, and how to reproduce every
+generated file in the package.
+
+## What leaves your machine
+
+Nothing, unless you set up a server — and then only ciphertext, to the address
+you typed in.
+
+The manifest says so in the form Firefox checks:
+
+```json
+"data_collection_permissions": {
+  "required": ["none"],
+  "optional": ["authenticationInfo", "personallyIdentifyingInfo"]
+}
+```
+
+**Required is `none`** because BENCpass works completely with no server
+configured, and in that state it makes no network request at all.
+
+**Optional names what sync sends** when you do configure one:
+`authenticationInfo` for the passwords and `personallyIdentifyingInfo` for the
+names, addresses, phone numbers and email in address records.
+
+Both are declared even though the server only ever receives ciphertext and holds
+no key. Mozilla's rule is about the boundary, not the destination or the
+encryption — *"any data collected, used, transferred, shared, or handled outside
+the add-on or the local browser"* — and a server you run yourself is still
+outside the browser. Declaring less because it is encrypted, or because the
+server is yours, would be reading the rule for what it lets us say rather than
+for what it asks.
+
+The server learns what any storage host learns: how many records exist and when
+each one changes. That is stated in ARCHITECTURE.md §3 rather than left to be
+discovered.
+
 ## Layout
 
 ```

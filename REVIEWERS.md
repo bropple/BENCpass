@@ -1,0 +1,245 @@
+# Notes for reviewers
+
+BENCpass is a password manager. The vault is encrypted on the client and the
+add-on has no backend of its own: there is no BENCpass service, no account, and
+no address the extension talks to that the user did not type in themselves.
+
+This file answers, in advance, the questions the source raises. If something
+here is wrong or insufficient, it is an oversight rather than an evasion; the
+fastest way to reach a human is an issue on the repository above, or the
+developer account this was submitted from.
+
+**Submission:** unlisted / self-distribution.
+**Source:** https://github.com/bropple/BENCpass
+
+---
+
+## What leaves the browser
+
+With no server configured — the default, and a fully working state — **nothing**.
+The extension makes no network request at all. There is no telemetry, no error
+reporting, no update ping, no analytics.
+
+If the user configures a sync server, the extension sends that server encrypted
+records. The declaration is:
+
+```json
+"data_collection_permissions": {
+  "required": ["none"],
+  "optional": ["authenticationInfo", "personallyIdentifyingInfo"]
+}
+```
+
+`required: none` because the add-on is complete and useful with no server, and
+in that state transmits nothing.
+
+`optional` names what sync carries when the user sets one up: passwords
+(`authenticationInfo`) and the names, addresses, phone numbers and email in
+address records (`personallyIdentifyingInfo`).
+
+Both are declared **even though the server receives only ciphertext and never
+holds a key**. The policy is about the boundary rather than the destination —
+"any data collected, used, transferred, shared, or handled outside the add-on or
+the local browser" — and a server the user runs is still outside the browser.
+Declaring less on the grounds that it is encrypted, or that the server belongs
+to the user, would be reading the rule for what it permits rather than for what
+it asks.
+
+The endpoint is user-entered, stored in `browser.storage.local`, and is the only
+host the extension ever contacts. Every network call in the package is in
+`src/core/sync.js` and goes to that address; `src/ui/manager.js` additionally
+calls `<endpoint>/v1/health` when the user presses **Test** beside the field.
+
+---
+
+## Permissions
+
+| Permission | Why |
+|---|---|
+| `storage` | the encrypted vault and settings, in `storage.local` |
+| `tabs` | to resolve which page a fill is for, and to close the manager tab after unlocking |
+| `idle` | auto-lock on system idle, alongside the timer |
+| `notifications` | the fallback "save this password?" prompt when the in-page one cannot be shown |
+| `menus` | the right-click "generate a password" item |
+| `<all_urls>` | a password manager has to offer credentials on the sites they belong to, and those sites are not knowable in advance |
+
+`<all_urls>` is the one worth justifying. The content script classifies form
+fields and draws an anchor; it never receives a stored password until the user
+picks an entry from a menu rendered in a cross-origin extension frame the page
+cannot read or click into. Origin matching is registrable-domain based against a
+vendored Public Suffix List (`src/core/match.js`, `src/vendor/psl.js`), so a
+credential for `example.com` is never offered to `evil-example.com`,
+`example.com.evil.com`, or a punycode homograph.
+
+`tools/check-permissions.mjs` fails CI if any requested permission has no call
+site, which is how `nativeMessaging` was caught after the component that needed
+it was removed.
+
+---
+
+## Generated and minified files, and how to reproduce them
+
+Three files in the package are not hand-written. Each has a script in the
+repository that regenerates it, and CI fails if the committed copy drifts.
+
+### `src/vendor/argon2.js` — Argon2id (minified)
+
+Verbatim `hash-wasm@4.12.0`'s `dist/argon2.umd.min.js` with one export appended.
+The WASM is inlined as base64 by upstream, not by us.
+
+```sh
+npm ci                 # hash-wasm is integrity-pinned in package-lock.json
+tools/vendor.sh        # writes src/vendor/argon2.js
+git diff --exit-code -- src/vendor/argon2.js   # byte-identical
+```
+
+The last two lines run in `.github/workflows/security.yml`, so a tampered copy
+fails the build. The appended export is the whole modification and is visible at
+the end of the file; the UMD wrapper finds no `exports` and no `define` inside an
+ES module, so it takes its global branch.
+
+It is vendored rather than imported because an extension cannot resolve a bare
+specifier and cannot use an import map — that needs an inline
+`<script type="importmap">`, which the extension CSP forbids.
+
+### `content_security_policy` and `'wasm-unsafe-eval'`
+
+```
+default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self';
+img-src 'self' data:; font-src 'self'; connect-src *; frame-src 'self'
+```
+
+`default-src 'none'` is the base: nothing is permitted that is not named
+afterwards.
+
+`'wasm-unsafe-eval'` is required to instantiate the Argon2 WASM module and
+nothing else. It does not permit `eval`, `new Function`, or inline script —
+`script-src 'self'` still governs JavaScript. There is no `unsafe-inline` and no
+`unsafe-eval` anywhere in the package.
+
+`connect-src *` is the one open directive, and it is open because the sync
+endpoint is an address the user types in. No other directive allows a remote
+origin: scripts, styles, fonts and frames are all `'self'`, and images are
+`'self'` plus `data:` for the generated icons.
+
+Argon2id is the key derivation function for the master password — 128 MiB, t=3.
+A JavaScript implementation at that memory cost is not viable.
+
+### `src/vendor/psl.js` — Public Suffix List
+
+Generated from publicsuffix.org, with the rule count and retrieval date recorded
+in its header.
+
+```sh
+tools/vendor-psl.sh
+```
+
+Used for origin matching, so that `foo.github.io` and `bar.github.io` are treated
+as different sites in both directions.
+
+### The country table in `src/core/address.js`
+
+Generated from the ICU data in Node, for the address-form country dropdown.
+
+```sh
+node tools/gen-countries.mjs           # regenerate
+node tools/gen-countries.mjs --check   # verify, as CI does
+```
+
+---
+
+## No remote code
+
+There is no `eval`, `new Function`, `document.write`, `innerHTML`,
+`insertAdjacentHTML`, or `Range.createContextualFragment` anywhere in the
+package — every one of those greps clean. All rendering of record data goes
+through `textContent` or `createTextNode`, including data arriving from the
+import feature, so a record whose title is `<img onerror=...>` renders inert.
+
+No script is fetched at runtime. Everything executed ships in the package.
+
+---
+
+## `web_accessible_resources`
+
+```json
+["ext/overlay.html", "ext/toast.html"]
+```
+
+These are the credential menu and the "save this password?" prompt. They are
+extension pages framed into web pages deliberately, so that the page cannot read
+their contents or synthesise a click inside them — the alternative, drawing them
+into the page's own DOM, would put usernames within reach of the site.
+
+A hostile page can frame them. What it cannot do is act through them: every
+privileged message they send carries a 128-bit session or notice id, generated
+by the background page and delivered to the frame by `postMessage` to a
+cross-origin `contentWindow`. The id is never placed in a URL, `src`, or DOM
+attribute. The background validates it against a session it created, and
+re-checks the target origin from `sender` — never from the message — before any
+value is filled.
+
+The master password is deliberately never accepted in an in-page frame. A site
+can draw a convincing imitation of that menu, so the real one sends the user to
+the sidebar or the manager instead, which a page cannot draw over.
+
+---
+
+## Building the package from source
+
+```sh
+git clone https://github.com/bropple/BENCpass
+cd BENCpass
+npm ci
+npx web-ext build --source-dir=src --artifacts-dir=build/ext
+```
+
+`src/` is the extension exactly as submitted; nothing is transformed, bundled or
+minified at build time. The tests are `npm test` (Node, no browser) and
+`cd server && go test ./...`.
+
+---
+
+## The server is not part of this submission
+
+`server/` is a small Go program the user may optionally run on their own machine
+to sync between their own devices. It is not bundled, not downloaded by the
+extension, and not required. It stores ciphertext and holds no key, so it cannot
+read a record even in principle.
+
+It is in the repository because the sync protocol has two ends and both should be
+readable. Its wire format is documented in `ARCHITECTURE.md` §4.
+
+---
+
+## Things a reviewer may notice, answered
+
+**MV2.** The unlocked vault key lives in a persistent background page and is a
+non-extractable `CryptoKey`. Under MV3 the event page is terminated at the
+browser's discretion and the key would evaporate mid-session. The migration path
+is noted in `ARCHITECTURE.md` §6.
+
+**`hosts/`.** A native messaging host that was built, measured, and abandoned when
+WebAuthn PRF replaced it. It is **not shipped** — it is outside `src/`, is not in
+the package, and the `nativeMessaging` permission has been removed, so the
+extension cannot talk to a host even if one were installed. It is kept as the
+record of a dead end, and `README.md` says so.
+
+**A `.zip` in GitHub releases is unsigned.** Only the signed `.xpi` from this
+submission is intended for installation; the CI artefact exists so the build is
+reproducible and testable.
+
+---
+
+## Trying it
+
+No account or server is needed.
+
+1. Install and open the manager (toolbar icon → **Manage**, or the sidebar).
+2. Create a vault with any master password.
+3. Visit any login form. The field gets a small anchor; clicking it offers a
+   generated password, and submitting the form offers to save it.
+4. **Settings → Your data → Export** writes the vault out as JSON or CSV, which
+   also shows exactly what is stored.
+
+Sync, biometric unlock and the server are all optional and off until configured.
