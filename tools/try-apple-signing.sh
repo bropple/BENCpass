@@ -112,82 +112,87 @@ if [ -z "$team" ]; then
 fi
 echo "team:        $team"
 
-# ---- sign with it ------------------------------------------------------------
-
-cat > "$work/entitlements.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-  <key>com.apple.application-identifier</key>
-  <string>$team.net.ropple.bencpass</string>
-  <key>keychain-access-groups</key>
-  <array>
-    <string>$team.net.ropple.bencpass</string>
-  </array>
-</dict>
-</plist>
-EOF
+# ---- try each entitlement, separately ---------------------------------------
+#
+# Not one bundle. `com.apple.application-identifier` is a *restricted*
+# entitlement — it has to be backed by a provisioning profile, and AMFI kills
+# anything claiming it without one. Bundling it with the entitlement actually
+# wanted meant a rejection could not be attributed to either, and the first run
+# of this script did exactly that.
 
 cp "$binary" "$work/backup"
-echo
-echo "signing..."
-if ! codesign --force --sign "$hash" --entitlements "$work/entitlements.plist" \
-     --options runtime --timestamp=none "$binary" 2>"$work/err"; then
-  echo "codesign refused:" >&2
-  cat "$work/err" >&2
+restore() {
   cp "$work/backup" "$binary"
-  exit 1
-fi
-
-# ---- ask it ------------------------------------------------------------------
+  codesign --force --sign - "$binary" >/dev/null 2>&1 || true
+}
 
 msg='{"v":1,"op":"probe"}'
 len=${#msg}
 prefix=$(printf '\\%03o\\%03o\\%03o\\%03o' \
   $((len % 256)) $(((len / 256) % 256)) $(((len / 65536) % 256)) $(((len / 16777216) % 256)))
 
-echo "asking the host what it can do now..."
-echo
-reply=$(printf "$prefix%s" "$msg" | "$binary" 2>/dev/null | tail -c +5 || true)
+ask() { printf "$prefix%s" "$msg" | "$binary" 2>/dev/null | tail -c +5 || true; }
 
-if [ -z "$reply" ]; then
-  cat <<EOF
-The host would not run at all — the kernel refused the entitlement, exactly as
-it does for an ad-hoc signature.
+# name|entitlements-body. An empty body means sign with the certificate and no
+# entitlements at all, which separates "the certificate is fine" from "the
+# entitlement is refused".
+variants="none|
+group-with-team|<key>keychain-access-groups</key><array><string>$team.net.ropple.bencpass</string></array>
+group-team-only|<key>keychain-access-groups</key><array><string>$team</string></array>
+group-plus-appid|<key>keychain-access-groups</key><array><string>$team.net.ropple.bencpass</string></array><key>com.apple.application-identifier</key><string>$team.net.ropple.bencpass</string>"
 
-That is the answer: an Apple Development certificate is not enough either, and
-hardware-backed biometric unlock is out of reach without a paid Developer ID.
-The ad-hoc signature has been put back; nothing has changed.
-EOF
+winner=""
+echo "$variants" | while IFS='|' read -r vname body; do
+  [ -n "$vname" ] || continue
+
   cp "$work/backup" "$binary"
-  codesign --force --sign - "$binary" >/dev/null 2>&1 || true
-  exit 0
-fi
+  if [ -z "$body" ]; then
+    codesign --force --sign "$hash" "$binary" >/dev/null 2>&1 || true
+  else
+    cat > "$work/e.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>$body</dict>
+</plist>
+PLIST
+    codesign --force --sign "$hash" --entitlements "$work/e.plist" "$binary" \
+      >/dev/null 2>&1 || { echo "  $vname: codesign refused it"; continue; }
+  fi
 
-echo "$reply" | sed -e 's/,"/,\n  "/g' -e 's/^{/{\n  /' -e 's/}$/\n}/'
+  reply=$(ask)
+  if [ -z "$reply" ]; then
+    echo "  $vname: killed on launch"
+    continue
+  fi
+
+  case $reply in
+    *'-34018'*) echo "  $vname: runs, keychain still refuses (-34018)" ;;
+    *) echo "  $vname: RUNS, and no -34018 — this is the one"
+       echo "$vname" > "$work/winner"
+       echo "$reply" > "$work/winning-reply" ;;
+  esac
+done
+
 echo
+if [ -f "$work/winner" ]; then
+  echo "A signature that works: $(cat "$work/winner")"
+  echo
+  sed -e 's/,"/,\n  "/g' -e 's/^{/{\n  /' -e 's/}$/\n}/' "$work/winning-reply"
+  echo
+  echo "Send me this and I will wire it into hosts/install.sh."
+  echo "The host has been left signed with the last variant tried; rerun"
+  echo "hosts/install.sh to get back to a known state."
+else
+  cat <<'EOF'
+None of them ran with the entitlement, and signing with the certificate alone
+changes nothing about the keychain.
 
-case $reply in
-  *'"ok":true'*'-34018'*)
-    echo "It runs, but the keychain still refuses: -34018 is still there."
-    echo "Putting the ad-hoc signature back."
-    cp "$work/backup" "$binary"
-    codesign --force --sign - "$binary" >/dev/null 2>&1 || true
-    ;;
-  *'"ok":true'*)
-    cat <<EOF
-It runs, and nothing above says -34018.
+That points at a provisioning profile rather than at the certificate tier — the
+entitlement has to be authorised by a profile embedded in the binary, and a
+paid account is not the only way to get one. Xcode can generate a development
+profile for a free account.
 
-If a "permanent" Secure Enclave variant reports ok, this works and BENCpass can
-have the design it was meant to have. Send me the output and I will wire this
-signature into hosts/install.sh so every rebuild uses it.
-
-The signature has been left in place.
+So: do not pay for this yet. The next thing to try is a profile, not a receipt.
 EOF
-    ;;
-  *)
-    echo "Unexpected reply; ad-hoc signature restored."
-    cp "$work/backup" "$binary"
-    codesign --force --sign - "$binary" >/dev/null 2>&1 || true
-    ;;
-esac
+  restore
+fi
