@@ -15,7 +15,7 @@ import {
   addressesFor,
   hostOf,
   isPrivateHost,
-  belongsOnlyTo,
+  captureTarget,
 } from '../core/match.js';
 import { classifyGroups } from '../core/fields.js';
 import {
@@ -777,8 +777,11 @@ async function handleCapture(msg, sender) {
   const password = asString(msg.password, 1024);
   if (!password) return { ok: false };
 
-  const forHost = matchesFor(vault.list(), origin.frameHost);
-  const candidate = forHost.find((r) => (r.username ?? '') === username);
+  const { forHost, candidate, overwritable } = captureTarget(
+    vault.list(),
+    origin.frameHost,
+    username,
+  );
 
   // Updating in place is only offered for an entry that belongs to this site
   // and no other.
@@ -794,7 +797,7 @@ async function handleCapture(msg, sender) {
   // A wider entry is not refused, only not silently overwritten: the password
   // is offered as a new entry scoped to this site, which costs a duplicate to
   // tidy and cannot cost the password.
-  const existing = candidate && belongsOnlyTo(candidate, origin.frameHost) ? candidate : null;
+  const existing = overwritable;
 
   // Nothing to learn if this host already has this exact password on file. The
   // username is only required to match when there was one to see: the second

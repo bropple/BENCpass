@@ -325,7 +325,7 @@ and the server never knew about it.
 |---|---|
 | macOS | Touch ID. The credential is a passkey held by iCloud Keychain, so it is protected by your fingerprint on each device but syncs across the Apple devices signed into that account. Worth knowing rather than assuming: the sync boundary is the iCloud account, not the one Mac. The secret is useless without the vault file it wraps, which is yours |
 | Windows | Hello, via the TPM. Machine-bound; it does not sync |
-| Linux | a plugged-in FIDO2 security key. There is no built-in equivalent — the desktop keyrings unlock with your login password, which would make this a way into the vault *without* a password rather than a stronger one |
+| Linux | nothing, today. `enrol()` asks for a *platform* authenticator, so a plugged-in FIDO2 key — which is a roaming one — is not offered, and there is no built-in equivalent to ask for: the desktop keyrings unlock with your login password, which would make this a way into the vault *without* a password rather than a stronger one. Settings says so rather than offering a switch that fails |
 
 Whether a given machine can actually do it is a fact about that machine, so
 there is a probe rather than a promise: `tools/webauthn-probe/README.md`.

@@ -28,21 +28,11 @@ import (
 
 // How long a nonce is remembered.
 //
-// Twice the clock window, and the factor of two is the whole point. A request
-// is accepted while |now - ts| <= maxSkew, which is a *ten* minute span: five
-// minutes either side of the timestamp it carries. But a nonce is recorded when
-// it arrives, not when it claims to have been sent — so remembering it for only
-// maxSkew leaves a gap whenever the client's clock runs ahead.
-//
-// Concretely, with a client δ ahead: the request arrives at T, is remembered
-// until T+maxSkew, and stays timestamp-valid until T+δ+maxSkew. Between those
-// two the nonce has been forgotten and the request is still good, which is the
-// replay this file exists to stop — reopened by exactly the unsynchronised
-// clock maxSkew was widened to tolerate in the first place.
-//
-// Retaining for 2*maxSkew covers the entire validity window from either
-// direction, and costs one more sweep interval of entries.
-const nonceLifetime = 2 * maxSkew
+// A request is accepted while its timestamp sits in [now-maxSkew, now+maxFuture]
+// — equivalently, while now sits in [ts-maxFuture, ts+maxSkew]. That is a window
+// of maxSkew+maxFuture wide, and a nonce has to outlive it or the request it
+// spent becomes usable again at the end.
+const nonceLifetime = maxSkew + maxFuture
 
 // seen remembers which nonces have been used, per device, until they age out.
 //
@@ -57,33 +47,20 @@ const nonceLifetime = 2 * maxSkew
 // endpoint this file exists for — that is a fresh enrolment code, and each
 // code is a device key.
 //
-// Hence `booted`. Nothing signed before this process started is accepted,
-// which covers precisely the requests the empty map has forgotten, and needs
-// no disk. What it costs: a client whose clock runs *behind* the server has
-// its requests refused until the difference elapses after a restart. Bounded
-// by maxSkew, only after a restart, and the client's next attempt carries a
-// fresh timestamp and succeeds — an availability cost measured in minutes,
-// against a replay that mints vault peers.
+// The restart is handled where the damage was, rather than here: minting is
+// idempotent on the request that asked for it, so a replay after a restart
+// returns the code the caller already had instead of a new one. See
+// NewCodeFor in store.go. A time floor was tried here first and refused honest
+// clients for thirty seconds after every restart, including somebody starting
+// the server and enrolling their second machine straight away.
 type seen struct {
-	mu     sync.Mutex
-	when   map[string]time.Time
-	swept  time.Time
-	booted time.Time
+	mu    sync.Mutex
+	when  map[string]time.Time
+	swept time.Time
 }
 
 func newSeen() *seen {
-	// Truncated to milliseconds because that is the resolution a timestamp
-	// arrives in. Kept at full precision, a request sent microseconds after
-	// this process started rounds down to just before it and is refused as
-	// pre-boot — which every test noticed immediately, and which on a real
-	// server would have refused the first request after every restart.
-	return &seen{when: map[string]time.Time{}, booted: time.Now().Truncate(time.Millisecond)}
-}
-
-// signedBeforeBoot reports a request older than anything this process can
-// possibly have in `when`, and therefore one it cannot prove is not a replay.
-func (s *seen) signedBeforeBoot(ts time.Time) bool {
-	return ts.Before(s.booted)
+	return &seen{when: map[string]time.Time{}}
 }
 
 // use records a nonce and reports whether it was fresh.

@@ -16,7 +16,7 @@ has only been taken on one machine, it says which.
 
 | | |
 |---|---|
-| Biometric unlock | **Native messaging host from v1**, not deferred |
+| Biometric unlock | **WebAuthn PRF, no native component.** A host was built first; see §5 |
 | Primary accent | **P. Gon blue `#3d7dbf`** — a deliberate departure from the style guide, see §7 |
 | Sync server | **Go**, single static binary |
 | Transport | **Tailscale primary**, LAN HTTP fallback |
@@ -35,20 +35,21 @@ has only been taken on one machine, it says which.
  │   ├ vault state (plaintext,         └ fill / capture                │
  │   │   memory only, never on disk)                                   │
  │   ├ sync engine                   sidebar_action ── browse / search │
- │   └ native host client            popup ────────── fast fill        │
+ │   └ WebAuthn PRF                  popup ────────── fast fill        │
  │                                   options ──────── full manager     │
  └──────────┬───────────────────────────────────────┬──────────────────┘
-            │ stdio (JSON)                          │ HTTPS
+            │ navigator.credentials                 │ HTTPS
    ┌────────▼──────────┐                  ┌─────────▼──────────┐
-   │ bencpass-host     │                  │ bencpass-server    │
-   │ per-OS binary     │                  │ Go, static         │
-   │ wraps/unwraps the │                  │ stores ciphertext  │
-   │ vault key behind  │                  │ CAS on a sequence  │
-   │ biometrics        │                  │ snapshots history  │
+   │ the browser's own │                  │ bencpass-server    │
+   │ authenticator     │                  │ Go, static         │
+   │ Touch ID, Hello,  │                  │ stores ciphertext  │
+   │ a security key —  │                  │ CAS on a sequence  │
+   │ nothing of ours   │                  │ snapshots history  │
    └───────────────────┘                  └────────────────────┘
 ```
 
-Three deliverables, not one: the extension, the host, the server.
+Two deliverables: the extension and the server. The fingerprint needs no
+component of ours at all — see §5.
 
 **Local-first is a hard requirement.** Every client keeps a full encrypted
 replica in `storage.local`. The vault is fully usable with the server off, on a
@@ -62,7 +63,7 @@ unusable because a machine in a cupboard is off, the design has failed.
 ```
   master password ──Argon2id──▶ master key ─┐
                                             ├─unwrap─▶ vault key ──▶ records
-  biometric secret ──(native host)──────────┘         (AES-256-GCM)
+  biometric secret ──(WebAuthn PRF)─────────┘         (AES-256-GCM)
 ```
 
 Two independent wrappings of the *same* vault key. This is the whole reason for
@@ -390,52 +391,62 @@ plus the anti-rollback rule covers what TLS would have on that path.
 
 ---
 
-## 5. Native host
+## 5. Biometric unlock
 
-One JSON-over-stdio protocol, three platform implementations. The host is a
-**key-wrapping oracle and nothing else** — it never sees a password, never talks
-to the network, and holds no vault state.
+**No component of ours.** The browser is asked for a key directly, through
+WebAuthn's PRF extension: `navigator.credentials.create()` enrols a credential
+on the platform authenticator, and `get()` evaluates PRF over a fixed salt to
+return the same 32 bytes every time. Those bytes are the device secret. They
+are never stored — they are re-derived from the hardware on each unlock — and
+they wrap the vault key exactly as anything else would.
 
-```jsonc
-→ { "op": "wrap",   "key": "<base64 vault key>" }
-← { "ok": true, "blob": "<base64>" }
-→ { "op": "unwrap", "blob": "<base64>" }      // prompts for biometrics
-← { "ok": true, "key": "<base64>" } | { "ok": false, "err": "cancelled" }
-→ { "op": "caps" }
-← { "ok": true, "biometric": true, "kind": "touchid" }
+```
+enrol   create({ rp: bencpass.invalid, prf: { eval: { first: SALT } } })
+        → credentialId, and on some platforms the secret in the same breath
+unlock  get({ allowCredentials: [credentialId], prf: { eval: { first: SALT } } })
+        → the same 32 bytes, gated on user verification
 ```
 
-| OS | Mechanism | Language |
-|---|---|---|
-| macOS | Keychain item with `kSecAccessControlBiometryCurrentSet`, gated by LocalAuthentication | Swift, or Go + cgo |
-| Windows | `KeyCredentialManager` — a Hello-gated key signs a fixed challenge; RSA PKCS#1 v1.5 is deterministic, so the signature is stable key material | C#/WinRT or C++/WinRT |
-| Linux | **No biometric equivalent exists.** libsecret/kwallet, or decline and fall back to the master password | Go |
+Three constants are fixed for ever, and each for its own reason. The **salt**,
+because changing it derives a different secret and every enrolled machine stops
+opening its own vault. The **RP ID** (`bencpass.invalid`, an RFC 2606 reserved
+name), because a credential created under one RP ID cannot be found under
+another — and because a `moz-extension://` origin has no registrable domain, so
+it has to be stated rather than inferred. The **AAD label**, which binds this
+wrapping so it cannot be passed off as the password one.
 
-`kSecAccessControlBiometryCurrentSet` — not `...BiometryAny` — so enrolling a
-new fingerprint invalidates the wrap and forces a master-password re-unlock.
-That is the correct behaviour: someone who can add a finger should not inherit
-the vault.
+What it costs: nothing. No native binary, no entitlement, no provisioning
+profile, no annual renewal, no developer account, no hardware to buy.
 
-**Linux is the development machine and gets no biometrics.** Do not let that
-turn into an untested master-password path — it is the path you will personally
-use every day, and it is also the fallback on every platform when a sensor is
-unavailable, wet, or the user cancels.
+| | |
+|---|---|
+| macOS | Touch ID. iCloud Keychain holds it as a passkey, so it is gated by a fingerprint per device and syncs across that Apple account — a boundary worth stating rather than assuming |
+| Windows | Hello, via the TPM. Machine-bound, does not sync |
+| Linux | nothing today: `enrol()` asks for a platform authenticator, and a plugged-in FIDO2 key is a roaming one. The desktop keyrings unlock with the login password, which would be a way into the vault *without* a password rather than a stronger one |
 
-### Installation
+Enrolment costs two prompts on both platforms that have one. Firefox does not
+return the PRF output from `create()`, so the secret is read back with a second
+`get()`. The request at creation is left in place for the build where that
+changes.
 
-Firefox native messaging needs a manifest naming the extension ID, at a
-per-OS path, with a registry key on Windows pointing at it. Consequences:
+### The native host that was built first
 
-1. **Fix the extension ID before writing any other code** —
-   `browser_specific_settings.gecko.id`, e.g. `bencpass@ropple.net`.
-2. The host installer writes that manifest. Zen may use a different profile
-   root than Firefox — **verify the path on Zen specifically** rather than
-   assuming Firefox's.
-3. Packaging follows `style/benco-build-and-packaging.md`: static linking,
-   the self-containment assertion per platform, ad-hoc signing on macOS after
-   assembly.
+`hosts/` holds a native messaging host — one JSON-over-stdio protocol and a
+macOS implementation — that is **not used, not installed, and cannot be
+reached**: the `nativeMessaging` permission has been removed from the manifest.
 
----
+It was the original design, and the reason it is kept is that the negative
+result cost a day to establish and is not written down anywhere else. A macOS
+keychain item carrying a biometric access control needs a
+`keychain-access-groups` entitlement that only Apple authorises; a self-signed
+certificate embeds it happily and the kernel then refuses to run the binary.
+Measured three ways on a runner rather than argued about — the table is in
+`hosts/macos/README.md`, and the protocol it would have spoken is in
+`hosts/PROTOCOL.md`.
+
+Read that directory as a record of a route that closed, not as something to
+install.
+
 
 ## 6. Extension
 
@@ -617,7 +628,8 @@ the first milestone rather than the fourth.
 4. **Autofill + capture.** Content scripts, PSL matching, the in-page overlay
    iframe, the long tail. Address filling rides on the same machinery with a
    different field taxonomy, so it lands here rather than earning its own step.
-5. **Native host.** macOS and Windows biometrics, Linux fallback.
+5. **Biometric unlock.** WebAuthn PRF; no native component. (A host was built
+   first and abandoned — the measurements are kept in `hosts/`.)
 6. **Import/export, recovery kit, replacing the built-in manager.**
 
 Export lands in step 2, not step 6 — the vault should never be a place data can

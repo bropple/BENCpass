@@ -149,6 +149,30 @@ export function belongsOnlyTo(record, host) {
   });
 }
 
+/**
+ * Which stored login a captured password belongs to, and whether it may be
+ * written into it.
+ *
+ * Two answers rather than one, because the questions differ. `candidate` is
+ * the entry this host and username already have, and is what decides whether
+ * there is anything new to learn. `overwritable` is the entry that may be
+ * *changed in place*, which is narrower: an entry naming somewhere other than
+ * this site would carry the new password there too.
+ *
+ * Kept here rather than in the background page so it can be tested. The
+ * background page cannot be imported by a test — it reaches for `browser` at
+ * load — and this is the decision the whole capture path turns on.
+ */
+export function captureTarget(records, host, username) {
+  const forHost = matchesFor(records, host);
+  const candidate = forHost.find((r) => (r.username ?? '') === username) ?? null;
+  return {
+    forHost,
+    candidate,
+    overwritable: candidate && belongsOnlyTo(candidate, host) ? candidate : null,
+  };
+}
+
 export const EXACT = 3;
 export const SUBDOMAIN = 2;
 export const SITE = 1;

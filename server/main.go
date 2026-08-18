@@ -160,7 +160,9 @@ func (s *server) enrol(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) mintCode(w http.ResponseWriter, r *http.Request, _ []byte) {
-	code, err := s.store.NewCode(30 * time.Minute)
+	// Keyed on the request that asked, so a replay of that request returns the
+	// same code rather than another one. See NewCodeFor.
+	code, err := s.store.NewCodeFor(r.Header.Get(hdrDevice), r.Header.Get(hdrNonce), 30*time.Minute)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "cannot mint code")
 		return

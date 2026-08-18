@@ -60,7 +60,7 @@ export class Vault {
       kdf: { ...kdf, salt: toB64(salt) },
       wraps: {
         password: await wrapVaultKey(vaultKeyBytes, masterKey, 'password'),
-        // Opaque to us: whatever the native host produced. Its format is the
+        // Opaque to us: whatever derived the device secret. Its format is the
         // host's business, and deliberately not this module's.
         biometric: null,
       },
@@ -102,7 +102,7 @@ export class Vault {
 
   /**
    * Unlock from a vault key obtained some other way — in practice, handed back
-   * by the native host after the OS keystore released it behind a fingerprint.
+   * by WebAuthn PRF, which the authenticator releases behind a fingerprint.
    * The two unlock paths converge here, which is the point of the hierarchy.
    */
   async unlockWithVaultKey(vaultKeyBytes) {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   belongsOnlyTo,
+  captureTarget,
   isPrivateHost,
   publicSuffix,
   registrableDomain,
@@ -231,4 +232,57 @@ test('an unparseable address does not count against an entry', () => {
   // makes an entry dangerous — and treating it as such would refuse updates to
   // entries carrying a stray note in the url field.
   assert.equal(belongsOnlyTo({ urls: ['not a url', 'https://bank.example'] }, 'bank.example'), true);
+});
+
+test('a planted entry naming two sites is never the one a capture overwrites', () => {
+  // The attack, end to end at the layer that decides it. The victim imports a
+  // file; one entry names their real bank and the attacker's domain, with a
+  // guessed username. They then log in at the bank for real.
+  const planted = {
+    id: 'planted',
+    type: 'login',
+    title: 'Bank',
+    username: 'ben',
+    password: 'whatever-the-attacker-put-here',
+    urls: ['https://bank.example', 'https://evil.attacker.example'],
+  };
+
+  const { candidate, overwritable } = captureTarget([planted], 'bank.example', 'ben');
+
+  // It is still recognised — it does match this host, and pretending otherwise
+  // would mean offering to save a duplicate on every login.
+  assert.equal(candidate?.id, 'planted');
+
+  // But it must never be the entry the real password is written into, because
+  // that entry also fills on the attacker's domain.
+  assert.equal(overwritable, null, 'the real password would have been written into the planted entry');
+});
+
+test('an ordinary entry for this site is still updated in place', () => {
+  // The other half: narrowing this must not turn every password change into a
+  // duplicate.
+  const mine = {
+    id: 'mine',
+    type: 'login',
+    username: 'ben',
+    password: 'old',
+    urls: ['https://bank.example'],
+  };
+  const { candidate, overwritable } = captureTarget([mine], 'bank.example', 'ben');
+  assert.equal(candidate?.id, 'mine');
+  assert.equal(overwritable?.id, 'mine');
+});
+
+test('a capture on the attacker site cannot reach the entry either', () => {
+  // Same planted record, victim now on the attacker's page. Nothing there may
+  // be overwritten in place either.
+  const planted = {
+    id: 'planted',
+    type: 'login',
+    username: 'ben',
+    password: 'x',
+    urls: ['https://bank.example', 'https://evil.attacker.example'],
+  };
+  const { overwritable } = captureTarget([planted], 'evil.attacker.example', 'ben');
+  assert.equal(overwritable, null);
 });

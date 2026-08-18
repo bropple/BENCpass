@@ -48,6 +48,10 @@ type data struct {
 	Records map[string]Envelope `json:"records"`
 	Devices map[string]Device   `json:"devices"`
 	Codes   map[string]int64    `json:"codes"` // code -> expiry, unix ms
+	// Which request minted which code, so that minting is idempotent — see
+	// NewCodeFor. Keyed by device and the request's nonce, and thrown away with
+	// the code it names.
+	Mints map[string]string `json:"mints,omitempty"` // device\x00nonce -> code
 }
 
 type Store struct {
@@ -69,6 +73,7 @@ func OpenStore(dir string, keep int) (*Store, error) {
 		Records: map[string]Envelope{},
 		Devices: map[string]Device{},
 		Codes:   map[string]int64{},
+		Mints:   map[string]string{},
 	}}
 
 	raw, err := os.ReadFile(s.path())
@@ -89,6 +94,9 @@ func OpenStore(dir string, keep int) (*Store, error) {
 	}
 	if s.d.Devices == nil {
 		s.d.Devices = map[string]Device{}
+	}
+	if s.d.Mints == nil {
+		s.d.Mints = map[string]string{}
 	}
 	if s.d.Codes == nil {
 		s.d.Codes = map[string]int64{}
@@ -284,9 +292,48 @@ func (s *Store) Device(id string) (Device, bool) {
 
 // NewCode mints a one-time enrolment code. Short-lived on purpose: it is typed
 // by a human into another machine, so it only has to survive that walk.
+// NewCodeFor mints an enrolment code for one request, and only one.
+//
+// Idempotent on (device, nonce), and that is the whole defence rather than a
+// convenience. Minting is the one authenticated call with no compare-and-swap
+// behind it, so a captured request replayed on the wire used to return a fresh
+// code every time — and every code buys a device key, which is a full peer on
+// the vault. The in-memory nonce set stops that while the process lives and is
+// empty after a restart, which is exactly when it was needed.
+//
+// Remembering which request produced which code, in the file beside the code,
+// removes the reason to care. A replay returns the same code the caller already
+// had — and if the attacker was positioned to capture the request, they saw the
+// response carrying that code anyway. It is single-use, so whoever redeems
+// first wins, and the replay has gained nothing that the original capture did
+// not already give away.
+//
+// A time-based floor was tried first and thrown away: it refused honest clients
+// for thirty seconds after every restart, including the case of starting the
+// server and immediately enrolling a second machine, which is what people do on
+// the first day.
+func (s *Store) NewCodeFor(device, nonce string, ttl time.Duration) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := device + "\x00" + nonce
+	if code, ok := s.d.Mints[key]; ok {
+		if expiry, live := s.d.Codes[code]; live && time.Now().UnixMilli() <= expiry {
+			return code, nil
+		}
+	}
+	return s.mintLocked(key, ttl)
+}
+
+// NewCode mints without an owning request: the bootstrap code printed at
+// startup, which no client asked for and nobody can replay.
 func (s *Store) NewCode(ttl time.Duration) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.mintLocked("", ttl)
+}
+
+func (s *Store) mintLocked(key string, ttl time.Duration) (string, error) {
 
 	// Clear out anything that expired without being redeemed. Only the exact
 	// code submitted was ever deleted, on redemption, so a code that was minted
@@ -301,8 +348,17 @@ func (s *Store) NewCode(ttl time.Duration) (string, error) {
 		}
 	}
 
+	for k, c := range s.d.Mints {
+		if _, live := s.d.Codes[c]; !live {
+			delete(s.d.Mints, k)
+		}
+	}
+
 	code := token(9)
 	s.d.Codes[code] = time.Now().Add(ttl).UnixMilli()
+	if key != "" {
+		s.d.Mints[key] = code
+	}
 	return code, s.save()
 }
 

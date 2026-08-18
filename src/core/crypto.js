@@ -5,7 +5,7 @@
 //
 //   master password ──Argon2id──▶ master key ─┐
 //                                             ├─unwrap─▶ vault key ──▶ records
-//   biometric secret ──native host────────────┘
+//   biometric secret ──WebAuthn PRF───────────┘
 //
 // Two independent wrappings of the same vault key. Changing the master password
 // rewraps one key rather than re-encrypting the vault, and enrolling or dropping

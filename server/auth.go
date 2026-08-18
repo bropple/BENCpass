@@ -24,11 +24,17 @@ const (
 	hdrSig    = "X-Bencpass-Sig"
 	hdrNonce  = "X-Bencpass-Nonce"
 
-	// Tolerance on the client's clock. Wide enough for a machine that has not
-	// reached an NTP server yet, narrow enough that the set of nonces the server
-	// has to remember stays small — see replay.go, which is what actually stops
-	// a captured request being sent twice.
-	maxSkew = 5 * time.Minute
+	// Tolerance on the client's clock, and deliberately not symmetric.
+	//
+	// A clock behind the server is common and harmless — a machine that has not
+	// reached NTP yet, a laptop waking from sleep — so five minutes of it costs
+	// nothing. A clock *ahead* is a different matter, because a timestamp in the
+	// server's future is exactly what lets a captured request outlive the nonce
+	// that should have spent it: see the boot floor in replay.go. Thirty seconds
+	// is enough for ordinary drift and short enough that the floor it implies is
+	// barely noticeable.
+	maxSkew   = 5 * time.Minute
+	maxFuture = 30 * time.Second
 
 	// Long enough that two clients cannot pick the same one, short enough to
 	// bound what an attacker can make the server remember. 16 bytes, hex.
@@ -88,13 +94,9 @@ func (s *Store) authenticate(r *http.Request, body []byte) (Device, error) {
 	if err != nil {
 		return Device{}, errUnauthorised
 	}
-	if d := time.Since(time.UnixMilli(ms)); d > maxSkew || d < -maxSkew {
-		return Device{}, errUnauthorised
-	}
-	// Inside the clock window, but signed before this process started — so the
-	// nonce map cannot have seen it and cannot vouch that it is not a replay.
-	// See the note on `booted` in replay.go.
-	if s.seen.signedBeforeBoot(time.UnixMilli(ms)) {
+	// d > maxSkew is a timestamp too far in the past, d < -maxFuture too far in
+	// the future. The two limits differ; see the constants above.
+	if d := time.Since(time.UnixMilli(ms)); d > maxSkew || d < -maxFuture {
 		return Device{}, errUnauthorised
 	}
 

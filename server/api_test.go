@@ -329,22 +329,11 @@ func TestARestartDoesNotHandBackTheReplayWindow(t *testing.T) {
 	srv, store, code := newServer(t)
 	c := enrol(t, srv, code, "laptop")
 
-	// A server that has been up a while, which is the only interesting case: a
-	// capture has to predate the restart and postdate the boot before it, and a
-	// server started microseconds ago cannot satisfy both in a test that runs
-	// in microseconds.
-	store.seen.booted = store.seen.booted.Add(-time.Minute)
-
 	// One genuine mint, captured off the wire by anyone on the plain-HTTP LAN
 	// the design deliberately tolerates.
-	// Two seconds old: comfortably inside the clock window, and genuinely
-	// before the restart below. Signing at exactly `now` would put the capture
-	// and the restart in the same millisecond, and the test would then pass
-	// whether or not the floor works -- which is how the first version of it
-	// behaved.
-	ts := strconv.FormatInt(time.Now().Add(-2*time.Second).UnixMilli(), 10)
+	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	const nonce = "captured-before-the-restart"
-	build := func(target string) *http.Request {
+	send := func(target string) (int, string) {
 		r, err := http.NewRequest("POST", target+"/v1/codes", nil)
 		if err != nil {
 			t.Fatal(err)
@@ -353,29 +342,43 @@ func TestARestartDoesNotHandBackTheReplayWindow(t *testing.T) {
 		r.Header.Set(hdrTime, ts)
 		r.Header.Set(hdrNonce, nonce)
 		r.Header.Set(hdrSig, sign(c.key, "POST", r.Host, "/v1/codes", ts, nonce, "", nil))
-		return r
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		minted, _ := out["code"].(string)
+		return resp.StatusCode, minted
 	}
 
-	resp, err := http.DefaultClient.Do(build(srv.URL))
-	if err != nil {
-		t.Fatal(err)
+	status, first := send(srv.URL)
+	if status != http.StatusOK || first == "" {
+		t.Fatalf("the genuine mint was refused: %d", status)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("the genuine mint was refused: %d", resp.StatusCode)
+
+	// While the process lives the nonce is spent, and the replay is refused.
+	if status, _ := send(srv.URL); status != http.StatusUnauthorized {
+		t.Fatalf("a replay was honoured before any restart: %d", status)
 	}
 
 	// The server restarts -- an update, a reboot, or a crash somebody induced --
 	// against the same data directory. Devices and sequence survive; the nonce
-	// map does not.
+	// map does not, which used to make this the moment to strike.
 	restarted := newServerOn(t, store.dir)
-	resp, err = http.DefaultClient.Do(build(restarted.URL))
-	if err != nil {
-		t.Fatal(err)
+	status, again := send(restarted.URL)
+
+	// It may be answered. What it must never do is mint a *second* code,
+	// because each code buys a device key. Whoever was positioned to replay the
+	// request also saw the response to the original, so returning the same code
+	// tells them nothing new -- and it is single-use, so the device that asked
+	// still holds the only one.
+	if status == http.StatusOK && again != first {
+		t.Fatalf("the replay minted a second code: %q then %q", first, again)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("a request captured before the restart minted a second code: %d", resp.StatusCode)
+	if status != http.StatusOK && status != http.StatusUnauthorized {
+		t.Fatalf("unexpected answer to the replay: %d", status)
 	}
 }
 

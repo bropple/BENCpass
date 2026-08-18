@@ -31,7 +31,32 @@ function sources(dir, out = []) {
   return out;
 }
 
-const code = sources(join(root, 'src')).join('\n');
+/**
+ * Strip comments and string literals before looking for API calls.
+ *
+ * Without this the check has a hole exactly where it matters: a permission
+ * whose API name survives in a comment — `// we used to call browser.foo.bar()`
+ * — counts as used, which is the most likely way for a name to linger after
+ * the feature is gone. That is the case this tool exists to catch.
+ *
+ * Crude on purpose. It only has to be good enough that a mention in prose does
+ * not read as a call, and being over-eager costs a false alarm rather than a
+ * miss.
+ */
+function stripProse(text) {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, ' ') // block comments
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ') // line comments, sparing "http://"
+    .replace(/<!--[\s\S]*?-->/g, ' ') // html comments
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''") // string literals
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+}
+
+// Per file, then joined. Stripping the concatenation lets an unbalanced quote
+// in one file swallow the start of the next — which it did: `idle` came back
+// unused because something earlier ate the line that calls it.
+const code = sources(join(root, 'src')).map(stripProse).join('\n');
 
 /**
  * What using a permission looks like.
@@ -42,6 +67,7 @@ const code = sources(join(root, 'src')).join('\n');
  */
 const SPECIAL = {
   nativeMessaging: /connectNative|sendNativeMessage/,
+  idle: /browser\??\.idle\??\./,
   clipboardWrite: /navigator\.clipboard|execCommand\(\s*['"]copy/,
   activeTab: /browser\.tabs\./,
   // Host permissions are not APIs. They are matched by pattern below and are
@@ -55,7 +81,11 @@ const isHostPermission = (p) => p.includes('://') || p === '<all_urls>';
 const unused = [];
 for (const p of manifest.permissions ?? []) {
   if (isHostPermission(p)) continue;
-  const rule = SPECIAL[p] ?? new RegExp(`browser\\.${p}\\.`);
+  // `browser?.storage?.local` is a call too. Optional chaining is how every
+  // reach for an API that may be absent is written here, so a rule demanding
+  // plain dots matches none of them — and the check passed anyway, because the
+  // comments beside those calls spell the API out. Two holes cancelling out.
+  const rule = SPECIAL[p] ?? new RegExp(`browser\\??\\.${p}\\??\\.`);
   if (!rule.test(code)) unused.push(p);
 }
 

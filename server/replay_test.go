@@ -14,6 +14,10 @@ import (
 // client whose clock runs ahead — which is the case maxSkew exists to tolerate,
 // so the defence fell over exactly where it was designed to hold.
 func TestANonceOutlivesTheRequestThatCarriedIt(t *testing.T) {
+	// Written against nonceLifetime rather than a multiple of maxSkew, because
+	// the relationship between the two has already changed once: the lifetime
+	// has to cover the whole span in which a request stays acceptable, and that
+	// span is maxSkew+maxFuture, not twice either of them.
 	s := newSeen()
 	arrived := time.Now()
 
@@ -21,15 +25,13 @@ func TestANonceOutlivesTheRequestThatCarriedIt(t *testing.T) {
 		t.Fatal("the first use of a nonce was refused")
 	}
 
-	// The far edge of what the timestamp check will still accept: a client five
-	// minutes ahead, replayed five minutes after the genuine request landed.
-	latest := arrived.Add(2 * maxSkew)
-	if s.use("device", "n1", latest) {
-		t.Fatalf("a nonce was forgotten %v after arrival while its request was still valid", 2*maxSkew)
+	// The far edge of what the timestamp check will still accept.
+	if s.use("device", "n1", arrived.Add(nonceLifetime)) {
+		t.Fatalf("a nonce was forgotten %v after arrival while its request was still valid", nonceLifetime)
 	}
 
 	// And it does not remember for ever, which would be an unbounded map.
-	if !s.use("device", "n1", arrived.Add(2*maxSkew+time.Second)) {
+	if !s.use("device", "n1", arrived.Add(nonceLifetime+time.Second)) {
 		t.Fatal("a nonce was still remembered after every request carrying it had expired")
 	}
 }
@@ -47,88 +49,96 @@ func TestNoncesAreRememberedPerDevice(t *testing.T) {
 
 func TestTheSweepDoesNotForgetWhatItShouldKeep(t *testing.T) {
 	// The sweep runs at most once a minute, so entries can outlive their
-	// lifetime by up to that -- harmless, since keeping one too long only ever
+	// lifetime by up to that — harmless, since keeping one too long only ever
 	// refuses a replay. What must never happen is the reverse.
 	//
-	// The probe has to be an entry whose age at the moment of checking sits
-	// between maxSkew and nonceLifetime, because that is the only band where a
-	// too-short lifetime and a correct one disagree. An earlier version probed
-	// an entry thirty seconds old, which no plausible regression would have
-	// dropped: it passed with the lifetime reverted to maxSkew and with the
-	// sweep made four times too aggressive, while claiming to pin both.
+	// Both probes are expressed as fractions of nonceLifetime. An earlier
+	// version used absolute times that happened to sit inside it, so it passed
+	// with the lifetime reverted *and* with the sweep four times too
+	// aggressive, while claiming to pin both.
 	s := newSeen()
 	start := time.Now()
+	step := 30 * time.Second
+	steps := int(2*nonceLifetime/step) + 4
 
-	// Half-minute traffic for twenty minutes, so sweeps fire throughout and
-	// entries cross the boundary while the map is in use.
-	for i := 1; i <= 40; i++ {
-		at := start.Add(time.Duration(i) * 30 * time.Second)
-		if !s.use("device", "n"+strconv.Itoa(i), at) {
-			t.Fatalf("a fresh nonce was refused at %v", at.Sub(start))
+	for i := 1; i <= steps; i++ {
+		if !s.use("device", "n"+strconv.Itoa(i), start.Add(time.Duration(i)*step)) {
+			t.Fatalf("a fresh nonce was refused at %v", time.Duration(i)*step)
 		}
 	}
-	check := start.Add(20 * time.Minute)
+	check := start.Add(time.Duration(steps) * step)
 
-	// n21 landed at 10m30s, so it is 9m30s old here: past maxSkew, inside
-	// nonceLifetime. A request carrying it can still be accepted, so the nonce
-	// must still be remembered.
-	if s.use("device", "n21", check) {
+	// Still inside its lifetime, so a request carrying it could still be
+	// accepted, so it must still be remembered.
+	inside := steps - int(nonceLifetime/step) + 1
+	if s.use("device", "n"+strconv.Itoa(inside), check) {
 		t.Fatal("a nonce inside its lifetime was swept away")
 	}
 
-	// n1 landed at 30s, so it is 19m30s old: no request carrying it can be
-	// accepted any more, and holding it for ever would be an unbounded map.
-	if !s.use("device", "n1", check) {
-		t.Fatal("a nonce was still held long after any request carrying it had expired")
+	// Long dead, and actually gone from the map rather than merely refused by
+	// the age check — the sweep either collects or the map grows for ever, and
+	// only looking inside can tell those apart.
+	if _, held := s.when["device\x00n1"]; held {
+		t.Fatal("a nonce long past its lifetime is still in the map")
 	}
 
-	// And the sweep has actually deleted, rather than merely letting entries
-	// expire logically. The distinction is the whole reason the sweep exists:
-	// the membership check above refuses a stale nonce whether or not anything
-	// was ever removed, so without looking in the map, a server that never
-	// collects is indistinguishable from one that does -- until it runs for a
-	// month.
-	//
-	// Checked by asking for a specific long-dead key rather than by counting.
-	// A count is only as good as the number it is compared against, and an
-	// earlier version of this test compared against the exact number of inserts
-	// it made, so the assertion could not fire under any implementation at all.
-	if _, held := s.when["device\x00n2"]; held {
-		t.Fatal("a nonce nineteen minutes old, nine past its lifetime, is still in the map")
-	}
-
-	// Roughly the entries from the last ten minutes, plus the one the probe
-	// above put back. Generous, because the sweep cadence means a few may
-	// linger; tight enough that a sweep which never runs fails here.
-	if len(s.when) > 25 {
-		t.Fatalf("the sweep is not collecting: %d entries held", len(s.when))
+	if len(s.when) > steps/2 {
+		t.Fatalf("the sweep is not collecting: %d of %d entries held", len(s.when), steps)
 	}
 }
 
-// A restart used to hand back the replay window this whole file exists to
-// close, and the comment above `seen` used to claim the opposite.
+// Minting is idempotent, so a replay cannot turn one captured request into two
+// device keys — which is the property the nonce map provides while the process
+// lives and cannot provide across a restart, since it starts empty.
 //
-// The map is emptied by a restart; the timestamps of everything captured in
-// the previous five minutes are not. So every one of those requests became
-// good for exactly one more use -- demonstrated against the real binary as a
-// second, different, valid enrolment code from one captured packet, which is
-// a second device key.
-func TestNothingSignedBeforeThisProcessStartedIsAccepted(t *testing.T) {
-	// A request captured a minute before this process began. Well inside the
-	// clock window, so the timestamp check alone will not refuse it, and absent
-	// from the nonce map, so that will not either.
-	before := newSeen()
-	captured := before.booted.Add(-time.Minute)
-
-	if !before.signedBeforeBoot(captured) {
-		t.Fatal("a request signed before boot was not recognised as such")
+// The end-to-end version of this is TestARestartDoesNotHandBackTheReplayWindow.
+// This is the store-level check that the same request twice yields one code.
+func TestMintingIsIdempotentForOneRequest(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(dir, 5)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// The boundary: what this process has actually seen is still accepted.
-	if before.signedBeforeBoot(before.booted) {
-		t.Fatal("a request signed at the instant of boot was refused")
+	first, err := store.NewCodeFor("device", "nonce-a", 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if before.signedBeforeBoot(before.booted.Add(time.Millisecond)) {
-		t.Fatal("a request signed after boot was refused")
+	again, err := store.NewCodeFor("device", "nonce-a", 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != again {
+		t.Fatalf("the same request minted two codes: %q then %q", first, again)
+	}
+
+	// Across a restart too, which is the case that matters: the nonce map is
+	// gone by then and this file is all that is left to remember by.
+	reopened, err := OpenStore(dir, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := reopened.NewCodeFor("device", "nonce-a", 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != first {
+		t.Fatalf("a restart let one request mint a second code: %q then %q", first, after)
+	}
+
+	// A different request is a different code, or nobody could ever enrol twice.
+	other, err := reopened.NewCodeFor("device", "nonce-b", 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other == first {
+		t.Fatal("two different requests were given the same code")
+	}
+
+	// And the bootstrap code, which belongs to no request, is never shared.
+	boot1, _ := reopened.NewCode(30 * time.Minute)
+	boot2, _ := reopened.NewCode(30 * time.Minute)
+	if boot1 == boot2 {
+		t.Fatal("two bootstrap codes came back identical")
 	}
 }
