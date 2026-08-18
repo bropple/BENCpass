@@ -1,0 +1,133 @@
+name: Release
+
+# Cutting a release: build the extension, have Mozilla sign it, and attach the
+# signed .xpi to a GitHub Release.
+#
+# Signing is not optional. Release Firefox refuses to install an extension
+# Mozilla has not signed and offers no way to override it, so an unsigned build
+# is only ever installable through about:debugging, temporarily, until the
+# browser restarts. The `.zip` CI produces on every push is for testing; this is
+# the thing a person installs.
+#
+# Runs on a v* tag and nothing else. Tag, and this does the rest:
+#
+#   node tools/check-version.mjs 0.12.0
+#   git commit -am "Release 0.12.0" && git tag v0.12.0
+#   git push && git push --tags
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # to create the release and upload the .xpi
+
+jobs:
+  release:
+    name: Build, sign, publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Fail here rather than after a five-minute build, with a sentence that
+      # says what to do about it.
+      - name: The signing credentials are present
+        env:
+          ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          if [ -z "$ISSUER" ] || [ -z "$SECRET" ]; then
+            echo "::error::AMO_JWT_ISSUER and AMO_JWT_SECRET are not set."
+            echo "Get them from addons.mozilla.org -> Developer Hub -> Manage API Keys,"
+            echo "then: gh secret set AMO_JWT_ISSUER && gh secret set AMO_JWT_SECRET"
+            exit 1
+          fi
+
+      # A tag that disagrees with the manifest produces a release whose file is
+      # named one thing and whose contents say another, and AMO will not let the
+      # version be reused once it is spent.
+      - name: The tag matches the manifest
+        run: |
+          node tools/check-version.mjs
+          manifest=$(node -p "require('./src/manifest.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$manifest" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME says $tag, manifest says $manifest"
+            echo "Run: node tools/check-version.mjs $tag"
+            exit 1
+          fi
+          echo "version=$manifest" >> "$GITHUB_ENV"
+
+      # The full suite, again, on the exact commit being released. CI has
+      # already run it — but CI runs on a branch and this runs on a tag, and the
+      # thing being signed is worth ten seconds of certainty.
+      - name: Tests
+        run: npm test
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Server tests
+        run: go test ./...
+        working-directory: server
+
+      - name: Lint the extension
+        run: npx web-ext lint --source-dir=src --self-hosted
+
+      # `sign` builds as well as signs, and returns the signed artefact. The
+      # unlisted channel means Mozilla signs it and hands it back rather than
+      # publishing it on the store — self-distribution, which is what a
+      # self-hosted password manager wants.
+      #
+      # Note for the first submission: AMO asks for buildable sources when a
+      # package contains generated or minified code. src/vendor/argon2.js is a
+      # minified bundle, and tools/vendor.sh is the recipe that produces it from
+      # the pinned lockfile.
+      - name: Sign
+        run: |
+          npx web-ext sign \
+            --source-dir=src \
+            --artifacts-dir=build/ext \
+            --channel=unlisted \
+            --api-key="${{ secrets.AMO_JWT_ISSUER }}" \
+            --api-secret="${{ secrets.AMO_JWT_SECRET }}"
+
+      - name: Find what came back
+        run: |
+          xpi=$(find build/ext -name '*.xpi' | head -1)
+          if [ -z "$xpi" ]; then
+            echo "::error::signing produced no .xpi"
+            ls -la build/ext || true
+            exit 1
+          fi
+          echo "xpi=$xpi" >> "$GITHUB_ENV"
+          echo "signed: $xpi"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$xpi" \
+            --title "BENCpass $GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes-start-tag "$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo '')"
+
+      # Kept for the same reason the build is kept on every CI run: if the
+      # release step fails after signing, the signed file is not lost and does
+      # not have to be bought with another version number.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bencpass-signed
+          path: build/ext/*.xpi
+          if-no-files-found: warn
