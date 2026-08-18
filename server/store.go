@@ -287,6 +287,20 @@ func (s *Store) Device(id string) (Device, bool) {
 func (s *Store) NewCode(ttl time.Duration) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Clear out anything that expired without being redeemed. Only the exact
+	// code submitted was ever deleted, on redemption, so a code that was minted
+	// and never used stayed in the file for good — and every mint rewrites the
+	// whole file, so the cost of keeping them compounds. Nobody would notice
+	// until the store had been in use for years, which is the kind of thing
+	// that is much easier to fix now than then.
+	now := time.Now().UnixMilli()
+	for c, expiry := range s.d.Codes {
+		if now > expiry {
+			delete(s.d.Codes, c)
+		}
+	}
+
 	code := token(9)
 	s.d.Codes[code] = time.Now().Add(ttl).UnixMilli()
 	return code, s.save()

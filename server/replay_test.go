@@ -104,3 +104,31 @@ func TestTheSweepDoesNotForgetWhatItShouldKeep(t *testing.T) {
 		t.Fatalf("the sweep is not collecting: %d entries held", len(s.when))
 	}
 }
+
+// A restart used to hand back the replay window this whole file exists to
+// close, and the comment above `seen` used to claim the opposite.
+//
+// The map is emptied by a restart; the timestamps of everything captured in
+// the previous five minutes are not. So every one of those requests became
+// good for exactly one more use -- demonstrated against the real binary as a
+// second, different, valid enrolment code from one captured packet, which is
+// a second device key.
+func TestNothingSignedBeforeThisProcessStartedIsAccepted(t *testing.T) {
+	// A request captured a minute before this process began. Well inside the
+	// clock window, so the timestamp check alone will not refuse it, and absent
+	// from the nonce map, so that will not either.
+	before := newSeen()
+	captured := before.booted.Add(-time.Minute)
+
+	if !before.signedBeforeBoot(captured) {
+		t.Fatal("a request signed before boot was not recognised as such")
+	}
+
+	// The boundary: what this process has actually seen is still accepted.
+	if before.signedBeforeBoot(before.booted) {
+		t.Fatal("a request signed at the instant of boot was refused")
+	}
+	if before.signedBeforeBoot(before.booted.Add(time.Millisecond)) {
+		t.Fatal("a request signed after boot was refused")
+	}
+}

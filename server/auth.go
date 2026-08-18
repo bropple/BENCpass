@@ -91,6 +91,12 @@ func (s *Store) authenticate(r *http.Request, body []byte) (Device, error) {
 	if d := time.Since(time.UnixMilli(ms)); d > maxSkew || d < -maxSkew {
 		return Device{}, errUnauthorised
 	}
+	// Inside the clock window, but signed before this process started — so the
+	// nonce map cannot have seen it and cannot vouch that it is not a replay.
+	// See the note on `booted` in replay.go.
+	if s.seen.signedBeforeBoot(time.UnixMilli(ms)) {
+		return Device{}, errUnauthorised
+	}
 
 	dev, ok := s.Device(id)
 	if !ok {

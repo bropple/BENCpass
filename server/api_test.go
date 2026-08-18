@@ -25,6 +25,19 @@ type client struct {
 	nonce string        // pinned, so a test can deliberately send the same one twice
 }
 
+// newServerOn reopens an existing data directory: a restart, with the devices
+// and the sequence intact and everything held only in memory gone.
+func newServerOn(t *testing.T, dir string) *httptest.Server {
+	t.Helper()
+	store, err := OpenStore(dir, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer((&server{store: store}).routes())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func newServer(t *testing.T) (*httptest.Server, *Store, string) {
 	t.Helper()
 	store, err := OpenStore(t.TempDir(), 5)
@@ -309,6 +322,60 @@ func TestMetaWriteRequiresIfMatchOnceTheStoreIsNotEmpty(t *testing.T) {
 	status, _ := c.do("PUT", "/v1/meta", map[string]any{"meta": map[string]any{"wrap": "v9"}}, nil)
 	if status != http.StatusPreconditionRequired {
 		t.Fatalf("a meta write with no If-Match was accepted: %d", status)
+	}
+}
+
+func TestARestartDoesNotHandBackTheReplayWindow(t *testing.T) {
+	srv, store, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	// A server that has been up a while, which is the only interesting case: a
+	// capture has to predate the restart and postdate the boot before it, and a
+	// server started microseconds ago cannot satisfy both in a test that runs
+	// in microseconds.
+	store.seen.booted = store.seen.booted.Add(-time.Minute)
+
+	// One genuine mint, captured off the wire by anyone on the plain-HTTP LAN
+	// the design deliberately tolerates.
+	// Two seconds old: comfortably inside the clock window, and genuinely
+	// before the restart below. Signing at exactly `now` would put the capture
+	// and the restart in the same millisecond, and the test would then pass
+	// whether or not the floor works -- which is how the first version of it
+	// behaved.
+	ts := strconv.FormatInt(time.Now().Add(-2*time.Second).UnixMilli(), 10)
+	const nonce = "captured-before-the-restart"
+	build := func(target string) *http.Request {
+		r, err := http.NewRequest("POST", target+"/v1/codes", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set(hdrDevice, c.id)
+		r.Header.Set(hdrTime, ts)
+		r.Header.Set(hdrNonce, nonce)
+		r.Header.Set(hdrSig, sign(c.key, "POST", r.Host, "/v1/codes", ts, nonce, "", nil))
+		return r
+	}
+
+	resp, err := http.DefaultClient.Do(build(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the genuine mint was refused: %d", resp.StatusCode)
+	}
+
+	// The server restarts -- an update, a reboot, or a crash somebody induced --
+	// against the same data directory. Devices and sequence survive; the nonce
+	// map does not.
+	restarted := newServerOn(t, store.dir)
+	resp, err = http.DefaultClient.Do(build(restarted.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a request captured before the restart minted a second code: %d", resp.StatusCode)
 	}
 }
 
@@ -639,5 +706,29 @@ func TestSnapshotsAreWrittenAndPruned(t *testing.T) {
 	// pushes damaged ciphertext, since it cannot tell good from bad.
 	if len(entries) != 3 {
 		t.Fatalf("kept %d snapshots, want 3", len(entries))
+	}
+}
+
+func TestExpiredCodesDoNotAccumulate(t *testing.T) {
+	store, err := OpenStore(t.TempDir(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Codes that were minted and never used. Redeem is the only thing that ever
+	// removed one, and only the exact code submitted, so these used to stay in
+	// the file for the life of the server -- and every mint rewrites the file
+	// whole, so the cost of keeping them grew with the count.
+	for i := 0; i < 20; i++ {
+		if _, err := store.NewCode(-time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.NewCode(30 * time.Minute); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := len(store.d.Codes); n != 1 {
+		t.Fatalf("expired codes are still held: %d in the store, want only the live one", n)
 	}
 }

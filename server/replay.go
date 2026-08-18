@@ -46,19 +46,44 @@ const nonceLifetime = 2 * maxSkew
 
 // seen remembers which nonces have been used, per device, until they age out.
 //
-// Deliberately in memory and not written to disk. It holds at most a few
-// minutes of traffic, and persisting it would mean a disk write on every
-// authenticated read — the cost of which lands on every sync, to defend a
-// window that a restart closes anyway by making every pre-restart timestamp
-// stale within five minutes.
+// In memory and not written to disk, because persisting it would mean a disk
+// write on every authenticated request and that cost lands on every sync.
+//
+// An earlier version of this comment claimed a restart "closes the window
+// anyway". It does the opposite, and it was demonstrated doing the opposite:
+// a restart empties this map while the timestamps of everything captured in
+// the preceding five minutes are still inside the clock window, so every one
+// of them becomes replayable exactly once more. On `POST /v1/codes` — the
+// endpoint this file exists for — that is a fresh enrolment code, and each
+// code is a device key.
+//
+// Hence `booted`. Nothing signed before this process started is accepted,
+// which covers precisely the requests the empty map has forgotten, and needs
+// no disk. What it costs: a client whose clock runs *behind* the server has
+// its requests refused until the difference elapses after a restart. Bounded
+// by maxSkew, only after a restart, and the client's next attempt carries a
+// fresh timestamp and succeeds — an availability cost measured in minutes,
+// against a replay that mints vault peers.
 type seen struct {
-	mu    sync.Mutex
-	when  map[string]time.Time
-	swept time.Time
+	mu     sync.Mutex
+	when   map[string]time.Time
+	swept  time.Time
+	booted time.Time
 }
 
 func newSeen() *seen {
-	return &seen{when: map[string]time.Time{}}
+	// Truncated to milliseconds because that is the resolution a timestamp
+	// arrives in. Kept at full precision, a request sent microseconds after
+	// this process started rounds down to just before it and is refused as
+	// pre-boot — which every test noticed immediately, and which on a real
+	// server would have refused the first request after every restart.
+	return &seen{when: map[string]time.Time{}, booted: time.Now().Truncate(time.Millisecond)}
+}
+
+// signedBeforeBoot reports a request older than anything this process can
+// possibly have in `when`, and therefore one it cannot prove is not a replay.
+func (s *seen) signedBeforeBoot(ts time.Time) bool {
+	return ts.Before(s.booted)
 }
 
 // use records a nonce and reports whether it was fresh.
