@@ -16,10 +16,27 @@
 // do with it. That keeps this file testable and keeps the decision about where
 // plaintext goes at the surface where a person can see it.
 
-import { LOGIN, ADDRESS, TYPES, newRecord } from './model.js';
+import { LOGIN, ADDRESS, TYPES, EMPTY_ADDRESS, newRecord } from './model.js';
 
 export const EXPORT_FORMAT = 'bencpass-export';
 export const EXPORT_VERSION = 1;
+
+// Bounds on what will be read in.
+//
+// Not a defence against an attacker so much as against a mistake, but the
+// effect is the same either way: every imported record costs an AES-GCM seal
+// and the whole vault is written to storage afterwards, so a file with a
+// million rows in it does not fail — it succeeds, slowly, having wedged the
+// browser and filled the profile on the way. A file that is refused in a
+// tenth of a second is a far better outcome than one that works after five
+// minutes of a frozen interface.
+//
+// The numbers are set where a real vault is nowhere near them. Ten thousand
+// logins is more than anyone has; the largest human password manager exports
+// run to hundreds.
+export const MAX_RECORDS = 10_000;
+export const MAX_TEXT = 32 * 1024 * 1024; // characters of input
+export const MAX_FIELD = 64 * 1024; // characters in any one field
 
 // ---- out --------------------------------------------------------------------
 
@@ -86,6 +103,8 @@ function csvCell(value) {
  * a newer version missing a field this one knows about should still arrive.
  */
 export function fromJson(text) {
+  checkSize(text);
+
   let parsed;
   try {
     parsed = JSON.parse(text);
@@ -97,7 +116,8 @@ export function fromJson(text) {
   if (!Array.isArray(list)) {
     throw new TransferError('That JSON does not look like a BENCpass export.', 'not-ours');
   }
-  return list.map(recordFrom).filter(Boolean);
+  checkCount(list.length);
+  return list.map((r) => recordFrom(r)).filter(Boolean);
 }
 
 function recordFrom(raw, now = Date.now()) {
@@ -105,7 +125,20 @@ function recordFrom(raw, now = Date.now()) {
   const type = TYPES.includes(raw.type) ? raw.type : LOGIN;
 
   if (type === ADDRESS) {
-    return newRecord({ ...raw, type: ADDRESS }, now);
+    // Built key by key from the known field set rather than spread wholesale.
+    // Spreading an imported object let anything the file carried through as an
+    // own property of the record -- a `password` key on an address, a value
+    // that is an object rather than a string -- and while every reader coerces
+    // with String() so none of it can do harm, a record whose shape depends on
+    // the file it arrived in is a thing to be reasoned about forever after.
+    // Cheaper to not have it.
+    const fields = { type: ADDRESS, title: str(raw.title), notes: str(raw.notes) };
+    for (const key of Object.keys(EMPTY_ADDRESS)) {
+      if (key in fields) continue;
+      fields[key] = str(raw[key]);
+    }
+    const rec = newRecord(fields, now);
+    return emptyAddress(rec) ? null : rec;
   }
 
   const urls = Array.isArray(raw.urls) ? raw.urls.filter((u) => typeof u === 'string') : [];
@@ -124,10 +157,38 @@ function recordFrom(raw, now = Date.now()) {
   return empty(rec) ? null : rec;
 }
 
-const str = (v) => (typeof v === 'string' ? v : '');
+const str = (v) => (typeof v === 'string' ? v.slice(0, MAX_FIELD) : '');
+
+/** The file itself, before anything tries to make sense of it. */
+function checkSize(text) {
+  if (typeof text !== 'string') throw new TransferError('That file could not be read as text.', 'not-text');
+  if (text.length > MAX_TEXT) {
+    throw new TransferError(
+      `That file is too large to import (over ${Math.round(MAX_TEXT / 1024 / 1024)} MB).`,
+      'too-large',
+    );
+  }
+}
+
+function checkCount(n) {
+  if (n > MAX_RECORDS) {
+    throw new TransferError(
+      `That file holds ${n} entries, more than the ${MAX_RECORDS} this will import at once.`,
+      'too-many',
+    );
+  }
+}
 
 /** Nothing worth keeping: no secret, no account, nowhere it applies. */
 const empty = (r) => !r.password && !r.username && !r.urls.length && !r.notes;
+
+/**
+ * An address with nothing in it.
+ *
+ * Worth its own check: a file of blank rows would otherwise import as a screen
+ * of empty entries that each have to be deleted by hand.
+ */
+const emptyAddress = (r) => Object.keys(EMPTY_ADDRESS).every((k) => !String(r[k] ?? '').trim());
 
 /**
  * Column names the other managers use, mapped to ours.
@@ -153,8 +214,10 @@ const ALIASES = {
  * the four programs people arrive from order them four different ways.
  */
 export function fromCsv(text, now = Date.now()) {
+  checkSize(text);
   const rows = parseCsv(text);
   if (!rows.length) throw new TransferError('That file has no rows.', 'empty');
+  checkCount(rows.length - 1);
 
   const header = rows[0].map((h) => h.trim().toLowerCase().replace(/^"|"$/g, ''));
   const at = {};
@@ -172,7 +235,9 @@ export function fromCsv(text, now = Date.now()) {
   const out = [];
   for (const row of rows.slice(1)) {
     if (!row.length || row.every((c) => c === '')) continue;
-    const cell = (i) => (i >= 0 && i < row.length ? row[i].trim() : '');
+    // Capped here as well as in str(): the JSON path coerces every field
+    // through that, and this one does not go near it.
+    const cell = (i) => (i >= 0 && i < row.length ? row[i].trim().slice(0, MAX_FIELD) : '');
 
     const url = cell(at.url);
     const rec = newRecord(
