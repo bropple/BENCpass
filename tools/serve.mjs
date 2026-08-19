@@ -58,7 +58,11 @@ createServer(async (req, res) => {
   }
 
   if (url.pathname === '/__hold') {
-    const ms = Math.min(Number(url.searchParams.get('ms') ?? 1000), 30_000);
+    // Clamped hard. This exists to make a script arrive late enough that the
+    // page has already been measured, which takes a moment rather than half a
+    // minute — and the smaller the ceiling, the less a request can occupy this
+    // server. NaN clamps to the floor rather than hanging.
+    const ms = Math.min(Math.max(Number(url.searchParams.get('ms')) || 1000, 0), 5_000);
     await new Promise((r) => setTimeout(r, ms));
     res.writeHead(200, { 'content-type': 'text/javascript' }).end('/* held */');
     return;
