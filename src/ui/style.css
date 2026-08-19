@@ -532,6 +532,22 @@ select { color: var(--text); font: inherit; }
 }
 
 
+/* An enrolment code on its way to another machine: the recovery code's
+   treatment, scaled to a settings row — monospace and spaced out, because it
+   is going to be typed on the other machine character by character. */
+.mint-code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 18px;
+  letter-spacing: 2px;
+  text-align: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--panel, rgba(255, 255, 255, 0.03));
+  word-break: break-all;
+  user-select: all;
+  margin: 12px 0 0;
+}
+
 /* ---- the machine list ------------------------------------------------------ */
 .devices { list-style: none; margin: 12px 0 0; padding: 0; }
 .devices li {

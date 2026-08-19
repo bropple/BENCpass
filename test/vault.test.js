@@ -528,3 +528,49 @@ test('an encrypted backup is exactly what a second implementation needs', async 
   assert.equal(back.list().length, 1);
   assert.equal(back.list()[0].password, 'p');
 });
+
+test('a live record cannot be rolled back through applyEnvelopes', async () => {
+  // Belt and braces beneath merge(). The envelope an attacker replays opens
+  // perfectly — it was genuinely sealed at that revision, so its AAD verifies —
+  // which is why the revision has to be checked here rather than left to the
+  // cryptography to catch.
+  const v = await Vault.create({ password: 'pw' });
+  const id = await v.add({ type: 'login', title: 'Bank', username: 'ben', password: 'LEAKED' });
+  const old = JSON.parse(JSON.stringify(v.toJSON().envelopes.find((e) => e.id === id)));
+
+  await v.update(id, { password: 'ROTATED' });
+  assert.equal(v.get(id).password, 'ROTATED');
+
+  await v.applyEnvelopes([old]);
+  assert.equal(v.get(id).password, 'ROTATED', 'a replayed envelope rolled the password back');
+  assert.equal(v.envelopes.get(id).rev, 2, 'the stored envelope regressed');
+});
+
+test('a tombstone may still arrive below the local revision', async () => {
+  // The case that makes the rule above "no regression for a LIVE record"
+  // rather than "no regression". A deletion on one machine racing edits on
+  // another is resolved by merge in the tombstone's favour, and that tombstone
+  // is legitimately a lower revision than the local edit. Refusing every
+  // regression would quietly break deleting a record, which is the fail-safe
+  // direction and must keep working.
+  const v = await Vault.create({ password: 'pw' });
+  const id = await v.add({ type: 'login', title: 'Gone', username: 'x', password: 'p' });
+
+  // The other machine deletes from rev 1, sealing a tombstone at rev 2. Sealed
+  // there for real — rewriting `rev` on an envelope after the fact only breaks
+  // the AAD it was sealed under, which is how the first version of this test
+  // managed to fail against correct code.
+  const other = Vault.load(JSON.parse(JSON.stringify(v.toJSON())));
+  await other.unlock('pw');
+  await other.remove(id);
+  const tomb = JSON.parse(JSON.stringify(other.toJSON().envelopes.find((e) => e.id === id)));
+  assert.equal(tomb.rev, 2);
+
+  // Meanwhile this machine edits twice and is ahead.
+  await v.update(id, { password: 'p2' });
+  await v.update(id, { password: 'p3' });
+  assert.equal(v.envelopes.get(id).rev, 3);
+
+  await v.applyEnvelopes([tomb]);
+  assert.equal(v.list().length, 0, 'a deletion was refused because its revision was lower');
+});

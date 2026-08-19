@@ -11,6 +11,7 @@
 //
 //   local.rev  === base   →  only the remote moved  →  fast-forward
 //   remote.rev === base   →  only we moved          →  keep ours, push it
+//   remote.rev  <  base   →  the server went back   →  keep ours, report it
 //   neither               →  both moved             →  conflict, keep both
 
 export const FAST_FORWARD = 'fast-forward';
@@ -18,6 +19,7 @@ export const KEEP_LOCAL = 'keep-local';
 export const ACCEPT_NEW = 'accept-new';
 export const IN_SYNC = 'in-sync';
 export const CONFLICT = 'conflict';
+export const ROLLBACK = 'rollback';
 
 const asMap = (x) => (x instanceof Map ? x : new Map(x.map((e) => [e.id, e])));
 
@@ -25,6 +27,7 @@ const asMap = (x) => (x instanceof Map ? x : new Map(x.map((e) => [e.id, e])));
  * @returns {{
  *   envelopes: Map, syncedRev: Map,
  *   conflicts: Array<{id, kind, local, remote}>,
+ *   rolledBack: Array<{id, local, remote}>,
  *   toPush: Array<object>, actions: Map<string,string>
  * }}
  */
@@ -37,6 +40,7 @@ export function merge({ local, remote, syncedRev }) {
   const envelopes = new Map(L);
   const nextSynced = new Map(base);
   const conflicts = [];
+  const rolledBack = [];
   const toPush = [];
   const actions = new Map();
 
@@ -79,7 +83,29 @@ export function merge({ local, remote, syncedRev }) {
       // make the same edit are reported as a conflict too. That is the safe
       // direction to be wrong in, and it is rare.
     } else {
-      if (b !== undefined && l.rev === b) {
+      // A remote revision below the ancestor is not an update, it is the
+      // server going backwards on a record it already acknowledged. The
+      // envelope itself verifies — it really was sealed by this client at that
+      // rev — which is exactly why the old fast-forward here was exploitable:
+      // a server re-serving the pre-rotation envelope restored a leaked
+      // password, and re-serving a pre-deletion envelope resurrected the
+      // record, because the `continue` ran before the tombstone-wins logic
+      // below could. Local is strictly newer, so local stays and is pushed;
+      // that is the right data outcome even for a caller that looks no
+      // further. But healing quietly would hide the attack, so the record is
+      // named in `rolledBack` — merge is pure and cannot throw SyncError, so
+      // the refusal itself (this project refuses loudly: see guardRollback in
+      // sync.js) is the caller's job.
+      if (b !== undefined && r.rev < b) {
+        toPush.push(l);
+        rolledBack.push({ id, local: l, remote: r });
+        actions.set(id, ROLLBACK);
+        continue;
+      }
+      // A fast-forward means the remote genuinely moved forward. With the
+      // rollback case handled above this reduces to r.rev > b, but the rule is
+      // stated in full so it cannot rot into "l.rev === b is enough" again.
+      if (b !== undefined && l.rev === b && r.rev > l.rev) {
         envelopes.set(id, r);
         nextSynced.set(id, r.rev);
         actions.set(id, FAST_FORWARD);
@@ -116,7 +142,7 @@ export function merge({ local, remote, syncedRev }) {
     actions.set(id, CONFLICT);
   }
 
-  return { envelopes, syncedRev: nextSynced, conflicts, toPush, actions };
+  return { envelopes, syncedRev: nextSynced, conflicts, rolledBack, toPush, actions };
 }
 
 /** Advance the ancestor map once the server has actually accepted a push. */

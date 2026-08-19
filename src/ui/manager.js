@@ -492,7 +492,7 @@ function setGate(mode) {
     : join
       ? 'The same master password as your other machine. This pulls that vault down rather than making a new one — a new one could never read its records.'
       : recover
-        ? 'The code printed when this vault was set up. It opens the vault; it does not change the master password, which you can do afterwards under the gear.'
+        ? 'The code printed when this vault was set up. It opens the vault; the master password stays what it was, and nothing here changes it. To move to a new password, export your entries and import them into a freshly created vault.'
         : '';
 
   // Offered only when there is no vault here. With one, "join" would mean
@@ -724,6 +724,19 @@ function enterApp() {
 
 function lock(why = '') {
   vaultHost?.lock();
+  lockUi(why);
+}
+
+/**
+ * The page's half of locking: clear the DOM and return to the gate.
+ *
+ * Separate from lock() because the vault does not always shut from here. The
+ * background locks it on idle and on screen lock, and this page then has
+ * nothing to tell the vault — only its own spans and inputs to clear. Calling
+ * lock() for that would send the lock back to the background, which would
+ * broadcast it back here, a cycle nobody needs.
+ */
+function lockUi(why = '') {
   state.selected = null;
   state.editing = null;
   clearTimeout(revealTimer);
@@ -738,6 +751,9 @@ function lock(why = '') {
   $('d-notes').textContent = '';
   $('e-password').value = '';
   $('search').value = '';
+  // The minted enrolment code grants a device key to whoever types it in
+  // first; it does not get to outlive the session that minted it.
+  clearMintedCode();
 
   $('settings').hidden = true;
   $('app').hidden = true;
@@ -785,6 +801,21 @@ globalThis.browser?.runtime?.onMessage?.addListener((msg) => {
   promptedThisVisit = false;
   showPasswordBox = false;
   refreshBiometrics();
+});
+
+// The background locks the vault on its own — the idle timer, the screen
+// locking — and this page used to sleep through it: the app pane stayed up
+// over a vault that was shut, and a revealed password stayed readable until
+// the next click threw VaultLockedError at it. The background broadcasts
+// every lock; this returns to the gate and clears the DOM when it arrives.
+//
+// Guarded on the app pane being visible rather than on the vault's state:
+// the vault is already locked by the time the message lands, and a page
+// sitting at the gate has nothing to clear and no reason to repaint it.
+globalThis.browser?.runtime?.onMessage?.addListener((msg) => {
+  if (msg?.type !== MSG.LOCKSTATE || !msg.locked) return;
+  if ($('app').hidden) return;
+  lockUi('Auto-locked.');
 });
 for (const ev of ['keydown', 'pointerdown']) {
   document.addEventListener(ev, bumpAutolock, { passive: true });
@@ -873,6 +904,20 @@ function select(id) {
 }
 
 function renderDetail() {
+  // hideSecrets reaches here straight from the reveal timer, which can fire
+  // after the background has locked the vault — an idle lock while a password
+  // sat revealed. vault.get below would then throw VaultLockedError before
+  // the secret span was repainted, leaving the plaintext on screen. Clear the
+  // spans and stop instead.
+  if (!state.vault || state.vault.locked) {
+    $('detail-view').hidden = true;
+    $('detail-empty').hidden = false;
+    $('d-password').textContent = '';
+    $('d-username').textContent = '';
+    $('d-notes').textContent = '';
+    return;
+  }
+
   const editing = state.editing !== null;
   const r = state.selected ? state.vault.get(state.selected) : null;
 
@@ -1208,6 +1253,65 @@ $('s-rebuilt-btn').addEventListener('click', async () => {
 });
 
 $('s-devices-refresh').addEventListener('click', loadDevices);
+
+// ---- minting a code for the next machine ------------------------------------
+//
+// The server prints a bootstrap code only while zero devices are enrolled.
+// After machine one, a code can only be minted by a machine that already
+// holds a key — this button. Until it existed, machines two and three were
+// permanently locked out while the deployment guide described the button
+// anyway.
+//
+// The code is handled the way the recovery sheet handles its code: shown
+// once, never stored, and cleared when the settings pane closes or the vault
+// locks. It deserves that care — whoever redeems it first enrols a device
+// with full access to the vault's ciphertext and the standing to sync it.
+
+function clearMintedCode() {
+  $('s-mint-code').textContent = '';
+  $('s-mint-code').hidden = true;
+  $('s-mint-copy').hidden = true;
+  $('s-mint-note').textContent = '';
+  $('s-mint-note').className = 'settings-note';
+}
+
+$('s-mint-btn').addEventListener('click', async () => {
+  clearMintedCode();
+  $('s-mint-btn').disabled = true;
+  $('s-mint-note').textContent = 'Asking the server…';
+
+  const reply = await askBackground(MSG.MINT_CODE);
+  $('s-mint-btn').disabled = false;
+
+  if (!reply?.ok) {
+    // The background's message already says which thing to fix — no server
+    // configured, nothing reachable, a refused key, a protocol mismatch — so
+    // it is shown as sent rather than rounded to "failed".
+    $('s-mint-note').textContent =
+      reply?.message ?? 'Could not mint a code. Settings are only available inside the extension.';
+    $('s-mint-note').className = 'settings-note bad';
+    return;
+  }
+
+  $('s-mint-code').textContent = reply.code;
+  $('s-mint-code').hidden = false;
+  $('s-mint-copy').hidden = false;
+  // The lifetime is the server's to decide and comes back with the code;
+  // saying a number the server did not send would be a guess dressed as fact.
+  const mins = reply.ttlSeconds ? Math.round(reply.ttlSeconds / 60) : null;
+  $('s-mint-note').textContent =
+    (mins ? `Good once, for ${mins} minutes.` : 'Good once; the server decides for how long.') +
+    ' It is not shown again — mint another if it lapses.';
+});
+
+$('s-mint-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('s-mint-code').textContent);
+    $('s-mint-note').textContent = 'Copied. It still expires on the server\'s clock.';
+  } catch {
+    $('s-mint-note').textContent = 'Could not copy. Type it over instead.';
+  }
+});
 
 // ---- the recovery code, after setup -----------------------------------------
 
@@ -1606,6 +1710,9 @@ async function saveSetting(patch) {
 $('settings-btn').addEventListener('click', openSettings);
 $('settings-close').addEventListener('click', () => {
   $('settings').hidden = true;
+  // The minted code leaves with the pane. Anyone who needed it has read it;
+  // an enrolment credential is not a thing to leave under a settings panel.
+  clearMintedCode();
 });
 
 $('s-autolock').addEventListener('change', () =>

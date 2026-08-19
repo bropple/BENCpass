@@ -105,7 +105,7 @@ async function device(endpoint, name, code) {
 async function pair(t) {
   const { endpoint, code } = await startServer(t);
   const a = await device(endpoint, 'machine-a', code);
-  const b = await device(endpoint, 'machine-b', await a.mintCode());
+  const b = await device(endpoint, 'machine-b', (await a.mintCode()).code);
   return { endpoint, a, b };
 }
 
@@ -144,6 +144,62 @@ test('a bad device key is refused', { ...skip }, async (t) => {
     key: crypto.getRandomValues(new Uint8Array(32)),
   });
   await assert.rejects(() => forged.getRecords(0), /pull failed \(401\)/);
+});
+
+test('an enrolled machine mints a code the next machine can enrol with', { ...skip }, async (t) => {
+  // The path the extension's "Add a machine" button drives. The server prints
+  // a code by itself only while zero devices are enrolled, so after machine
+  // one this is the only way in for machines two and three.
+  const { endpoint, code } = await startServer(t);
+  const first = await device(endpoint, 'machine-one', code);
+
+  const minted = await first.mintCode();
+  assert.ok(minted.code.length > 0, 'no code came back');
+  // The lifetime is the server's answer, passed through — not a constant
+  // restated on the client. 1800 is what server/main.go sends today; if the
+  // server's decision changes, this changes with it, and so does the UI.
+  assert.equal(minted.ttlSeconds, 1800);
+
+  // The code buys exactly one enrolment, and the key it buys actually works.
+  const second = await device(endpoint, 'machine-two', minted.code);
+  const { seq } = await second.getRecords(0);
+  assert.equal(typeof seq, 'number');
+
+  // Single-use: the server deletes it on redemption, success or not.
+  await assert.rejects(
+    () => SyncClient.enrol({ endpoint, code: minted.code, name: 'machine-three' }),
+    (err) => err instanceof SyncError && err.code === 'enrol',
+  );
+});
+
+test('minting with a refused key reports unauthorised, not a generic failure', { ...skip }, async (t) => {
+  // The manager tells a revoked key apart from a protocol mismatch, and both
+  // apart from "could not mint" — which is only possible if the client
+  // surfaces the 401 as itself.
+  const { endpoint, code } = await startServer(t);
+  const real = await device(endpoint, 'mint-check', code);
+  const forged = new SyncClient({
+    endpoint,
+    deviceId: real.deviceId,
+    key: crypto.getRandomValues(new Uint8Array(32)),
+  });
+  await assert.rejects(
+    () => forged.mintCode(),
+    (err) => err instanceof SyncError && err.code === 'unauthorised',
+  );
+});
+
+test('a mint the server cannot honour fails as a mint, naming the status', async () => {
+  const client = new SyncClient({
+    endpoint: 'https://box.example',
+    deviceId: 'd',
+    key: new Uint8Array(32),
+    fetch: async () => ({ ok: false, status: 500, json: async () => ({ error: 'cannot mint code' }) }),
+  });
+  await assert.rejects(
+    () => client.mintCode(),
+    (err) => err instanceof SyncError && err.code === 'code' && err.message.includes('500'),
+  );
 });
 
 test('a vault reaches a second machine through the server', { ...skip }, async (t) => {
@@ -299,6 +355,48 @@ test('a server serving an older sequence is refused', { ...skip }, async (t) => 
     () => syncOnce(vault, rolledBack, state),
     (err) => err instanceof SyncError && err.code === 'rollback',
   );
+});
+
+test('re-serving an older revision of a record is refused, not healed quietly', { ...skip }, async (t) => {
+  // The gap guardRollback leaves: a server — or something standing in for one —
+  // that re-serves a genuinely-authentic pre-rotation envelope under a *bumped*
+  // global sequence sails past the sequence check, and the old merge
+  // fast-forwarded to it: the leaked password came back. merge() now keeps
+  // local, but keeping quiet about it would hide the event, and from here a
+  // restored backup and a hostile server look identical — the person syncing
+  // has to be told either way.
+  const { endpoint, code } = await startServer(t);
+  const client = await device(endpoint, 'rotation-check', code);
+  const vault = await mkVault();
+  const state = emptySyncState();
+
+  const id = await vault.add({ title: 'Bank', password: 'leaked' });
+  await syncOnce(vault, client, state);
+
+  // The pre-rotation envelope exactly as the server holds it — really sealed
+  // by this client, at a revision the server has acknowledged.
+  const stale = (await client.getRecords(0)).records.find((r) => r.id === id);
+  assert.ok(stale, 'the pushed envelope is not on the server');
+
+  await vault.update(id, { password: 'rotated' });
+  await syncOnce(vault, client, state);
+
+  const hostile = new SyncClient({ endpoint, deviceId: client.deviceId, key: client.key });
+  hostile.getRecords = async () => ({ seq: state.highestSeq + 1, records: [stale] });
+  // The push is stubbed to succeed as well, because a hostile server's would:
+  // without it, the inflated sequence happens to make the *real* server's
+  // reply trip the global guard on the way out, and this test would pass for
+  // the wrong reason — refusal by coincidence rather than by the record check.
+  hostile.putRecords = async () => ({ status: 200, seq: state.highestSeq + 2 });
+
+  await assert.rejects(
+    () => syncOnce(vault, hostile, state),
+    (err) =>
+      err instanceof SyncError && err.code === 'rollback' && /older revision/.test(err.message),
+    'the served-back old envelope was accepted',
+  );
+  // And the rotation held.
+  assert.equal(vault.get(id).password, 'rotated');
 });
 
 test('pointing a vault at a server holding a different one says so', { ...skip }, async (t) => {

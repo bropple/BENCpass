@@ -426,6 +426,29 @@ export class Vault {
           // set, the body is not. A removal is honoured because the plaintext
           // says so, not because the envelope claims it.
           const body = await openRecord(this.#key, id, e.rev, e);
+
+          // A live record must never go backwards here.
+          //
+          // Belt and braces: merge() already refuses a server that serves a
+          // revision below the one it had acknowledged, which is the route an
+          // attacker actually has. This is the same rule one layer down, so
+          // that a future caller who forgets to merge cannot hand the vault an
+          // old envelope and roll a rotated-away password back. The envelope
+          // would open — it was genuinely sealed at that revision, so its AAD
+          // verifies — which is exactly why the check has to be here rather
+          // than left to the cryptography.
+          //
+          // Deliberately not "refuse every lower revision": a tombstone
+          // legitimately arrives below the local revision when a deletion on
+          // one machine races an edit on another, and merge resolves that in
+          // the tombstone's favour. Deleting is the fail-safe direction, so a
+          // regression is refused only when the body says the record is alive.
+          const cur = this.envelopes.get(id);
+          if (cur && e.rev < cur.rev && !body?.deleted) {
+            next.set(id, cur);
+            continue;
+          }
+
           if (body?.deleted) {
             this.#plain.delete(id);
             continue;

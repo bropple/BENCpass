@@ -27,7 +27,7 @@ import {
   addressSummary,
 } from '../core/address.js';
 import { generate } from '../core/generate.js';
-import { SyncClient, syncOnce, joinVault, loadSyncState, dumpSyncState } from '../core/sync.js';
+import { SyncClient, syncOnce, joinVault, loadSyncState, dumpSyncState, PROTOCOL } from '../core/sync.js';
 import { MSG, publicCandidate, publicAddress, isMessage, asString, asId } from './protocol.js';
 
 const AUTOLOCK_MS = 15 * 60 * 1000;
@@ -73,6 +73,7 @@ async function boot() {
     syncState = loadSyncState(s.syncState);
   }
   paintBadge();
+  scheduleSync();
 
   // Firefox opens the sidebar by itself when an extension carrying a
   // sidebar_action is installed — `open_at_install` defaults to true, and
@@ -164,6 +165,13 @@ function paintIcon() {
 /** Anchors already drawn in open tabs cannot see the vault; tell them. */
 async function broadcastLockState() {
   const shut = !vault || vault.locked;
+  // Extension pages first. tabs.sendMessage below only reaches content
+  // scripts, so a manager tab or the sidebar — which is not a tab at all —
+  // never heard about an idle auto-lock: the app pane stayed up, and a
+  // revealed password stayed on screen in front of a vault that was shut.
+  browser.runtime.sendMessage({ type: MSG.LOCKSTATE, locked: shut }).catch(() => {
+    /* no extension page open, which is normal */
+  });
   const tabs = await browser.tabs.query({}).catch(() => []);
   for (const tab of tabs) {
     browser.tabs
@@ -274,6 +282,8 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleJoin(msg, sender);
     case MSG.DEVICES:
       return handleDevices(sender);
+    case MSG.MINT_CODE:
+      return handleMintCode(sender);
     case MSG.DEVICE_FORGET:
       return handleDeviceForget(msg, sender);
     case MSG.DEVICE_RENAME:
@@ -610,6 +620,7 @@ async function handleUnlocked(sender) {
   bumpAutolock();
   paintBadge();
   broadcastLockState();
+  scheduleSync();
 
   const managerTab = sender.tab?.id;
   if (managerTab === undefined || !unlockReturns.has(managerTab)) return { ok: true };
@@ -974,6 +985,7 @@ async function handleJoin(msg, sender) {
   bumpAutolock();
   paintBadge();
   broadcastLockState();
+  scheduleSync();
 
   // The records come down the ordinary path, so there is one route that moves
   // them rather than two.
@@ -1018,6 +1030,58 @@ async function handleSyncForget(sender) {
   syncState = loadSyncState(null);
   await persistSettings();
   return { ok: true };
+}
+
+/**
+ * Mint a one-time enrolment code for the next machine.
+ *
+ * The server prints a bootstrap code only while zero devices are enrolled.
+ * After machine one, POST /v1/codes — a signed request only an enrolled
+ * machine can make — is the only way to mint another, and until this handler
+ * existed nothing in the extension ever called it: machines two and three
+ * were permanently locked out, while the deployment guide described a mint
+ * button that was never built.
+ */
+async function handleMintCode(sender) {
+  if (!isExtensionPage(sender)) return { ok: false };
+  const c = client();
+  if (!c) {
+    return {
+      ok: false,
+      reason: 'not-configured',
+      message:
+        'No server is configured, or this machine is not enrolled. Fill in Server and Enrollment code above first.',
+    };
+  }
+
+  try {
+    const { code, ttlSeconds } = await c.mintCode();
+    return { ok: true, code, ttlSeconds };
+  } catch (err) {
+    if (err?.code === 'unauthorised') {
+      // A 401 is what a revoked key returns, and it is also what a protocol
+      // mismatch returns. /v1/health names the server's protocol without a
+      // signature, so the two can be told apart here instead of both reading
+      // as a credential problem.
+      const check = await c.checkProtocol().catch(() => null);
+      if (check?.ok === false && (check.reason === 'client-too-old' || check.reason === 'server-too-old')) {
+        return {
+          ok: false,
+          reason: check.reason,
+          message:
+            `The server speaks protocol ${check.protocol} and this BENCpass speaks ${PROTOCOL}. ` +
+            (check.reason === 'client-too-old' ? 'Update the extension.' : 'Update the server.'),
+        };
+      }
+      return {
+        ok: false,
+        reason: 'unauthorised',
+        message:
+          "The server refused this machine's key. If this machine was revoked, enrol it again with a fresh code.",
+      };
+    }
+    return { ok: false, reason: err?.code ?? 'error', message: String(err?.message ?? err) };
+  }
 }
 
 async function handleDevices(sender) {
@@ -1285,6 +1349,7 @@ async function handleBioUnlock(msg, sender) {
   bumpAutolock();
   paintBadge();
   broadcastLockState();
+  scheduleSync();
 
   // Asked from the menu on a login field: put that menu back, against the same
   // field, now with entries in it. Otherwise the fingerprint opens the vault
@@ -1514,9 +1579,23 @@ async function handleSync() {
 }
 
 // Sync runs on a locked vault — the merge needs nothing inside the ciphertext —
-// so this does not wait for an unlock.
+// so this does not wait for an unlock, and locking does not stop it either.
+//
+// It used to wait, by accident: the only call was in handleUnlock, which only
+// the popup's password form reaches. Unlocking through the manager gate, the
+// sidebar, or a fingerprint never started the timer, so a machine that always
+// unlocked one of those ways synced exactly never. Now boot() starts it, and
+// the unlock and join paths re-assert it in case a later change makes boot
+// conditional again.
+//
+// One interval, however many times this is called. The old version stacked a
+// fresh setInterval per call — one more every popup unlock — until a day's use
+// had the vault syncing every few seconds.
+let syncTimer = null;
+
 function scheduleSync() {
-  setInterval(() => {
+  clearInterval(syncTimer);
+  syncTimer = setInterval(() => {
     // handleSync checks consent itself; this only avoids waking for a machine
     // with no server configured at all.
     if (client()) handleSync().catch(() => {});

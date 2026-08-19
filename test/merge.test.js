@@ -9,6 +9,7 @@ import {
   ACCEPT_NEW,
   IN_SYNC,
   CONFLICT,
+  ROLLBACK,
 } from '../src/core/merge.js';
 
 // Envelopes only. The merge never sees plaintext, which is the point: it cannot
@@ -164,6 +165,95 @@ test('equal revisions with identical bytes really are in sync', () => {
   assert.equal(r.actions.get('a'), IN_SYNC);
   assert.deepEqual(r.toPush, []);
   assert.deepEqual(r.conflicts, []);
+});
+
+// The server chooses the global sequence number freely, so guardRollback in
+// sync.js cannot see a per-record rollback: a hostile server re-serves an OLD
+// but genuinely-authentic envelope (this client really sealed it at that rev,
+// so its AAD verifies) under a fresh sequence number. Before the fix, the
+// fast-forward branch accepted it because it only checked l.rev === base,
+// never that the remote had actually moved forward.
+
+test('a rotated password is not rolled back by a re-served old envelope', () => {
+  // The user rotated a leaked password (rev 1 → 2) and synced; the server
+  // then re-serves the authentic rev-1 envelope holding the leaked password.
+  const r = merge({
+    local: [env('a', 2)],
+    remote: [env('a', 1)],
+    syncedRev: { a: 2 },
+  });
+  assert.equal(r.actions.get('a'), ROLLBACK);
+  // The rotated password stays, and is pushed so the server is corrected even
+  // by a caller that never looks at rolledBack.
+  assert.equal(r.envelopes.get('a').rev, 2);
+  assert.deepEqual(r.toPush.map((e) => e.rev), [2]);
+  // The ancestor does not regress; confirmPushed advances it, as always.
+  assert.equal(r.syncedRev.get('a'), 2);
+  // And the attack is named, not healed quietly — sync.js refuses loudly on
+  // the global sequence, and this is the same fact one level down.
+  assert.equal(r.rolledBack.length, 1);
+  assert.equal(r.rolledBack[0].id, 'a');
+  assert.equal(r.rolledBack[0].remote.rev, 1);
+});
+
+test('a deleted record is not resurrected by a re-served live envelope', () => {
+  // The user deleted the record (tombstone at rev 2) and synced; the server
+  // re-serves the live rev-1 envelope, password and all. Before the fix the
+  // fast-forward `continue` ran before the tombstone-wins logic ever could.
+  const r = merge({
+    local: [env('a', 2, true)],
+    remote: [env('a', 1)],
+    syncedRev: { a: 2 },
+  });
+  assert.equal(r.actions.get('a'), ROLLBACK);
+  assert.equal(r.envelopes.get('a').deleted, true);
+  assert.deepEqual(r.toPush.map((e) => e.deleted), [true]);
+  assert.equal(r.rolledBack.length, 1);
+});
+
+test('a re-served old envelope is a rollback even when we also edited', () => {
+  // Base 5, local at 7, and the server serving 3 — something it already
+  // acknowledged moving past. That is not a fork to offer the user (the
+  // "other version" would be their own leaked password); it is the server
+  // going backwards, and it is named as such.
+  const r = merge({
+    local: [env('a', 7)],
+    remote: [env('a', 3)],
+    syncedRev: { a: 5 },
+  });
+  assert.equal(r.actions.get('a'), ROLLBACK);
+  assert.equal(r.envelopes.get('a').rev, 7);
+  assert.deepEqual(r.toPush.map((e) => e.rev), [7]);
+  assert.deepEqual(r.conflicts, []);
+  assert.equal(r.rolledBack.length, 1);
+});
+
+test('a tombstone is never discarded by a lower-rev live envelope, with no ancestor', () => {
+  // No recorded ancestor, so the rollback check cannot fire; the divergence
+  // path must still let the tombstone win rather than resurrect the record.
+  const r = merge({
+    local: [env('a', 5, true)],
+    remote: [env('a', 3)],
+    syncedRev: {},
+  });
+  assert.equal(r.envelopes.get('a').deleted, true);
+  assert.equal(r.actions.get('a'), CONFLICT);
+  assert.equal(r.conflicts[0].kind, 'delete');
+});
+
+test('a genuine fast-forward still works, and reports no rollback', () => {
+  // The fix must not break normal sync: the server really did move forward,
+  // so the remote is adopted exactly as before.
+  const r = merge({
+    local: [env('a', 2)],
+    remote: [env('a', 3)],
+    syncedRev: { a: 2 },
+  });
+  assert.equal(r.actions.get('a'), FAST_FORWARD);
+  assert.equal(r.envelopes.get('a').rev, 3);
+  assert.equal(r.syncedRev.get('a'), 3);
+  assert.deepEqual(r.toPush, []);
+  assert.deepEqual(r.rolledBack, []);
 });
 
 test('a same-numbered tombstone still beats a same-numbered edit', () => {

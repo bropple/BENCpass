@@ -153,7 +153,11 @@ page shows the version, the sequence number and how many devices are enrolled.
 
 ## Machines two and three: join it
 
-On machine one, gear → **Sync** → mint a code for the next machine.
+On machine one, gear → **Sync** → **Add a machine** → **Mint a code**. The
+code appears once and is not stored anywhere: like the bootstrap code, it works
+once and expires in 30 minutes, so mint another if it lapses. Treat it like a
+key while it lives — whoever redeems it first enrols a machine with full access
+to the vault.
 
 Then on the new machine, at the BENCpass gate, choose
 **"Already have a vault on a server? Join it"** and give it:

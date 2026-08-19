@@ -276,10 +276,36 @@ export class SyncClient {
     };
   }
 
+  /**
+   * Mint a one-time enrolment code for the next machine.
+   *
+   * Signed like everything else, because a code buys a device key and a device
+   * key is a full peer on the vault. The server prints a code by itself only
+   * while zero devices are enrolled; after machine one, this request is the
+   * only way in for machines two and three.
+   *
+   * The lifetime comes back from the server as `ttlSeconds` and is passed
+   * through rather than restated here — the server decides when the code dies,
+   * and a number typed on this side would drift the first time that decision
+   * changed. Absent (a server too old to report it), it is null, not a guess.
+   *
+   * A 401 gets its own error code because the caller can act on it: it is
+   * either a revoked device key or a protocol mismatch, and telling those
+   * apart (via checkProtocol) beats reporting both as "could not mint".
+   */
   async mintCode() {
     const { status, body } = await this.request('POST', '/v1/codes');
-    if (status !== 200) throw new SyncError('could not mint an enrolment code', 'code');
-    return body.code;
+    if (status === 401) {
+      throw new SyncError("the server refused this device's key (401)", 'unauthorised');
+    }
+    if (status !== 200 || !body.code) {
+      throw new SyncError(
+        `could not mint an enrolment code (${status}: ${body.error ?? 'unknown'})`,
+        'code',
+      );
+    }
+    const ttl = Number(body.ttlSeconds);
+    return { code: body.code, ttlSeconds: ttl > 0 ? ttl : null };
   }
 
   async getRecords(since = 0) {
@@ -474,6 +500,7 @@ export async function syncOnce(vault, client, state) {
     remote: pulled.records,
     syncedRev: state.syncedRev,
   });
+  guardRecordRollback(result);
 
   await vault.applyEnvelopes(result.envelopes);
   state.seq = pulled.seq;
@@ -500,6 +527,7 @@ export async function syncOnce(vault, client, state) {
       remote: again.records,
       syncedRev: state.syncedRev,
     });
+    guardRecordRollback(result);
     await vault.applyEnvelopes(result.envelopes);
     state.seq = again.seq;
     state.highestSeq = Math.max(state.highestSeq, again.seq);
@@ -525,6 +553,29 @@ export async function syncOnce(vault, client, state) {
     conflicts: result.conflicts,
     seq: state.seq,
   };
+}
+
+/**
+ * Refuse a per-record rollback the way guardRollback refuses a global one.
+ *
+ * merge() has already done the right thing with the data — it keeps the local
+ * envelope and queues it for pushing when the server serves a lower revision
+ * for a record than it had already acknowledged. But healing quietly is not
+ * this file's stance: a server doing that is a restored backup or something
+ * standing in for the server, and the person syncing against it has to be
+ * told, not corrected behind their back. The reason code is 'rollback' on
+ * purpose — the manager's "This server was rebuilt" row already knows how to
+ * explain this refusal, warning included.
+ */
+function guardRecordRollback(result) {
+  const n = result.rolledBack.length;
+  if (n) {
+    throw new SyncError(
+      `the server served an older revision than it had already acknowledged for ` +
+        `${n} record${n === 1 ? '' : 's'} — refusing a rollback`,
+      'rollback',
+    );
+  }
 }
 
 function guardRollback(seq, state) {

@@ -426,6 +426,29 @@
         </div>
       </div>
 
+      <!-- The server prints a code by itself only while nothing is enrolled.
+           After machine one, this button is the only way machines two and
+           three get in: minting needs a signed request, and a signed request
+           needs a machine that already has a key. The code is shown once and
+           never stored, like the recovery code — whoever redeems it first
+           becomes a full peer on the vault. -->
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Add a machine</span>
+          <span class="setting-note">
+            Mints a one-time enrolment code for the next machine. On that
+            machine, choose <em>Join it</em> at the BENCpass gate and give it
+            this server's address, the code, and the same master password.
+          </span>
+          <p class="mint-code" id="s-mint-code" hidden></p>
+          <p class="settings-note" id="s-mint-note" role="status"></p>
+        </div>
+        <div class="setting-actions">
+          <button type="button" class="btn btn-sm" id="s-mint-btn">Mint a code</button>
+          <button type="button" class="btn btn-sm" id="s-mint-copy" hidden>Copy</button>
+        </div>
+      </div>
+
       <h3 class="settings-group">Filling</h3>
 
       <label class="setting">
