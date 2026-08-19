@@ -11,8 +11,8 @@
 // accommodate the camera.
 
 import { createServer } from 'node:http';
-import { readFile, writeFile } from 'node:fs/promises';
-import { extname, join, normalize } from 'node:path';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { dirname, extname, join, normalize } from 'node:path';
 
 const root = process.argv[2] ?? process.cwd();
 const port = Number(process.argv[3] ?? 8731);
@@ -36,9 +36,23 @@ createServer(async (req, res) => {
   // be screenshotted separately and cannot be clicked from outside, so the page
   // reports its own results and this writes them where the shell can read them.
   if (url.pathname === '/__result' && req.method === 'POST') {
+    // Bounded. The self-test posts a few kilobytes of JSON; anything much
+    // larger is a mistake or a browser gone wrong, and a dev server that grows
+    // a string until the machine notices is a poor way to find that out.
     let body = '';
-    for await (const chunk of req) body += chunk;
-    await writeFile(process.env.RESULT_FILE ?? '/tmp/bencpass-selftest.json', body);
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 1_000_000) {
+        res.writeHead(413).end();
+        return;
+      }
+    }
+    // Under build/ by default rather than a fixed name in a shared /tmp, where
+    // anyone on the machine can sit on the path first. selftest.sh sets
+    // RESULT_FILE explicitly; this is only the fallback.
+    const resultFile = process.env.RESULT_FILE ?? join(root, 'build', 'selftest.json');
+    await mkdir(dirname(resultFile), { recursive: true });
+    await writeFile(resultFile, body);
     res.writeHead(204).end();
     return;
   }

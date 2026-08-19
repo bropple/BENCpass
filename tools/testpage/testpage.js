@@ -95,12 +95,34 @@ document.getElementById('e-next').addEventListener('click', () => {
   if (slot.querySelector('form')) return;
   document.getElementById('step-one').hidden = true;
 
+  // Built node by node rather than with innerHTML. This is a test page and the
+  // only thing it can attack is itself — but a password manager's repository is
+  // a poor place to keep a worked example of interpolating a form field into
+  // markup, and the extension itself is held to exactly this rule.
   const form = document.createElement('form');
-  form.innerHTML = `
-    <p>Enter password for <strong>${document.getElementById('e1').value || 'that account'}</strong></p>
-    <label for="e2">Password</label>
-    <input id="e2" name="passwd" type="password" autocomplete="current-password">
-    <button>Sign in</button>`;
+
+  const p = document.createElement('p');
+  p.append(document.createTextNode('Enter password for '));
+  const who = document.createElement('strong');
+  who.textContent = document.getElementById('e1').value || 'that account';
+  p.append(who);
+  form.append(p);
+
+  const label = document.createElement('label');
+  label.htmlFor = 'e2';
+  label.textContent = 'Password';
+  form.append(label);
+
+  const input = document.createElement('input');
+  input.id = 'e2';
+  input.name = 'passwd';
+  input.type = 'password';
+  input.autocomplete = 'current-password';
+  form.append(input);
+
+  const button = document.createElement('button');
+  button.textContent = 'Sign in';
+  form.append(button);
   slot.append(form);
 });
 

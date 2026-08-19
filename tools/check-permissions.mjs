@@ -12,7 +12,7 @@
 //
 //   node tools/check-permissions.mjs
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -20,9 +20,13 @@ const manifest = JSON.parse(readFileSync(join(root, 'src/manifest.json'), 'utf8'
 
 /** Every .js and .html under src/, minus vendored code we do not own. */
 function sources(dir, out = []) {
-  for (const name of readdirSync(dir)) {
+  // withFileTypes rather than a separate statSync: one call answers what each
+  // entry is, so there is no window between asking and reading in which the
+  // answer could change.
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const name = entry.name;
     const path = join(dir, name);
-    if (statSync(path).isDirectory()) {
+    if (entry.isDirectory()) {
       if (name !== 'vendor') sources(path, out);
       // .js only. An API can only be called from script, and the extension CSP
       // forbids inline script — so an HTML file cannot use a permission, and

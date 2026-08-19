@@ -92,7 +92,12 @@ wrapped.push(line);
 
 const block =
   'const COUNTRY_TABLE =\n' +
-  wrapped.map((l, i) => `  '${i ? '|' : ''}${l.replace(/'/g, "\\'")}'`).join(' +\n') +
+  // Backslash first, then quote. Escaping the quote alone means a name
+  // containing a backslash emits `\'` as an escaped quote rather than an
+  // escaped backslash, and the generated line stops being the string it was
+  // meant to be — in a file that ships. No country name contains one today,
+  // which is exactly why this would have been found late.
+  wrapped.map((l, i) => `  '${i ? '|' : ''}${l.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`).join(' +\n') +
   ';';
 
 // Matched before it is replaced, so that "the table is already correct" and

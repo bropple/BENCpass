@@ -380,7 +380,7 @@ test('the second address is used when the first cannot be reached', async () => 
   const { status } = await client.request('GET', '/v1/changes?since=0');
   assert.equal(status, 200);
   assert.equal(fetch.seen.length, 2);
-  assert.ok(fetch.seen[1].startsWith('https://tail.ts.net'));
+  assert.equal(new URL(fetch.seen[1]).origin, 'https://tail.ts.net');
 });
 
 test('the address that answered is remembered, so the dead one is not retried', async () => {
@@ -430,8 +430,11 @@ test('when no address answers, the error names every one that was tried', async 
 
   await assert.rejects(() => client.request('GET', '/v1/changes?since=0'), (err) => {
     assert.equal(err.code, 'unreachable');
-    assert.match(err.message, /lan:8788/);
-    assert.match(err.message, /tail\.ts\.net/);
+    // includes(), not a bare regex: these are substring checks on an error
+    // message and saying so plainly is clearer than a pattern that reads like
+    // a host test and is scanned as one.
+    assert.ok(err.message.includes('lan:8788'), err.message);
+    assert.ok(err.message.includes('tail.ts.net'), err.message);
     return true;
   });
 });
@@ -633,7 +636,9 @@ test('a remembered address is tried first, and is matched by name not position',
   });
   await client.request('GET', '/v1/changes?since=0');
   assert.equal(fetch.seen.length, 1);
-  assert.ok(fetch.seen[0].startsWith('https://tail.ts.net'));
+  // The whole address, not a prefix: startsWith on a bare host is also true
+  // of https://tail.ts.net.evil.example, which is not what this asserts.
+  assert.equal(new URL(fetch.seen[0]).origin, 'https://tail.ts.net');
 });
 
 test('a remembered address that is no longer configured is ignored', async () => {
