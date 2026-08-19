@@ -9,6 +9,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Nothing here publishes anything. Stated rather than inherited, because the
+# repository-wide default can be write-all and a workflow that runs the
+# repository's own test scripts should not be holding a token that can push.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: tests and lint

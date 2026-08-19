@@ -52,6 +52,15 @@ jobs:
           # here.
           queries: security-extended
 
+      # autobuild compiles the Go it finds, and what it finds now includes the
+      # rescue tool, which needs cgo and a windowing stack. Without this the Go
+      # leg fails on a missing GLFW header — the same wall govulncheck hit
+      # twice. It is currently masked by CodeQL failing for want of GHAS on a
+      # private repository, and would surface the day that changes.
+      - name: Toolkit dependencies
+        if: matrix.language == 'go'
+        run: tools/linux-gui-deps.sh
+
       - uses: github/codeql-action/autobuild@v3
 
       - uses: github/codeql-action/analyze@v3

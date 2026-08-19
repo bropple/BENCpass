@@ -20,8 +20,11 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# Read by default. The publishing job asks for more, and the three rescue build
+# jobs — which run a toolchain over a large dependency tree — get nothing they
+# do not need.
 permissions:
-  contents: write # to create the release and upload the .xpi
+  contents: read
 
 jobs:
   # The rescue tool ships with the release rather than separately. Somebody who
@@ -47,8 +50,8 @@ jobs:
             archive: zip
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.26.6'
           cache: false
@@ -100,7 +103,7 @@ jobs:
             tar czf "${name}.tar.gz" "${{ matrix.binary }}"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rescue-${{ matrix.name }}
           path: |
@@ -112,8 +115,12 @@ jobs:
     name: Build, sign, publish
     needs: rescue
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload the .xpi
+      id-token: write # sign the provenance attestation
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # The whole history, so `git describe` can find the previous tag. The
           # default shallow checkout has no HEAD^ at all, which made the release
@@ -121,7 +128,7 @@ jobs:
           # first.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -162,7 +169,7 @@ jobs:
       - name: Tests
         run: npm test
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.26.6'
           cache: false
@@ -208,11 +215,31 @@ jobs:
           echo "signed: $xpi"
 
       - name: Collect the rescue binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: rescue-*
           path: build/rescue
           merge-multiple: true
+
+      # The .xpi arrives with Mozilla's signature on it. The rescue binaries
+      # arrive with nothing, and they are the ones a person pipes their master
+      # password into. Anyone who can edit a release — a leaked token, a
+      # compromised account — could otherwise swap one for a trojan and nobody
+      # downstream could tell.
+      #
+      # Checksums so a download can be checked against the release page, and an
+      # attestation so it can be checked against *this workflow run and commit*
+      # instead, which is the part a checksum sitting beside the file cannot do.
+      - name: Checksums
+        run: |
+          cd build/rescue
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest what built these
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: 'build/rescue/*.tar.gz,build/rescue/*.zip'
 
       - name: Publish
         env:
@@ -226,7 +253,7 @@ jobs:
       # Kept for the same reason the build is kept on every CI run: if the
       # release step fails after signing, the signed file is not lost and does
       # not have to be bought with another version number.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: bencpass-signed

@@ -1,8 +1,6 @@
-Copyright (c) 2010 Dimitar Toshkov Zhekov,
-with Reserved Font Name "Terminus Font".
+Copyright (c) 2012, Carrois Type Design, Ralph du Carrois (post@carrois.com www.carrois.com), with Reserved Font Name 'Share'.
 
-Copyright (c) 2011-2023 Tilman Blumenbach,
-with Reserved Font Name "Terminus (TTF)".
+Copyright 2011, The VT323 Project Authors (peter.hull@oikoi.com).
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

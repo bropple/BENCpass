@@ -45,6 +45,27 @@ Binaries for macOS, Windows and Linux are attached to every
 Keep a copy with your backup. The day you need it is a bad day to be
 downloading things.
 
+### Check it before you trust it
+
+This program is one you type your master password into, so it is worth thirty
+seconds. The `.xpi` beside it carries Mozilla's signature; these do not, so they
+carry two other things instead.
+
+```sh
+sha256sum -c SHA256SUMS                       # matches the release page
+gh attestation verify bencpass-rescue-Linux.tar.gz --repo bropple/BENCpass
+```
+
+The second is the stronger one. A checksum sitting on the same page as the file
+only proves they agree; the attestation ties the archive to the workflow run and
+the commit that built it, which is what would catch a release asset being
+swapped by anyone who could edit the release.
+
+**On macOS** an unsigned binary from a downloaded archive is refused by
+Gatekeeper — "cannot be opened because the developer cannot be verified". The
+checksum does not change that; right-click → Open, or
+`xattr -d com.apple.quarantine bencpass-rescue`, until these are notarized.
+
 ---
 
 ## Using it

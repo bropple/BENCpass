@@ -10,6 +10,8 @@ import {
   parseCsv,
   TransferError,
   MAX_RECORDS,
+  MAX_FIELD,
+  MAX_URLS,
 } from '../src/core/transfer.js';
 import { newRecord, LOGIN, ADDRESS } from '../src/core/model.js';
 
@@ -311,4 +313,17 @@ test('a javascript: url cannot arrive as somewhere to fill', async () => {
   );
   assert.deepEqual(r.urls, ['javascript:alert(1)']);
   assert.equal(scoreUrl('javascript:alert(1)', 'example.com'), 0);
+});
+
+test('a huge url cannot slip past the field cap', () => {
+  // Every other field goes through `str`, which caps at MAX_FIELD. urls was
+  // filtered for strings and nothing else, so one enormous entry imported
+  // intact and was then sealed, re-sealed on every edit, and walked by the
+  // matcher on every page load.
+  const huge = 'https://example.com/' + 'a'.repeat(MAX_FIELD * 3);
+  const [rec] = fromJson(
+    JSON.stringify({ records: [{ type: 'login', title: 't', urls: [huge, ...Array(200).fill('https://b.example')] }] }),
+  );
+  assert.ok(rec.urls[0].length <= MAX_FIELD, `url kept ${rec.urls[0].length} characters`);
+  assert.ok(rec.urls.length <= MAX_URLS, `kept ${rec.urls.length} urls`);
 });

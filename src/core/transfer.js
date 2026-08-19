@@ -37,14 +37,22 @@ export const EXPORT_VERSION = 1;
 export const MAX_RECORDS = 10_000;
 export const MAX_TEXT = 32 * 1024 * 1024; // characters of input
 export const MAX_FIELD = 64 * 1024; // characters in any one field
+export const MAX_URLS = 64; // sites on one login
 
 // ---- out --------------------------------------------------------------------
 
 /**
- * The whole vault as JSON: both record types, every field, no loss.
+ * The whole vault as JSON: both record types, and every field that is yours.
  *
  * This is the format to keep. The CSV below is for handing to another program,
  * and it silently drops everything a spreadsheet has no column for.
+ *
+ * "No loss" would be too strong in one direction: importing this back builds
+ * each record from the known field set, so custom fields and the timestamps —
+ * created, updated, passwordChanged, and the use counts — are re-stamped at
+ * import time rather than restored. That is deliberate, and it is why a record
+ * arriving from a file cannot bring its own shape with it; but it means a
+ * restore from JSON loses password ages, not that the export omits them.
  */
 export function toJson(records, now = Date.now()) {
   return `${JSON.stringify(
@@ -149,7 +157,15 @@ function recordFrom(raw, now = Date.now()) {
     return emptyAddress(rec) ? null : rec;
   }
 
-  const urls = Array.isArray(raw.urls) ? raw.urls.filter((u) => typeof u === 'string') : [];
+  // Through `str` like every other field, and capped in number as well.
+  // Filtering for strings and stopping there was the one way into a record
+  // that skipped MAX_FIELD: a 200,000-character "url" imported intact, was
+  // sealed into storage, re-sealed on every edit afterwards, and walked by the
+  // matcher on every page load. Bounded by MAX_TEXT overall, so it was never
+  // an escape — just the one field where the limit did not apply.
+  const urls = Array.isArray(raw.urls)
+    ? raw.urls.filter((u) => typeof u === 'string').slice(0, MAX_URLS).map(str)
+    : [];
   const rec = newRecord(
     {
       type: LOGIN,
