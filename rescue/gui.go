@@ -1,11 +1,7 @@
 package main
 
-import (
-	"fmt"
-	"os"
-)
+import "ropple.net/bencpass/rescue/internal/ui"
 
-func runGUI(path string) int {
-	fmt.Fprintln(os.Stderr, "the window is not built into this binary yet; see -help")
-	return 2
-}
+// The window. Kept behind one function so main.go says nothing about a
+// toolkit, and so a build that cannot draw one has a single thing to replace.
+func runGUI(path string) int { return ui.Run(path, Version) }

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <!-- P. Gon with a medical kit, for BENCpass Rescue.
+       P. Gon's colours are canon and come from the roster in the design style
+       guide: fill #3d7dbf, edge #254d75, with the grey visor and the Alert Red
+       stripe. Nothing here invents a colour. -->
+  <g transform="translate(10,10) scale(0.9)">
+    <path d="M 100.00,16.00 L 179.89,74.04 L 149.37,167.96 L 50.63,167.96 L 20.11,74.04 Z"
+          fill="#3d7dbf" stroke="#254d75" stroke-width="1"/>
+    <rect x="53.80" y="95.80" width="92.40" height="28.56" fill="#9a9d94"/>
+    <rect x="70.60" y="103.36" width="58.80" height="13.44" fill="#d84a3a"/>
+  </g>
+
+  <!-- The kit. Held at the lower right, overlapping the edge so it reads as
+       carried rather than as a second object sharing the frame. -->
+  <rect x="139" y="120" width="20" height="11" rx="3" fill="#4a4d46"/>
+  <rect x="118" y="128" width="62" height="46" rx="5"
+        fill="#e6e9e0" stroke="#4a4d46" stroke-width="3"/>
+  <rect x="142" y="136" width="14" height="30" fill="#d84a3a"/>
+  <rect x="134" y="144" width="30" height="14" fill="#d84a3a"/>
+</svg>

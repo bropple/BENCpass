@@ -12,6 +12,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"ropple.net/bencpass/rescue/internal/vault"
@@ -55,7 +56,7 @@ func main() {
 		recovery = flag.Bool("recovery", false, "unlock with the recovery code")
 		version  = flag.Bool("version", false, "print the version")
 	)
-	flag.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	flag.Usage = func() { io.WriteString(os.Stderr, usage) }
 	flag.Parse()
 
 	if *version {
