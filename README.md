@@ -60,7 +60,7 @@ The manifest says so in the form Firefox checks:
 ```json
 "data_collection_permissions": {
   "required": ["none"],
-  "optional": ["authenticationInfo", "personallyIdentifyingInfo"]
+  "optional": ["authenticationInfo", "personallyIdentifyingInfo", "browsingActivity"]
 }
 ```
 

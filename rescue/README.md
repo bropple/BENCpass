@@ -61,6 +61,14 @@ only proves they agree; the attestation ties the archive to the workflow run and
 the commit that built it, which is what would catch a release asset being
 swapped by anyone who could edit the release.
 
+It has to be the attestation, because **these binaries are not byte-reproducible
+and cannot be.** The tool needs cgo and links against the host's OpenGL, X11,
+Wayland and C libraries, so the bytes depend on the machine that built it; a
+rebuild from the same commit produces a working, identical-behaving binary with
+a different hash. Rebuilding is a fine way to satisfy yourself the source
+compiles to something that behaves the same. It is not a way to check the
+download, and nothing here pretends otherwise.
+
 **On macOS** an unsigned binary from a downloaded archive is refused by
 Gatekeeper — "cannot be opened because the developer cannot be verified". The
 checksum does not change that; right-click → Open, or

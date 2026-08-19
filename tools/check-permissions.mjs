@@ -117,3 +117,38 @@ if (unused.length) {
 }
 
 console.log(`every requested permission is used (${(manifest.permissions ?? []).length} checked)`);
+
+// ---- the data collection declaration, and the documents that quote it -------
+//
+// This add-on handles passwords and addresses, so what it declares under
+// `data_collection_permissions` is the single most read line in the manifest.
+// Two documents quote it back, and a quote drifts: README.md's copy fell a
+// category behind the manifest and sat there through several reviews, saying
+// two things where the manifest said three.
+//
+// A reviewer comparing the two finds a password manager understating what it
+// collects. That it was a stale paste rather than a claim is not something the
+// reader can know, which is why this is checked rather than proof-read.
+const declared =
+  manifest.browser_specific_settings?.gecko?.data_collection_permissions ?? {};
+const categories = [...(declared.required ?? []), ...(declared.optional ?? [])];
+
+const quoting = ['README.md', 'REVIEWERS.md'];
+const missing = [];
+for (const doc of quoting) {
+  const text = readFileSync(join(root, doc), 'utf8');
+  for (const category of categories) {
+    if (!text.includes(category)) missing.push(`${doc} never mentions ${category}`);
+  }
+}
+
+if (missing.length) {
+  console.error(
+    'the data collection declaration and the documents describing it disagree:\n' +
+      missing.map((m) => `  ${m}`).join('\n') +
+      '\n\nUpdate the document, or the manifest, so that they say the same thing.',
+  );
+  process.exit(1);
+}
+
+console.log(`every declared data category is described (${categories.length} checked)`);
