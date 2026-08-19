@@ -63,6 +63,44 @@ jobs:
         run: "$(go env GOPATH)/bin/govulncheck ./..."
         working-directory: rescue
 
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26.6'
+          cache: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      # Semgrep is a gate because the repository passes it clean today, so any
+      # finding from here on is signal rather than a backlog to argue with.
+      #
+      # p/trailofbits is deliberately not included: its one hit is the TrueNAS
+      # compose file binding 8788 on all interfaces, which is the documented
+      # deployment and would need a permanent ignore to keep quiet.
+      - name: semgrep
+        run: |
+          pip install --quiet semgrep
+          semgrep --metrics=off --error             --config=p/golang --config=p/security-audit --config=p/secrets             rescue server
+          semgrep --metrics=off --error             --config=p/javascript --config=p/security-audit --config=p/secrets             --exclude=src/vendor             src test tools
+
+      # gosec at high/high only, and the threshold is the point rather than a
+      # convenience. At its defaults it reports ten things here of which nine
+      # are noise — deliberate byte extraction from colour constants, an
+      # ignored Close on a read path, opening the very file the user named —
+      # and a gate that is nine parts noise is a gate people learn to force
+      # through. This catches the flagrant and admits it catches little else.
+      - name: gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+          for module in rescue server; do
+            (cd "$module" && "$(go env GOPATH)/bin/gosec" -severity high -confidence high -quiet ./...)
+          done
+
   npm-audit:
     name: npm dependencies
     runs-on: ubuntu-latest

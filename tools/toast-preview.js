@@ -48,4 +48,10 @@ await import('../src/ext/toast.js');
 // The real notice id arrives by postMessage from the content script that framed
 // the toast. At top level `window.parent` is `window`, so posting to ourselves
 // satisfies the same check.
-window.postMessage({ bencpass: 'notice', noticeId: 'preview' }, '*');
+// Addressed to this page rather than broadcast, matching what the content
+// script does for real. Under file:// the origin is opaque and postMessage
+// will not take "null" as a target, so that case keeps the wildcard.
+window.postMessage(
+  { bencpass: 'notice', noticeId: 'preview' },
+  window.location.origin === 'null' ? '*' : window.location.origin,
+);

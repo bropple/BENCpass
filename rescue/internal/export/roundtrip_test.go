@@ -224,3 +224,31 @@ func TestRefusesToWriteThroughASymlink(t *testing.T) {
 		t.Error("the link's target was created anyway")
 	}
 }
+
+// The symlink refusal has to be the kernel's, not a check in front of it.
+//
+// WriteReplacing does an Lstat and then an open, which is two calls and so a
+// race: an attacker who can write to the directory can swap a link in between
+// and take the export. O_NOFOLLOW closes that, and this test reaches past the
+// Lstat to prove it — with both in place, a passing test cannot say which one
+// did the work.
+func TestTheKernelItselfRefusesTheSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no O_NOFOLLOW; the Lstat is what stands there")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "attacker-chose-this")
+	link := filepath.Join(dir, "export.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot symlink here: %v", err)
+	}
+
+	f, err := openForReplacing(link)
+	if err == nil {
+		f.Close()
+		t.Fatal("the open followed a symlink; only the Lstat was standing between a password file and an attacker's path")
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Error("the link's target was created")
+	}
+}

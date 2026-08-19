@@ -269,6 +269,25 @@ both should be readable. The tests are cross-language for that reason: the Go
 fixtures are sealed by `src/core/` itself, and its exports are read back by
 `src/core/transfer.js`, so the two cannot drift unnoticed.
 
+## Two things that look worse than they are, if you grep for them
+
+**`postMessage(..., '*')` in `ext/toast.js`.** The toast is framed by the page
+and cannot close itself, so it asks the page to do it. The message is the
+constant `{ bencpass: 'toast-close' }` and carries nothing else; the recipient
+is the page that framed it, which already knows it did. The target is now the
+page's own origin, learned from the message that handed the toast its notice id
+— the wildcard survives only as the fallback for a sandboxed or `about:blank`
+parent, whose origin is opaque and cannot be named. Every check that matters is
+on the *inbound* path: `event.source` must be the framing window, and the id is
+an opaque 128-bit value the background validates against a session it created.
+
+**`window.bencpass` on the background page.** It exposes the live vault object
+to `getBackgroundPage()`, which only same-extension pages can call — the manager
+and the sidebar. A content script cannot reach it and neither can a web page.
+It is the ordinary MV2 arrangement for sharing state between an extension's own
+documents, and it is named after the product, which is why it is worth saying
+here rather than leaving you to wonder.
+
 ## Things a reviewer may notice, answered
 
 **MV2.** The unlocked vault key lives in a persistent background page and is a

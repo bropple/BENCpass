@@ -141,12 +141,16 @@ func csvCell(s string) string {
 // has no such protection, and the dialog's default filename is predictable
 // enough to plant one for.
 func WriteReplacing(path string, content []byte) error {
+	// Two checks for one property, and the order matters. The Lstat is for the
+	// error message; O_NOFOLLOW is the actual refusal, because a check and an
+	// open are two calls and anything between them is a race an attacker with
+	// write access to the directory can win.
 	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s is a symbolic link — writing every password through it "+
 			"would put them somewhere you did not choose", path)
 	}
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := openForReplacing(path)
 	if err != nil {
 		return err
 	}
@@ -163,7 +167,27 @@ func WriteReplacing(path string, content []byte) error {
 	if _, err := f.Write(content); err != nil {
 		return err
 	}
+	// On disk before the program says it is. This file is written by somebody
+	// whose machine is already misbehaving, and a rescue export lost to a power
+	// cut moments later is the whole exercise wasted.
+	if err := f.Sync(); err != nil {
+		return err
+	}
 	return f.Close()
+}
+
+// openForReplacing is the half of WriteReplacing that the kernel enforces.
+//
+// Separate so that a test can reach it without the Lstat in front of it: with
+// both, a test cannot tell which one refused the symlink, and the racy version
+// this replaced would pass just as well.
+func openForReplacing(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|noFollow, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("%s could not be opened for writing "+
+			"(a symbolic link is refused here): %w", path, err)
+	}
+	return f, nil
 }
 
 // ToFile writes an export, refusing to overwrite anything.
@@ -184,6 +208,9 @@ func ToFile(path string, content []byte) error {
 	}
 	defer f.Close()
 	if _, err := f.Write(content); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
 		return err
 	}
 	return f.Close()

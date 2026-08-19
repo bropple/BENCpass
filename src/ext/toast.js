@@ -57,7 +57,24 @@ async function render() {
   $('save').focus();
 }
 
-const close = () => window.parent.postMessage({ bencpass: 'toast-close' }, '*');
+// Where the page that framed this document lives, learned from the message
+// that handed over the notice id — the content script posts from the page's
+// context, so that message's origin is the page's own.
+//
+// Kept so the close can be addressed rather than broadcast. It carries no
+// secret, and a page that framed this document already knows it did, so '*'
+// disclosed nothing; but a wildcard postMessage in a password manager is a
+// thing a reader has to stop and reason about, and not having one is cheaper
+// than explaining it. Sandboxed and about:blank parents report the opaque
+// origin "null", which is not a valid target, so those fall back to '*'.
+let parentOrigin = '*';
+
+// The value is the page's own origin in every case but an opaque one, and the
+// payload is the constant above. The scanner cannot see either and flags the
+// fallback, so it is silenced here — on this line, with its reason beside it —
+// rather than by dropping the rule for the whole repository.
+// nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration
+const close = () => window.parent.postMessage({ bencpass: 'toast-close' }, parentOrigin);
 
 $('save').addEventListener('click', async () => {
   const reply = await browser.runtime.sendMessage({
@@ -90,6 +107,7 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('message', (event) => {
   if (event.source !== window.parent) return;
   if (event.data?.bencpass !== 'notice' || noticeId) return;
+  if (event.origin && event.origin !== 'null') parentOrigin = event.origin;
   noticeId = String(event.data.noticeId ?? '');
   render();
 });
