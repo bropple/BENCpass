@@ -115,8 +115,8 @@ most important decision in the document.
   "id":      "uuid-v4",         // stable, never reused
   "rev":     17,                // per-record, monotonic, client-incremented
   "deleted": false,             // tombstone; never hard-delete on the server
-  "nonce":   "<12 random bytes>",
-  "ct":      "AES-256-GCM(vaultKey, nonce, plaintext,
+  "n":       "<12 random bytes>",  // the wire field is "n", not "nonce"
+  "ct":      "AES-256-GCM(vaultKey, n, plaintext,
                           aad = 'bencpass:v2:rec:{id}:{rev}:{0|1 deleted}')"
 }
 ```
@@ -520,7 +520,8 @@ page could then open **its own privileged copy** against that session — which
 satisfies every "is this an extension page" check — and clickjack a fill out of
 it. The id is now handed over by `postMessage` to the frame's cross-origin
 `contentWindow`, which the page cannot listen to, and `web_accessible_resources`
-is narrowed to `overlay.html` alone.
+is narrowed to the two frames that must be page-embeddable — `overlay.html` and
+`toast.html` — and nothing else.
 
 ### What a page-embedded extension frame cannot do
 
@@ -682,3 +683,123 @@ known, not discovered at step 4.
 path that always works, snapshots on the server, `history` on every record, a
 printed recovery kit, and keeping Firefox's built-in manager populated until
 BENCpass has been trusted for a while. Turn it off last, not first.
+
+## 10. Failure mechanisms known and NOT closed
+
+The point of this section is that a written limitation is not a surprise. Each
+item is something the code does not defend against, or defends against only
+partly. Format: what it is, what it costs, why it is not closed, and what would
+close it. The sync engine's positive defences — per-record revisions, causal
+merge, `guardRollback`, the per-record rollback report, the AAD-bound tombstone
+bit, brittle-unlock tolerance, the locked-conflict refusal on every merge path,
+and the flipped-flag reconciliation in `unlock`/`applyEnvelopes` — are covered
+elsewhere and by the model test (`test/model.test.js`) and the deterministic
+hostile tests (`test/hostile.test.js`). What follows is the residue.
+
+**A dropped push the server claims it accepted.** A malicious or buggy server
+can return `200` to a `PUT /v1/records` while storing nothing, advancing its
+sequence so the next pull does not trip `guardRollback`. The write silently
+evaporates. *Cost:* a record or edit the user made reaches neither the server
+nor any other machine, while the origin machine believes it synced. *Why not
+closed:* the client trusts the server's `200`; end-to-end encryption means the
+server can always claim to hold ciphertext it discarded, and nothing it returns
+is signed by anything the client could check. Over TLS the transport
+authenticates the server, so the realistic actor is the server itself, which a
+self-hosted deployment trusts. *What would close it:* read-back verification
+(re-pull each pushed record and compare `ct`) at the cost of a round-trip per
+sync, or server-signed write receipts. The hardened hostile server exercises
+this (it drops ~15% of pushes while claiming success); invariants B and D still
+hold because a dropped push is pure absence, which is why only A — deliberately
+not required against such a server — is affected.
+
+**A freshly joined machine has no rollback floor.** `guardRollback` and the
+per-record rollback report both compare against state the machine accumulated —
+`highestSeq` and `syncedRev`. A machine joining for the first time has neither,
+so a hostile server can feed it an arbitrarily old but *authentic* version of a
+record, including a pre-rotation password, and it is accepted as current because
+there is nothing to compare it against. *Cost:* a new device can be seeded with
+stale data; invariant B still holds (it never reverts a value *that machine*
+moved past), and an honest server heals it on the next sync, but the join itself
+is trust-on-first-use. *Why not closed:* causal ordering has no absolute floor
+at join time — the first thing a machine sees is, by definition, its baseline.
+*What would close it:* a signed, monotonic high-water-mark the joining machine
+could trust — but the server holds no key and is the very party not trusted, so
+this needs an out-of-band channel (e.g. the enrolment code carrying a sequence
+floor).
+
+**The server learns metadata it cannot read.** Per-record envelopes expose the
+record count, each record's revision number, ciphertext sizes, and the timing
+and per-device pattern of syncs. *Cost:* an observer of the store learns how
+many credentials exist, how often each changes, and when each device is active —
+never their contents. *Why not closed:* it is inherent in per-record sync, which
+is the decision (§9) that stops a single blob eating a password. Hiding it would
+need padding, constant-rate cover traffic, or a return to one blob, each worse.
+*What would close it:* nothing worth the cost for a personal vault; documented
+so the trade is explicit.
+
+**The vault header is an offline-crackable target.** The server holds the KDF
+parameters and the wrapped vault key, because a joining machine needs them.
+*Cost:* anyone who takes the store can attack the master password offline, at
+the speed the Argon2id parameters allow. *Why not closed:* a second machine
+cannot bootstrap without the header. *What would close it:* nothing, short of
+not supporting multi-machine sync; the mitigation is master-password entropy and
+the KDF cost, both already in place and stated in the README.
+
+**Selective denial of a record to a joining machine.** A hostile server can
+serve a joining machine a `deleted`-flag-flipped or undecryptable envelope for a
+specific record on every pull. The client correctly refuses it (`tampered`) or
+files it as `damaged`, so the record never lands. *Cost:* availability — that
+one record is withheld from that machine for as long as the server misbehaves.
+Integrity and confidentiality are intact. *Why not closed:* the refusal is the
+right call; adopting a contradictory or unreadable envelope would be worse.
+Availability against a malicious server is out of scope. *What would close it:*
+nothing at the client; an honest server never does this.
+
+**No master-password change and no start-over.** The product cannot change the
+master password or wipe-and-restart a vault in place (the manager's gate copy
+now says so plainly, rather than pointing at a "freshly created vault" route
+that was never built). *Cost:* a user who wants a new master password must
+export, remove the extension's stored vault out of band, and set up fresh —
+there is no guided path, and the recovery-code unlock deliberately does not
+change the password. *Why not closed:* out of scope for this pass by decision.
+*What would close it:* a password-change flow that re-derives the master key,
+re-wraps the vault key, and republishes the header through the existing
+`putMeta` compare-and-swap — the sequence-checked path that exists for exactly
+this and is, today, the reason `putMeta` takes an `ifMatch`.
+
+**Parked-conflict flood on a permanently locked vault.** A server that serves a
+freshly sealed conflicting envelope on every poll defeats the `id:rev:nonce`
+dedup mark by construction. A vault that never unlocks parks each one; the
+`PARKED_MAX` (256) cap then discards the oldest. *Cost:* under a sustained
+attack on a vault that is never unlocked, the oldest parked conflicts are
+dropped before a person ever sees them. *Why not closed (fully):* the cap is the
+only thing bounding disk and memory here; something must give. *Mitigation:* the
+cap keeps the newest — most relevant — disagreements, and a single unlocked sync
+forks and clears the queue. The `lockStreak` operation in the model exercises
+the accumulation and dedup; the eviction itself is bounded by design.
+
+### Test-coverage gaps (not source defects)
+
+**Per-device equivocation is only approximated.** The model's hostile server has
+no device identity, so a server that consistently lies to one device while
+telling another the truth (a partition/equivocation attack) is exercised only as
+per-call randomness, not as a stable per-device split. *What would close it:*
+wrap each machine's client so requests carry a device tag and let the hostile
+server branch on it.
+
+**Device mint/revoke and the post-first-publish meta path are covered in Go, not
+in the JS model.** The in-memory model server implements neither a device table
+nor a second header publish (`shareHeader` writes only when the server holds no
+header, and there is no password-change feature to call `putMeta` again). Those
+paths are exercised by the Go server tests (`server/api_test.go`) and the
+skip-gated integration tests in `test/sync.test.js`, not by the property model.
+*What would close it:* a device table and a header-republish operation in the
+model server.
+
+**One merge guard rests on unit coverage alone.** The clause that stops a
+higher-revision *live* envelope fast-forwarding over a local tombstone
+(`(!l.deleted || r.deleted)` in `merge`) is not reached by the randomised
+property runs — the delete-versus-edit-at-equal-revision race that would trigger
+it is rare under the generator — but it is pinned by a deterministic test in
+`test/merge.test.js`/`test/conflict.test.js`. Removing the clause fails those,
+not the model. Noted so the reliance is explicit.

@@ -312,6 +312,22 @@ export class Vault {
         this.park([e]);
         continue;
       }
+      // The flag and the sealed body disagree, and no tombstone was crossed (the
+      // case above). A locked or freshly-joined vault adopted this envelope on
+      // the server's cleartext word, and the word was a lie: the seal is the
+      // authority. Put the record where the seal says it belongs AND correct the
+      // stored envelope's flag to match, because merge is key-free and steers by
+      // that flag on the next sync. Leaving a tombstone flag over a live sealed
+      // body (or the reverse) let the envelope map and the plaintext map
+      // disagree, and merge then propagated a deletion — or a resurrection —
+      // that the seal never sanctioned, reverting another machine's live
+      // password. Found by the hardened hostile model: a fresh machine
+      // accept-new'd a flipped-to-deleted envelope while locked, and this unlock
+      // kept the record live in plaintext while the tombstone rode the envelope
+      // out to every other machine.
+      if (Boolean(e.deleted) !== Boolean(body?.deleted)) {
+        this.envelopes.set(e.id, { ...e, deleted: Boolean(body?.deleted) });
+      }
       if (body?.deleted) continue;
       plain.set(e.id, body);
     }
@@ -767,7 +783,24 @@ export class Vault {
         // Skipping on rev alone left the old plaintext on screen over the new
         // envelope: a same-rev tombstone was stored but the record it deleted
         // stayed visible until the next unlock quietly vanished it.
-        if (cur && cur.rev === e.rev && cur.ct === e.ct && committed.has(id)) continue;
+        //
+        // The deleted flag is part of "the same bytes" too, not an afterthought.
+        // A server can flip the cleartext bit while leaving id, rev, n and ct
+        // untouched — same ciphertext, opposite tombstone claim — and skipping
+        // on ct alone let that flip through unopened: merge had already adopted
+        // the flipped envelope, so the envelope map held a tombstone while the
+        // plaintext map still held the live record, and the two disagreed for
+        // ever. The fork that inconsistency produced reverted another machine's
+        // live password. Comparing the flag here forces the open-and-verify
+        // below, which is where a flipped flag is caught and corrected.
+        if (
+          cur &&
+          cur.rev === e.rev &&
+          cur.ct === e.ct &&
+          Boolean(cur.deleted) === Boolean(e.deleted) &&
+          committed.has(id)
+        )
+          continue;
         try {
           // Same reasoning as unlockWithVaultKey: the flag is the server's to
           // flip, the seal is not. openEnvelope opens under the claim the
@@ -802,6 +835,19 @@ export class Vault {
               committed.delete(id);
               continue;
             }
+            // Byte-identical to an envelope we already hold, flag flipped, and
+            // no tombstone was crossed (the two cases above). The server simply
+            // lied about the cleartext bit on a record we have. The seal is the
+            // authority — openEnvelope recovered the flag the sealer actually
+            // signed — so the envelope must go into the map with THAT flag, not
+            // the one the server sent. Leaving `e` in place stored a tombstone
+            // over a live plaintext (or the reverse): the envelope and plaintext
+            // maps then disagreed permanently, and the fork that inconsistency
+            // produced reverted another machine's live password — a B:revert the
+            // hardened hostile model found. Correcting the flag here also lets
+            // resolveParked see the parked survivor as the same content and drop
+            // it, rather than minting a duplicate of the record that just won.
+            next.set(id, { ...e, deleted: Boolean(body?.deleted) });
           }
 
           // A live record must never go backwards here.

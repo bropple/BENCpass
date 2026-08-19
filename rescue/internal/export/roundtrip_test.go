@@ -91,6 +91,77 @@ func TestTheExtensionCanImportOurJSON(t *testing.T) {
 	}
 }
 
+// Password history is the safety net a restore exists for, and the Go exporter
+// once dropped it on a comment claiming the extension did the same. It does
+// not: src/core/transfer.js keeps history now. So a restore through the rescue
+// tool silently lost every rotated password — the exact thing the person
+// reaching for a rescue tool most needs back.
+//
+// This asserts both halves the fix depends on: the Go JSON carries the history
+// array out, and the extension's own importer reads it back with every old
+// password intact. It uses the real JS core through node, so if either side
+// stops carrying history the round trip fails here rather than in a downloads
+// folder on the worst day.
+func TestHistorySurvivesTheRoundTrip(t *testing.T) {
+	v := openFixture(t)
+
+	// The fixture holds one login rotated twice; find its expected history
+	// straight off the sealed record rather than restating it here.
+	var want []any
+	for _, r := range v.Records {
+		if r.Title() != "Rotated" {
+			continue
+		}
+		h, ok := r.Fields["history"].([]any)
+		if !ok || len(h) == 0 {
+			t.Fatalf("the Rotated fixture carries no history to test with (regenerate: node rescue/internal/vault/testdata/gen.mjs)")
+		}
+		want = h
+	}
+	if want == nil {
+		t.Fatal("the Rotated fixture is missing — regenerate the testdata")
+	}
+
+	body, err := JSON(v.Records, time.UnixMilli(1700000000000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The bytes the rescue tool writes must contain the history at all.
+	if !strings.Contains(string(body), "second-password") ||
+		!strings.Contains(string(body), "first-password") {
+		t.Fatalf("the JSON export dropped password history:\n%s", body)
+	}
+
+	path := filepath.Join(t.TempDir(), "export.json")
+	if err := ToFile(path, body); err != nil {
+		t.Fatal(err)
+	}
+	got := reimport(t, path)
+
+	var back map[string]any
+	for _, r := range got {
+		if title, _ := r["title"].(string); title == "Rotated" {
+			back = r
+		}
+	}
+	if back == nil {
+		t.Fatal("the Rotated record did not survive the round trip")
+	}
+	gotHist, _ := back["history"].([]any)
+	if len(gotHist) != len(want) {
+		t.Fatalf("history lost passwords on the round trip: exported %d entries, imported %d\n%s",
+			len(want), len(gotHist), body)
+	}
+	// Every old password, in order — losing the order would misdate them.
+	for i := range want {
+		w := want[i].(map[string]any)
+		g, ok := gotHist[i].(map[string]any)
+		if !ok || g["password"] != w["password"] {
+			t.Errorf("history entry %d: exported %v, imported %v", i, w["password"], g["password"])
+		}
+	}
+}
+
 func TestTheExtensionCanImportOurCSV(t *testing.T) {
 	v := openFixture(t)
 	path := filepath.Join(t.TempDir(), "export.csv")

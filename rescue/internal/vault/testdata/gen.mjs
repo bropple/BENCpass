@@ -39,6 +39,18 @@ await v.add(
     password: 'p\ttab "quote" ,comma\\back', urls: ['https://a.example', 'https://b.example'],
     notes: 'line one\nline two' }, T + 1);
 
+// A login that has been rotated twice, so it carries real password history.
+// The rescue tool's JSON export must carry this out — the old passwords are the
+// safety net a restore exists for, and a comment in the Go exporter once
+// claimed the extension dropped them (it does not). Regenerating this fixture
+// pins the two implementations together: change either and the round-trip test
+// notices.
+const rotated = await v.add(
+  { type: 'login', title: 'Rotated', username: 'ben', password: 'first-password',
+    urls: ['https://rotate.example'], notes: 'kept its old passwords' }, T + 10);
+await v.update(rotated, { password: 'second-password' }, T + 11);
+await v.update(rotated, { password: 'third-password' }, T + 12);
+
 await v.add(
   { type: 'address', title: 'Home', 'name': 'Ben Ropple',
     'address-line1': '1 Example Road', 'address-level2': 'Springfield',

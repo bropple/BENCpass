@@ -29,16 +29,18 @@ Manage Container Images → Add credential**.
 
 ### A note on tags
 
-There are no git tags in this repository yet, so the only tags that exist are
-`latest` and `main` — and `latest` moves with every push to main. If you want a
-deployment that does not change under you, tag a release first:
+`latest` and `main` move with every push to main, so pinning to either means a
+deployment that changes under you. Release tags do not move. `v0.11.0` is
+tagged; to cut a later one, tag it and push:
 
 ```sh
-git tag v0.11.0 && git push --tags
+git tag v0.12.0 && git push --tags
 ```
 
-which makes CI publish `ghcr.io/bropple/bencpass-server:0.11.0` and
-`:v0.11.0`. Pin to that rather than `latest`.
+The image tags CI publishes are the *semver* — the `v` is stripped by the
+`type=semver` rule in `server-image.yml`. So the `v0.11.0` git tag publishes
+`ghcr.io/bropple/bencpass-server:0.11.0` and `:0.11` (major.minor); there is no
+`:v0.11.0` image tag. Pin to `:0.11.0` rather than `latest`.
 
 ---
 

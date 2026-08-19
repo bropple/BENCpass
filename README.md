@@ -337,8 +337,11 @@ does not depend on this browser, this machine, or this software still working.
 
 ## Two things worth knowing up front
 
-**Forgetting the master password means losing everything.** That is the design,
-not a gap in it. A recovery kit is planned and is not built yet.
+**Forgetting the master password means losing everything** unless you made a
+recovery kit. The recovery kit is built: enrol one under the gear and print the
+code when it is offered — it is shown once and stored nowhere. Without a
+recovery kit, forgetting the master password loses the vault on every machine
+at once, by design.
 
 **The server holds the vault header** — the KDF parameters and the wrapped vault
 key — because a newly enrolled machine needs them to bootstrap. Anyone who takes

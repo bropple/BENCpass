@@ -1,10 +1,10 @@
 {
   "password": "correct horse battery staple",
   "code": "ABCDE-FGHJK-MNPQR-STUVW-XYZ23-45678",
-  "tombstone": "04f9f82a-1450-401f-ad6b-c25c92e724e0",
+  "tombstone": "13536767-25f4-4153-9ac2-2908e08b5661",
   "records": [
     {
-      "id": "2823e9a3-6517-4210-a189-d0fbda901b44",
+      "id": "4d8baac8-6645-45f9-ba56-c7c67d42915d",
       "rev": 1,
       "title": "Example",
       "notes": "a note",
@@ -24,7 +24,7 @@
       "history": []
     },
     {
-      "id": "ec7fbd56-ab1b-49bb-9790-ab28b02bbac7",
+      "id": "2575cc55-1d59-48dd-b429-a64604bb17ab",
       "rev": 1,
       "title": "Ünïcødé ✓ 日本",
       "notes": "line one\nline two",
@@ -45,7 +45,36 @@
       "history": []
     },
     {
-      "id": "b6b7f86d-fc14-4872-abb2-0e911c1da4bc",
+      "id": "a20b4702-eb13-46a9-9a94-831694c007cb",
+      "rev": 3,
+      "title": "Rotated",
+      "notes": "kept its old passwords",
+      "urls": [
+        "https://rotate.example"
+      ],
+      "username": "ben",
+      "password": "third-password",
+      "totp": "",
+      "fields": [],
+      "type": "login",
+      "created": 1700000000010,
+      "updated": 1700000000012,
+      "lastUsed": 0,
+      "timesUsed": 0,
+      "passwordChanged": 1700000000012,
+      "history": [
+        {
+          "password": "second-password",
+          "changed": 1700000000011
+        },
+        {
+          "password": "first-password",
+          "changed": 1700000000010
+        }
+      ]
+    },
+    {
+      "id": "02f84d8f-d534-4d5f-b2ea-5479c2feec32",
       "rev": 1,
       "title": "Home",
       "notes": "",

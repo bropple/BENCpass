@@ -60,11 +60,16 @@ func JSON(records []vault.Record, now time.Time) ([]byte, error) {
 		// the extension's export carries them, so they go back in here.
 		out := map[string]any{"id": r.ID, "rev": r.Rev}
 		for k, v := range r.Fields {
-			// history is bookkeeping that means nothing outside the vault it
-			// came from — dropped by the extension's export for the same reason.
-			if k != "history" {
-				out[k] = v
-			}
+			// Everything the sealed body holds, history included. This used to
+			// drop `history` on a comment claiming the extension's export does
+			// the same — it does not: src/core/transfer.js deliberately keeps
+			// it now, because the old passwords applyPatch retains are the
+			// safety net a restore is for, and the rescue tool's whole reason
+			// to exist is to be the restore that works on the worst day. Losing
+			// every rotated password silently was the opposite of that.
+			// TestHistorySurvivesTheRoundTrip pins this against the JS core so
+			// the two implementations cannot drift apart again.
+			out[k] = v
 		}
 		doc.Records = append(doc.Records, out)
 	}

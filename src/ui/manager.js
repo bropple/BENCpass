@@ -508,7 +508,7 @@ function setGate(mode) {
     : join
       ? 'The same master password as your other machine. This pulls that vault down rather than making a new one — a new one could never read its records.'
       : recover
-        ? 'The code printed when this vault was set up. It opens the vault; the master password stays what it was, and nothing here changes it. To move to a new password, export your entries and import them into a freshly created vault.'
+        ? 'The code printed when this vault was set up. It opens the vault; the master password stays what it was, and nothing here changes it. This build cannot change the master password, and it has no "start over" — the freshly-created-vault route an earlier version of this line described was never built.'
         : '';
 
   // Offered only when there is no vault here. With one, "join" would mean

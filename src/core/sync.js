@@ -557,6 +557,42 @@ export function fromWire(records) {
   });
 }
 
+/**
+ * A locked vault cannot settle a conflict: superseding re-seals the kept copy,
+ * and that needs the key. So a round that conflicts while locked is parked and
+ * abandoned — no apply, no push, and above all no advancing of state.
+ *
+ * Half-doing it was the trap. Pushing the losing side is a guaranteed 422, and
+ * dropping it from the push while still advancing the sequence is worse than it
+ * looks: the record falls out of the next delta pull, so nothing can ever see
+ * the disagreement again and the two copies stay different for ever. Leaving the
+ * state exactly where it was means the next pull delivers the same records, and
+ * an unlocked sync settles them the ordinary way.
+ *
+ * Parking first is what makes this safe to abandon: the losing envelope is
+ * persisted without the key, so nothing is lost by waiting.
+ *
+ * This has to run after EVERY merge in a sync, not only the first. The first
+ * merge might conflict-free, push, and take a 409 or a 422; the retry then
+ * re-merges against the server's newer records and THAT merge is where the
+ * conflict appears. The guard used to sit inline after the first merge alone, so
+ * a locked vault that conflicted only on the retry path sailed past it into
+ * settleConflicts — which parks but cannot supersede — and applyEnvelopes then
+ * adopted a tombstone over a live record on the flag's unverifiable word, with
+ * state advanced on top. The hardened hostile model found the tail of that: a
+ * live password reverted to a value the machine had already moved past.
+ */
+function refuseLockedConflict(vault, result) {
+  if (vault.locked && result.conflicts.length) {
+    vault.park(result.conflicts.map((c) => c.parked).filter(Boolean));
+    throw new SyncError(
+      `${result.conflicts.length} record(s) changed on two machines at once and ` +
+        `cannot be settled while this vault is locked — unlock to finish syncing`,
+      'conflict-locked',
+    );
+  }
+}
+
 export async function syncOnce(vault, client, state) {
   // Before the records, because a machine that joins later needs this to exist
   // and the cost when it already does is one unauthenticated-shaped GET.
@@ -572,29 +608,7 @@ export async function syncOnce(vault, client, state) {
   });
   guardRecordRollback(result);
 
-  // A locked vault cannot settle a conflict: superseding re-seals the kept
-  // copy, and that needs the key. So this round is parked and abandoned — no
-  // apply, no push, and above all no advancing of state.
-  //
-  // Half-doing it was the trap. Pushing the losing side is a guaranteed 422,
-  // and dropping it from the push while still advancing the sequence is worse
-  // than it looks: the record falls out of the next delta pull, so nothing can
-  // ever see the disagreement again and the two copies stay different for
-  // ever. Leaving the state exactly where it was means the next pull delivers
-  // the same records, and an unlocked sync settles them the ordinary way.
-  //
-  // Parking first is what makes this safe to abandon: the losing envelope is
-  // persisted without the key, so nothing is lost by waiting. Found by the
-  // model test — a ten-operation sequence that wedged a machine for ever, and
-  // then a seven-operation one that showed the obvious fix was also wrong.
-  if (vault.locked && result.conflicts.length) {
-    vault.park(result.conflicts.map((c) => c.parked).filter(Boolean));
-    throw new SyncError(
-      `${result.conflicts.length} record(s) changed on two machines at once and ` +
-        `cannot be settled while this vault is locked — unlock to finish syncing`,
-      'conflict-locked',
-    );
-  }
+  refuseLockedConflict(vault, result);
 
   await vault.applyEnvelopes(result.envelopes);
   await settleConflicts(vault, result);
@@ -623,6 +637,7 @@ export async function syncOnce(vault, client, state) {
       syncedRev: state.syncedRev,
     });
     guardRecordRollback(result);
+    refuseLockedConflict(vault, result);
     await vault.applyEnvelopes(result.envelopes);
     await settleConflicts(vault, result);
     state.seq = again.seq;
@@ -651,6 +666,7 @@ export async function syncOnce(vault, client, state) {
       syncedRev: state.syncedRev,
     });
     guardRecordRollback(result);
+    refuseLockedConflict(vault, result);
     await vault.applyEnvelopes(result.envelopes);
     await settleConflicts(vault, result);
     state.seq = all.seq;
