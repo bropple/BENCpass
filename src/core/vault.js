@@ -92,6 +92,35 @@ export class Vault {
     };
   }
 
+  /**
+   * The vault as a file to keep: the header and the sealed records, and
+   * nothing that only means something on this machine.
+   *
+   * The fingerprint wrapping is deliberately dropped. It wraps the same vault
+   * key as the password does, and the secret that opens it is a WebAuthn PRF
+   * output which the authenticator will release to any caller that can present
+   * the credential — including, for a passkey that syncs, one on another of
+   * the account's devices. Leaving it in would mean a file the interface calls
+   * safe to email is openable by a fingerprint, which is not what "needs your
+   * master password or your recovery code" says. Nothing can use it anyway:
+   * the only reader of this file is a program outside the browser, and no such
+   * program can talk to an authenticator.
+   *
+   * `syncedRev` goes for the plainer reason that it is this machine's private
+   * note about what it has already sent to a server.
+   *
+   * Cloned rather than edited. `toJSON` hands back `this.meta` itself, so
+   * blanking the wrap in place would remove the live vault's fingerprint
+   * unlock as a side effect of taking a backup.
+   */
+  backup() {
+    const { meta, envelopes } = this.toJSON();
+    return {
+      meta: { ...meta, wraps: { ...meta.wraps, biometric: null } },
+      envelopes,
+    };
+  }
+
   // ---- unlocking -----------------------------------------------------------
 
   async unlock(password) {

@@ -474,6 +474,39 @@ test('an imported record cannot seal its own disappearance either', async () => 
   assert.equal(reopened.list()[0].title, 'Imported');
 });
 
+test('an encrypted backup cannot be opened by a fingerprint', async () => {
+  // The interface calls this file safe to keep anywhere, and names the two
+  // things that open it: the master password and the recovery code. The
+  // fingerprint wrapping would have been a third, and a quieter one — the
+  // secret behind it is a PRF output the authenticator hands to whoever
+  // presents the credential, which for a syncing passkey can be another of the
+  // account's devices. Nothing outside a browser can use it in any case.
+  const secret = crypto.getRandomValues(new Uint8Array(32));
+  const v = await Vault.create({ password: 'pw' });
+  await v.add({ type: 'login', title: 'bank', username: 'u', password: 'secret' });
+  await v.enrolBiometric('pw', secret);
+  assert.ok(v.hasBiometric, 'the vault under test must have a fingerprint enrolled');
+
+  const backup = JSON.parse(JSON.stringify(v.backup()));
+  assert.equal(backup.meta.wraps.biometric, null, 'the fingerprint wrapping is in the backup');
+
+  const stolen = Vault.load(backup);
+  await assert.rejects(
+    () => stolen.unlockWithBiometricSecret(secret),
+    'the device secret alone opened a backup',
+  );
+
+  // Still the file it claims to be: the password opens it, whole.
+  const mine = Vault.load(backup);
+  await mine.unlock('pw');
+  assert.equal(mine.list()[0].password, 'secret');
+
+  // And taking a backup did not cost the live vault its fingerprint. toJSON
+  // hands back meta itself, so blanking the wrap in place would have.
+  assert.ok(v.hasBiometric, 'taking a backup removed the live vault\'s fingerprint');
+  await v.unlockWithBiometricSecret(secret);
+});
+
 test('an encrypted backup is exactly what a second implementation needs', async () => {
   // What Settings -> Your data -> Encrypted backup writes, and what
   // rescue/internal/vault reads. The two are a format apart and cannot import
@@ -482,8 +515,7 @@ test('an encrypted backup is exactly what a second implementation needs', async 
   const v = await Vault.create({ password: 'pw' });
   await v.add({ type: 'login', title: 'a', username: 'u', password: 'p' });
 
-  const { meta, envelopes } = v.toJSON();
-  const backup = JSON.parse(JSON.stringify({ meta, envelopes }));
+  const backup = JSON.parse(JSON.stringify(v.backup()));
 
   assert.deepEqual(Object.keys(backup).sort(), ['envelopes', 'meta']);
   assert.equal(backup.syncedRev, undefined);

@@ -1434,20 +1434,23 @@ function exportVault(kind) {
  * code is no use with nothing to point it at, and browser.storage.local is not
  * a thing anyone can extract by hand.
  *
- * `syncedRev` is deliberately left out. It is this machine's private note about
- * what it has already sent to a server, it means nothing anywhere else, and
- * including it would suggest this file restores a sync relationship, which it
- * does not.
+ * What goes in and what is left out is decided by Vault.backup(), beside the
+ * format it belongs to, so that this page cannot get it wrong on its own. The
+ * fingerprint wrapping is dropped there for a reason worth knowing here: with
+ * it, this file opens to a fingerprint, and the sentence beside the button
+ * would be a lie.
  *
  * Works while locked, because nothing here needs the key.
  */
 function exportEncryptedVault() {
   if (!state.vault) return;
-  const { meta, envelopes } = state.vault.toJSON();
-  const count = envelopes.length;
+  const backup = state.vault.backup();
+  // Tombstones are in the file and are not in the list, so counting envelopes
+  // would report a number the user cannot find anywhere on screen.
+  const count = backup.envelopes.filter((e) => !e.deleted).length;
   offerFile(
     `bencpass-vault-${stamp()}.json`,
-    JSON.stringify({ meta, envelopes }, null, 2),
+    JSON.stringify(backup, null, 2),
     'application/json',
   );
   transferStatus(

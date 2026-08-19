@@ -486,11 +486,16 @@
         <div class="setting-text">
           <span class="setting-name">Encrypted backup</span>
           <span class="setting-note">
-            The whole vault, still encrypted, exactly as it is stored here.
-            Safe to keep anywhere — a USB stick, a cloud drive, an email to
-            yourself — because it cannot be opened without your master password
-            or your recovery code. This is the file BENCpass Rescue reads when
-            this browser is the thing that broke.
+            The whole vault, still encrypted, exactly as it is stored here. It
+            opens with your master password, or with your recovery code if you
+            enrolled one — a fingerprint will not open it, and is deliberately
+            left out of the file.
+            <strong>Its safety is your master password's safety:</strong>
+            anyone holding it can guess at it offline for as long as they like,
+            with nobody to notice and no lockout. A strong password makes this
+            file useless to them; a guessable one makes it a copy of your
+            passwords with a delay on it. This is the file BENCpass Rescue
+            reads when this browser is the thing that broke.
           </span>
         </div>
         <div class="setting-actions">
