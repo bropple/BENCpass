@@ -473,3 +473,26 @@ test('an imported record cannot seal its own disappearance either', async () => 
   assert.equal(reopened.list().length, 1, 'an imported record sealed its own disappearance');
   assert.equal(reopened.list()[0].title, 'Imported');
 });
+
+test('an encrypted backup is exactly what a second implementation needs', async () => {
+  // What Settings -> Your data -> Encrypted backup writes, and what
+  // rescue/internal/vault reads. The two are a format apart and cannot import
+  // each other, so the shape is pinned here: a backup carries the header and
+  // the sealed records, and nothing that only means something on one machine.
+  const v = await Vault.create({ password: 'pw' });
+  await v.add({ type: 'login', title: 'a', username: 'u', password: 'p' });
+
+  const { meta, envelopes } = v.toJSON();
+  const backup = JSON.parse(JSON.stringify({ meta, envelopes }));
+
+  assert.deepEqual(Object.keys(backup).sort(), ['envelopes', 'meta']);
+  assert.equal(backup.syncedRev, undefined);
+  assert.ok(backup.meta.kdf.salt, 'the header must carry the salt');
+  assert.ok(backup.meta.wraps.password, 'the header must carry the password wrapping');
+
+  // And it still opens, which is the whole point of keeping one.
+  const back = Vault.load(backup);
+  await back.unlock('pw');
+  assert.equal(back.list().length, 1);
+  assert.equal(back.list()[0].password, 'p');
+});

@@ -1424,6 +1424,40 @@ function exportVault(kind) {
   transferStatus(`Exported ${records.length} entries in plain text. Mind where it lands.`, 'good');
 }
 
+/**
+ * The whole vault, still sealed.
+ *
+ * The other two exports are plaintext and dangerous, and say so. This one is
+ * the opposite: it is the vault exactly as it sits in storage, openable only by
+ * the master password or the recovery code, so it can go anywhere a person
+ * would put a photo. It is the missing half of the recovery kit — a printed
+ * code is no use with nothing to point it at, and browser.storage.local is not
+ * a thing anyone can extract by hand.
+ *
+ * `syncedRev` is deliberately left out. It is this machine's private note about
+ * what it has already sent to a server, it means nothing anywhere else, and
+ * including it would suggest this file restores a sync relationship, which it
+ * does not.
+ *
+ * Works while locked, because nothing here needs the key.
+ */
+function exportEncryptedVault() {
+  if (!state.vault) return;
+  const { meta, envelopes } = state.vault.toJSON();
+  const count = envelopes.length;
+  offerFile(
+    `bencpass-vault-${stamp()}.json`,
+    JSON.stringify({ meta, envelopes }, null, 2),
+    'application/json',
+  );
+  transferStatus(
+    `Saved ${count} sealed record${count === 1 ? '' : 's'}. Still encrypted — keep it wherever you like.`,
+    'good',
+  );
+}
+
+$('s-export-vault').addEventListener('click', exportEncryptedVault);
+
 $('s-export-json').addEventListener('click', () => exportVault('json'));
 $('s-export-csv').addEventListener('click', () => exportVault('csv'));
 
