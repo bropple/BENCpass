@@ -681,6 +681,112 @@ func TestTombstonesAreStoredAndServed(t *testing.T) {
 	}
 }
 
+func TestDeletedRecordsCannotBeResurrected(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	c.do("PUT", "/v1/records", map[string]any{"records": []Envelope{env("a", 1)}},
+		map[string]string{"If-Match": "0"})
+	tomb := env("a", 2)
+	tomb.Deleted = true
+	c.do("PUT", "/v1/records", map[string]any{"records": []Envelope{tomb}},
+		map[string]string{"If-Match": "1"})
+
+	// A live record over a stored tombstone is a resurrection: the writer was
+	// never shown the deletion, and accepting the write puts back a credential
+	// somebody rotated away from. No honest client produces this — nothing
+	// revives an id in place — so it is refused like a backward revision.
+	status, out := c.do("PUT", "/v1/records", map[string]any{"records": []Envelope{env("a", 3)}},
+		map[string]string{"If-Match": "2"})
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("resurrection accepted: %d", status)
+	}
+	// The refusal has to name the record and say what happened, because it is
+	// the only clue in a log read months later.
+	msg := out["error"].(string)
+	if !strings.Contains(msg, "a") || !strings.Contains(msg, "deleted") {
+		t.Fatalf("refusal does not say which record or why: %q", msg)
+	}
+
+	// And the store still holds the tombstone.
+	_, out = c.do("GET", "/v1/records?since=0", nil, nil)
+	recs := out["records"].([]any)
+	if len(recs) != 1 || !recs[0].(map[string]any)["deleted"].(bool) {
+		t.Fatalf("tombstone did not survive the refused write: %v", recs)
+	}
+}
+
+func TestRefusedResurrectionDoesNotHalfApplyTheBatch(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	tomb := env("a", 2)
+	tomb.Deleted = true
+	c.do("PUT", "/v1/records", map[string]any{"records": []Envelope{tomb}},
+		map[string]string{"If-Match": "0"})
+
+	// One bad record must sink the whole batch: a half-applied one would leave
+	// "b" visible at a sequence the refusal claims was never written.
+	status, _ := c.do("PUT", "/v1/records", map[string]any{
+		"records": []Envelope{env("b", 1), env("a", 3)},
+	}, map[string]string{"If-Match": "1"})
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("batch with a resurrection accepted: %d", status)
+	}
+
+	_, out := c.do("GET", "/v1/records?since=0", nil, nil)
+	if n := len(out["records"].([]any)); n != 1 {
+		t.Fatalf("refused batch was partially applied: %d records, want 1", n)
+	}
+	if seq := int64(out["seq"].(float64)); seq != 1 {
+		t.Fatalf("refused batch advanced the sequence to %d", seq)
+	}
+}
+
+func TestFreshPushToAnEmptyStoreIsNotAResurrection(t *testing.T) {
+	// A wiped and rebuilt server holds nothing at any id, and nothing is not a
+	// tombstone. The first push after the data directory is lost — live
+	// records, revisions well above 1 — must land, or losing the store would
+	// also lose the way back.
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	status, _ := c.do("PUT", "/v1/records", map[string]any{
+		"records": []Envelope{env("a", 7), env("b", 3)},
+	}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("re-push to an empty store refused: %d", status)
+	}
+}
+
+func TestTombstoneOverTombstoneIsFine(t *testing.T) {
+	srv, _, code := newServer(t)
+	c := enrol(t, srv, code, "laptop")
+
+	tomb := env("a", 2)
+	tomb.Deleted = true
+	c.do("PUT", "/v1/records", map[string]any{"records": []Envelope{tomb}},
+		map[string]string{"If-Match": "0"})
+
+	// A superseded deletion — a tombstone re-sealed above a conflict — is still
+	// a deletion, and syncing it must not read as a resurrection.
+	later := env("a", 3)
+	later.Deleted = true
+	status, _ := c.do("PUT", "/v1/records", map[string]any{"records": []Envelope{later}},
+		map[string]string{"If-Match": "1"})
+	if status != http.StatusOK {
+		t.Fatalf("superseding tombstone refused: %d", status)
+	}
+
+	// And retrying the same tombstone push that timed out mid-flight is safe,
+	// exactly as it is for live records.
+	status, _ = c.do("PUT", "/v1/records", map[string]any{"records": []Envelope{later}},
+		map[string]string{"If-Match": "2"})
+	if status != http.StatusOK {
+		t.Fatalf("idempotent tombstone re-push refused: %d", status)
+	}
+}
+
 // ---- meta ------------------------------------------------------------------
 
 func TestMetaRoundTrips(t *testing.T) {

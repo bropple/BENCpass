@@ -19,9 +19,10 @@ import (
 )
 
 var (
-	ErrConflict = errors.New("sequence has moved on")
-	ErrBackward = errors.New("record revision would go backwards")
-	ErrBadCode  = errors.New("unknown or expired enrolment code")
+	ErrConflict  = errors.New("sequence has moved on")
+	ErrBackward  = errors.New("record revision would go backwards")
+	ErrResurrect = errors.New("record would come back from deletion")
+	ErrBadCode   = errors.New("unknown or expired enrolment code")
 
 	// A device that is not enrolled: already revoked, or never was.
 	ErrNoDevice = errors.New("no such device")
@@ -219,10 +220,41 @@ func (s *Store) Put(records []Envelope, ifMatch int64) (int64, error) {
 	// cannot produce one; an incorrect client doing so would erase a revision
 	// that another machine had already agreed on. Equal revisions are allowed so
 	// that retrying a push that timed out mid-flight is safe.
+	//
+	// Refuse, likewise, a live record over a stored tombstone. Deletion is
+	// terminal per id: nothing in the client ever revives one in place — add,
+	// import and conflict forks all mint fresh UUIDs, and update refuses a
+	// deleted id — so the only way a live write lands on a deleted record is a
+	// machine that was never shown the tombstone, which means a server that
+	// withheld it: a restored backup, a dropped delta, a bug. In a password
+	// manager that write puts back a credential somebody deliberately rotated
+	// away from. The client refuses to fast-forward over its own acknowledged
+	// tombstone; this is the same rule on the storing side, so the resurrection
+	// is never even held.
+	//
+	// Be clear about what this buys. `deleted` is cleartext the server can read
+	// but cannot verify — the sealed body is the authority, and only the client
+	// holds the key. So this stops an honest-but-broken server from *storing* a
+	// resurrection, and it does nothing against a hostile server, which would
+	// simply not run this check. The client-side refusal is the real defence;
+	// this is the belt to those braces.
+	//
+	// A store with no record at the id is not a tombstone: a fresh push after
+	// the data directory is lost, or a re-enrolment against a rebuilt server,
+	// passes untouched. Tombstone over tombstone passes too — that is how a
+	// superseded deletion, or a retried one, syncs.
 	for _, r := range records {
-		if old, ok := s.d.Records[r.ID]; ok && r.Rev < old.Rev {
+		old, ok := s.d.Records[r.ID]
+		if !ok {
+			continue
+		}
+		if r.Rev < old.Rev {
 			return s.d.Seq, fmt.Errorf("%w: %s at rev %d, store has %d",
 				ErrBackward, r.ID, r.Rev, old.Rev)
+		}
+		if old.Deleted && !r.Deleted {
+			return s.d.Seq, fmt.Errorf("%w: %s is deleted at rev %d, refusing live rev %d",
+				ErrResurrect, r.ID, old.Rev, r.Rev)
 		}
 	}
 

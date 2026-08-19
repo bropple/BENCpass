@@ -342,7 +342,7 @@ func (s *server) putRecords(w http.ResponseWriter, r *http.Request, body []byte)
 		// The client re-pulls from `seq`, merges, and retries. The server never
 		// resolves this itself, because it cannot read either side.
 		send(w, http.StatusConflict, map[string]any{"seq": seq, "error": "conflict"})
-	case errors.Is(err, ErrBackward):
+	case errors.Is(err, ErrBackward), errors.Is(err, ErrResurrect):
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "cannot write")

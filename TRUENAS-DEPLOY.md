@@ -242,7 +242,24 @@ disagree about the signed format, **Test** says so explicitly — *"That server
 speaks protocol 3 and this BENCpass speaks 2"* — rather than leaving you with a
 401. Update whichever is behind.
 
-**6. `latest` moved under you.** Tag a release and pin to it.
+**6. A push is refused with `422`.** Two messages, one meaning: the server was
+asked to store history it knows cannot be right, and refused the whole batch.
+   - *"record revision would go backwards"* — the write would replace a record
+     with an older revision of itself, which is how a rotated-away password
+     comes back.
+   - *"record … is deleted at rev N, refusing live rev M"* — the write would
+     put a live record on top of a deletion. No honest client ever revives a
+     deleted record in place, so a machine trying to means it was never shown
+     the deletion — a restored backup or lost delta somewhere between them.
+
+   Neither refusal loses data: nothing in the batch is stored, the sequence
+   does not move, and the deleted record stays deleted — which is the point,
+   since in a password manager a resurrected record is a credential somebody
+   deliberately rotated away from. If one machine keeps hitting this, it and
+   the server disagree about history; suspect a dataset rolled back to an old
+   snapshot on one side or the other.
+
+**7. `latest` moved under you.** Tag a release and pin to it.
 
 ---
 
