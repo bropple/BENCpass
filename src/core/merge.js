@@ -58,9 +58,27 @@ export function merge({ local, remote, syncedRev }) {
       continue;
     }
 
-    // Only here: created locally and not yet pushed. `syncedRev` advances when
-    // the server acknowledges, not now — a push that fails must not look done.
+    // Only here — but "here and not there" is not the same as "never pushed".
+    //
+    // The pull is a delta: getRecords(since) returns what changed after the
+    // sequence this machine last saw, so a record the server acknowledged long
+    // ago is simply absent from it. Reading that absence as "not yet pushed"
+    // means re-pushing every acknowledged record on every sync, for ever — a
+    // quiet vault writing continuously, the global sequence climbing on every
+    // poll, and every other machine pulling the same records back each time.
+    // The ancestor map is what knows: if it holds exactly this revision, the
+    // server has it.
+    //
+    // Found by the model test, from a one-operation sequence: add a record,
+    // then watch it be pushed again on every sync afterwards.
     if (l && !r) {
+      if (b !== undefined && b === l.rev) {
+        nextSynced.set(id, l.rev);
+        actions.set(id, IN_SYNC);
+        continue;
+      }
+      // `syncedRev` advances when the server acknowledges, not now — a push
+      // that fails must not look done.
       toPush.push(l);
       actions.set(id, KEEP_LOCAL);
       continue;

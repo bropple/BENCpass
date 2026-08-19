@@ -1099,8 +1099,17 @@ test('a conflict met while locked is kept, and settles at the next unlocked sync
   // The background sync fires while b sits locked. The conflict cannot be
   // settled without the key, but the losing bytes must not evaporate either.
   b.lock();
-  const locked = await syncOnce(b, bClient, bState);
-  assert.equal(locked.conflicts.length, 1);
+  // The round is refused rather than reported as a sync that finished. A
+  // locked vault cannot supersede — that re-seals the kept copy and needs the
+  // key — so nothing is applied, nothing is pushed, and the sequence is left
+  // where it was, which is what lets the next unlocked round see the same
+  // conflict and settle it. Reporting success here was how a machine could
+  // quietly stop agreeing with the server for ever.
+  await assert.rejects(
+    () => syncOnce(b, bClient, bState),
+    (err) => err.code === 'conflict-locked',
+    'a locked vault should refuse a conflict it cannot settle, not report a finished sync',
+  );
   assert.equal(b.parked.length, 1, 'the losing copy is parked, key or no key');
 
   // The park survives what a browser restart does to a vault.

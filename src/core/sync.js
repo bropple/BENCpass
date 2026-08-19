@@ -515,6 +515,7 @@ async function shareHeader(vault, client) {
  */
 async function settleConflicts(vault, result) {
   vault.park(result.conflicts.map((c) => c.parked).filter(Boolean));
+
   if (vault.locked) return;
 
   for (const c of result.conflicts) {
@@ -545,6 +546,30 @@ export async function syncOnce(vault, client, state) {
     syncedRev: state.syncedRev,
   });
   guardRecordRollback(result);
+
+  // A locked vault cannot settle a conflict: superseding re-seals the kept
+  // copy, and that needs the key. So this round is parked and abandoned — no
+  // apply, no push, and above all no advancing of state.
+  //
+  // Half-doing it was the trap. Pushing the losing side is a guaranteed 422,
+  // and dropping it from the push while still advancing the sequence is worse
+  // than it looks: the record falls out of the next delta pull, so nothing can
+  // ever see the disagreement again and the two copies stay different for
+  // ever. Leaving the state exactly where it was means the next pull delivers
+  // the same records, and an unlocked sync settles them the ordinary way.
+  //
+  // Parking first is what makes this safe to abandon: the losing envelope is
+  // persisted without the key, so nothing is lost by waiting. Found by the
+  // model test — a ten-operation sequence that wedged a machine for ever, and
+  // then a seven-operation one that showed the obvious fix was also wrong.
+  if (vault.locked && result.conflicts.length) {
+    vault.park(result.conflicts.map((c) => c.parked).filter(Boolean));
+    throw new SyncError(
+      `${result.conflicts.length} record(s) changed on two machines at once and ` +
+        `cannot be settled while this vault is locked — unlock to finish syncing`,
+      'conflict-locked',
+    );
+  }
 
   await vault.applyEnvelopes(result.envelopes);
   await settleConflicts(vault, result);
@@ -577,6 +602,34 @@ export async function syncOnce(vault, client, state) {
     await settleConflicts(vault, result);
     state.seq = again.seq;
     state.highestSeq = Math.max(state.highestSeq, again.seq);
+    state.syncedRev = result.syncedRev;
+
+    push = await client.putRecords(result.toPush, state.seq);
+  }
+
+  if (push.status === 422) {
+    // The server holds a newer revision of a record than the one just pushed.
+    // A delta pull cannot fix that: state.seq has already moved past whatever
+    // superseded it, so the record is not in the delta and merge cannot see
+    // that the server is ahead. One full pull puts the record back in view,
+    // and the merge that follows settles it the ordinary way.
+    //
+    // Without this, a machine that ever reached this state stayed there. The
+    // guard above stops it arising; this is how a machine already in it gets
+    // out, including one wedged by a version that did not have the guard.
+    const all = await client.getRecords(0);
+    guardRollback(all.seq, state);
+
+    result = merge({
+      local: vault.envelopes,
+      remote: all.records,
+      syncedRev: state.syncedRev,
+    });
+    guardRecordRollback(result);
+    await vault.applyEnvelopes(result.envelopes);
+    await settleConflicts(vault, result);
+    state.seq = all.seq;
+    state.highestSeq = Math.max(state.highestSeq, all.seq);
     state.syncedRev = result.syncedRev;
 
     push = await client.putRecords(result.toPush, state.seq);
