@@ -49,9 +49,7 @@ jobs:
       # anything it was asked to look for — "Package gl was not found", from a
       # job that never mentions graphics.
       - name: Toolkit dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+        run: tools/linux-gui-deps.sh
 
       # The rescue tool is a second Go module and a much larger dependency
       # tree — a GUI toolkit rather than net/http and crypto — so it is the one

@@ -44,9 +44,7 @@ jobs:
       # Fyne needs a windowing stack to compile against even for a test run
       # that never opens a window.
       - name: Toolkit dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+        run: tools/linux-gui-deps.sh
 
       # Twice, against two different sets of bytes.
       #
@@ -112,9 +110,7 @@ jobs:
 
       - name: Toolkit dependencies
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+        run: tools/linux-gui-deps.sh
 
       # -H=windowsgui on Windows so the program does not open a console window
       # behind its own window. internal/winconsole then attaches the parent's
