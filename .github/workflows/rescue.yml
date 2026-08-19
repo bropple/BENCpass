@@ -141,7 +141,14 @@ jobs:
           out=$(printf '%s' 'correct horse battery staple' \
             | ./build/${{ matrix.binary }} -list internal/vault/testdata/backup.json)
           echo "$out"
-          echo "$out" | grep -q '3 record(s)'
+          # Any non-zero count, not a fixed one. This asserted '3 record(s)'
+          # and broke the moment the fixtures gained a record for an unrelated
+          # test — including, silently, in release.yml, where it would have
+          # failed a tagged build after signing had already spent a version
+          # number. What is being checked is that the binary opens a real vault
+          # and finds records in it; the exact contents of a fixture are the
+          # Go tests' business.
+          echo "$out" | grep -qE '[1-9][0-9]* record\(s\)'
         working-directory: rescue
 
       # Windows gets a zip and everything else a tar, because GitHub's zip does
