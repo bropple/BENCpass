@@ -55,12 +55,13 @@ await v.enrolRecovery(PASSWORD, CODE, T);
 
 const persisted = v.toJSON();
 
-// 1. What the extension's "save an encrypted backup" writes — meta and
-// envelopes and nothing else. syncedRev is that machine's private note about
-// what it has already sent to a server and is deliberately not in the file, so
-// it must not be in the fixture either.
+// 1. What the extension's "save an encrypted backup" writes — from the same
+// function the button calls, rather than a second copy of its rules here. That
+// is the whole point of Vault.backup() existing: syncedRev stays behind, the
+// fingerprint wrapping is stripped, and a fixture cannot drift from the format
+// by being hand-rolled beside it.
 writeFileSync(new URL('./backup.json', import.meta.url),
-  JSON.stringify({ meta: persisted.meta, envelopes: persisted.envelopes }, null, 2) + '\n');
+  JSON.stringify(v.backup(), null, 2) + '\n');
 
 // 2. What the server keeps in its data directory. Same vault, different shape:
 // records keyed by id and carrying a sequence number, beside devices and codes

@@ -385,7 +385,7 @@ export async function joinVault({ client, password, Vault }) {
 
   let vault;
   try {
-    vault = Vault.load({ meta, envelopes: [], syncedRev: {} });
+    vault = Vault.load({ meta: Vault.adoptMeta(meta), envelopes: [], syncedRev: {} });
   } catch (err) {
     throw new SyncError(`that server's vault is not readable by this version: ${err.message}`, 'bad-meta');
   }
@@ -453,7 +453,11 @@ async function shareHeader(vault, client) {
   // switched off and two machines could both publish, last one winning. Passing
   // 0 instead makes the check-and-increment atomic under the store's own lock,
   // and the loser gets a 409.
-  await client.putMeta(vault.meta, seq);
+  // portableMeta, not meta: the header goes to a machine the user runs but does
+  // not carry, and a fingerprint wrapping on it is a way into the vault for
+  // whoever can present that credential. Nothing can use it there in any case —
+  // a server has no authenticator, and a joining machine has its own.
+  await client.putMeta(vault.portableMeta, seq);
   return { published: true };
 }
 

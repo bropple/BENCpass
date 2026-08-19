@@ -114,11 +114,45 @@ export class Vault {
    * unlock as a side effect of taking a backup.
    */
   backup() {
-    const { meta, envelopes } = this.toJSON();
-    return {
-      meta: { ...meta, wraps: { ...meta.wraps, biometric: null } },
-      envelopes,
-    };
+    const { envelopes } = this.toJSON();
+    return { meta: this.portableMeta, envelopes };
+  }
+
+  /**
+   * The header as it should leave this machine, by any route.
+   *
+   * A fingerprint wrapping is the one part of the header that is local to the
+   * machine that made it. The secret behind it lives in that machine's
+   * authenticator, so no other machine can use it — but any machine, or any
+   * server, that holds the wrap holds a way into the vault for whoever can
+   * present that credential, which for a passkey that syncs is not
+   * necessarily the owner.
+   *
+   * So it is stripped on the way out, whether the destination is a file or a
+   * server. Both used to do this separately and one of them did not do it at
+   * all; there is one rule and this is where it lives.
+   *
+   * Cloned, never edited: `meta` is the live object, and blanking the wrap in
+   * place would take this machine's own fingerprint unlock with it.
+   */
+  get portableMeta() {
+    const { wraps, ...rest } = this.meta;
+    return { ...rest, wraps: { ...wraps, biometric: null } };
+  }
+
+  /**
+   * A header arriving from somewhere else, made safe to adopt.
+   *
+   * Whatever a server hands over, this machine cannot use another machine's
+   * fingerprint wrapping — the secret is in that machine's authenticator. A
+   * vault that claims a fingerprint it cannot produce offers an unlock that
+   * always fails, so the claim is dropped rather than inherited. It also means
+   * a header published by an older version, which sent the wrap, does not
+   * strand the machine that joins from it.
+   */
+  static adoptMeta(meta) {
+    if (!meta?.wraps) return meta;
+    return { ...meta, wraps: { ...meta.wraps, biometric: null } };
   }
 
   // ---- unlocking -----------------------------------------------------------

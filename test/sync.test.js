@@ -847,3 +847,34 @@ test('a rebuilt server is refused, and forgetting the sync state recovers it', {
   // machine could still join it.
   assert.ok((await toRebuilt.getMeta()).meta, 'the header was not republished');
 });
+
+test('a fingerprint never reaches the server, and is never inherited', async (t) => {
+  // The same rule as the encrypted backup, on the other route out. A header
+  // published to a server is a header on a machine the user runs but does not
+  // carry, and the secret behind a fingerprint wrapping belongs to an
+  // authenticator that may sync across an account's devices.
+  const secret = crypto.getRandomValues(new Uint8Array(32));
+  const v = await Vault.create({ password: 'pw' });
+  await v.add({ type: 'login', title: 'bank', username: 'u', password: 'secret' });
+  await v.enrolBiometric('pw', secret);
+  assert.ok(v.hasBiometric, 'the vault under test must have a fingerprint');
+
+  // What shareHeader puts on the wire.
+  const published = JSON.parse(JSON.stringify(v.portableMeta));
+  assert.equal(published.wraps.biometric, null, 'the fingerprint wrapping went to the server');
+  assert.ok(published.wraps.password, 'the password wrapping has to survive');
+  assert.ok(published.kdf.salt, 'the salt has to survive');
+
+  // Publishing did not cost this machine its own fingerprint.
+  assert.ok(v.hasBiometric, 'publishing the header removed the live fingerprint');
+
+  // A machine joining from it does not claim a fingerprint it cannot produce —
+  // including from a header published by an older version that still sent one.
+  const stale = JSON.parse(JSON.stringify(v.meta));
+  assert.ok(stale.wraps.biometric, 'this test needs a header that still carries one');
+  const joined = Vault.load({ meta: Vault.adoptMeta(stale), envelopes: [], syncedRev: {} });
+  assert.equal(joined.hasBiometric, false, 'the joining machine inherited a fingerprint');
+
+  // And it still opens the way a joining machine actually opens it.
+  await joined.unlock('pw');
+});
