@@ -16,6 +16,7 @@ import (
 	"os"
 
 	"ropple.net/bencpass/rescue/internal/vault"
+	"ropple.net/bencpass/rescue/internal/winconsole"
 )
 
 // Version is stamped at build time:
@@ -48,6 +49,11 @@ This program never writes to <file> and never uses the network.
 `
 
 func main() {
+	// On Windows this is a GUI binary with no console of its own, so every
+	// headless mode would otherwise print into nothing. Does nothing anywhere
+	// else, and nothing when output is already redirected.
+	winconsole.Attach()
+
 	var (
 		info     = flag.Bool("info", false, "describe the file without unlocking it")
 		listing  = flag.Bool("list", false, "list the records")

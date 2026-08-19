@@ -93,6 +93,7 @@ src/core/     crypto, vault, merge, sync — no browser APIs, tested under Node
 src/ui/       the manager page
 src/vendor/   Argon2 (hash-wasm), vendored as one ES module
 server/       the Go sync server
+rescue/       BENCpass Rescue — opens a vault without a browser
 tools/        preview harness, icon and build scripts
 hosts/        a native host, built and then abandoned — see the note below
 test/         Node tests, including integration tests against the real server
@@ -308,6 +309,24 @@ Get-ExecutionPolicy -List
 | `CurrentUser` or `LocalMachine` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` — no admin needed |
 | `MachinePolicy` or `UserPolicy` | Group Policy. `-ExecutionPolicy` **cannot** override these; pipe the script through stdin instead, which the policy does not govern: `Get-Content -Raw tools\run-extension.ps1 \| powershell -NoProfile -Command -` |
 | Nothing restrictive, but it still complains | The file carries a mark-of-the-web from being downloaded rather than cloned: `Unblock-File tools\run-extension.ps1` |
+
+## If it all goes wrong
+
+Two things exist for the day the extension cannot help.
+
+**An encrypted backup**, from Settings → Your data. The whole vault, still
+sealed, so it is safe to keep on a USB stick or a cloud drive. It cannot be
+opened without your master password or your recovery code — and it is the only
+practical way to get the vault out of `browser.storage.local`, which lives
+inside Firefox's IndexedDB.
+
+**[BENCpass Rescue](rescue/)**, a small program that opens that backup — or a
+sync server's `store.json` — with no browser involved. One file per platform,
+attached to every release, no runtime and nothing to install. It reads; it never
+writes to the vault you give it and never touches the network.
+
+Keep both with your recovery code. Together they are a complete way back that
+does not depend on this browser, this machine, or this software still working.
 
 ## Reading
 

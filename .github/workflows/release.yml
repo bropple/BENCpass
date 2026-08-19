@@ -24,8 +24,95 @@ permissions:
   contents: write # to create the release and upload the .xpi
 
 jobs:
+  # The rescue tool ships with the release rather than separately. Somebody who
+  # needs it needs it on a day they cannot install anything, so the binary they
+  # want has to already be next to the .xpi they installed months earlier.
+  rescue:
+    name: Rescue tool (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux
+            binary: bencpass-rescue
+            archive: tar
+          - os: macos-latest
+            name: macOS
+            binary: bencpass-rescue
+            archive: tar
+          - os: windows-latest
+            name: Windows
+            binary: bencpass-rescue.exe
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Toolkit dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+
+      - name: Build
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          flags="-s -w -X main.Version=${version}"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            flags="$flags -H=windowsgui"
+          fi
+          go build -trimpath -ldflags "$flags" -o "build/${{ matrix.binary }}" .
+        working-directory: rescue
+
+      # The version it reports has to be the tag being released. A binary that
+      # says "dev" in a release archive is a bug report filed against nothing.
+      - name: It reports the release version
+        shell: bash
+        run: |
+          got=$(./build/${{ matrix.binary }} -version)
+          echo "$got"
+          case "$got" in
+            *"${GITHUB_REF_NAME#v}"*) ;;
+            *) echo "::error::built binary reports: $got"; exit 1 ;;
+          esac
+        working-directory: rescue
+
+      - name: It opens a vault
+        shell: bash
+        run: |
+          printf '%s' 'correct horse battery staple' \
+            | ./build/${{ matrix.binary }} -list internal/vault/testdata/backup.json \
+            | grep -q '3 record(s)'
+        working-directory: rescue
+
+      - name: Package
+        shell: bash
+        run: |
+          cd rescue/build
+          name="bencpass-rescue-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "${name}.zip" "${{ matrix.binary }}"
+          else
+            tar czf "${name}.tar.gz" "${{ matrix.binary }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rescue-${{ matrix.name }}
+          path: |
+            rescue/build/*.tar.gz
+            rescue/build/*.zip
+          if-no-files-found: error
+
   release:
     name: Build, sign, publish
+    needs: rescue
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -122,11 +209,18 @@ jobs:
           echo "xpi=$xpi" >> "$GITHUB_ENV"
           echo "signed: $xpi"
 
+      - name: Collect the rescue binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rescue-*
+          path: build/rescue
+          merge-multiple: true
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "$xpi" \
+          gh release create "$GITHUB_REF_NAME" "$xpi" build/rescue/* \
             --title "BENCpass $GITHUB_REF_NAME" \
             --generate-notes \
             --notes-start-tag "$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo '')"

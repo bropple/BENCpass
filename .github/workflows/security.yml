@@ -44,6 +44,15 @@ jobs:
           "$(go env GOPATH)/bin/govulncheck" ./...
         working-directory: server
 
+      # The rescue tool is a second Go module and a much larger dependency
+      # tree — a GUI toolkit rather than net/http and crypto — so it is the one
+      # more likely to be the subject of an advisory, not less. It is also the
+      # program that opens vaults, which makes leaving it unscanned the wrong
+      # way round.
+      - name: govulncheck (rescue tool)
+        run: "$(go env GOPATH)/bin/govulncheck ./..."
+        working-directory: rescue
+
   npm-audit:
     name: npm dependencies
     runs-on: ubuntu-latest

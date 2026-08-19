@@ -1,0 +1,166 @@
+name: Rescue tool
+
+# The rescue tool is the program somebody runs on the worst day they have had
+# with this software: the profile will not load, or the laptop is gone, and a
+# printed recovery code and a backup file are all that is left. It therefore
+# gets built on all three platforms on every change, because "it compiles on
+# the machine it was written on" is not a claim worth anything here.
+#
+# It is a separate workflow from ci.yml because it is a separate program, in a
+# separate module, that the extension does not depend on and that does not
+# depend on the extension — except for the one thing they share, which is the
+# vault format, and that is exactly what the tests pin.
+
+on:
+  push:
+    branches: [main]
+    paths: ['rescue/**', 'src/core/**', '.github/workflows/rescue.yml']
+  pull_request:
+    paths: ['rescue/**', 'src/core/**', '.github/workflows/rescue.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      # Node, because the tests are cross-language on purpose: the fixtures are
+      # sealed by the extension's own core, and the export round trip is read
+      # back by the extension's own importer. Without node those tests skip,
+      # and a skipped cross-language test is the whole value gone.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Fyne needs a windowing stack to compile against even for a test run
+      # that never opens a window.
+      - name: Toolkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+
+      # The fixtures are committed, but regenerating them proves the format
+      # this tool reads is still the format the extension writes. A diff here
+      # is the two implementations drifting, which is the failure this whole
+      # arrangement exists to catch.
+      - name: Fixtures still match what the extension writes
+        run: |
+          node rescue/internal/vault/testdata/gen.mjs
+          git diff --stat -- rescue/internal/vault/testdata/
+          if ! git diff --quiet -- rescue/internal/vault/testdata/backup.json \
+                                   rescue/internal/vault/testdata/store.json; then
+            echo "::error::the vault format changed and the rescue fixtures were not regenerated"
+            echo "Run: node rescue/internal/vault/testdata/gen.mjs"
+            exit 1
+          fi
+
+      - name: Tests
+        run: go test -race ./...
+        working-directory: rescue
+
+      - name: Vet
+        run: go vet ./...
+        working-directory: rescue
+
+      # The Windows-only console code cannot be built by the Linux job and is
+      # the easiest file in the repository to break without noticing, so it is
+      # type-checked for its own platform here as well as compiled by the
+      # Windows job below.
+      - name: The Windows console code type-checks
+        run: GOOS=windows go vet ./internal/winconsole
+        working-directory: rescue
+
+  build:
+    name: ${{ matrix.name }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux
+            binary: bencpass-rescue
+            archive: tar
+          - os: macos-latest
+            name: macOS
+            binary: bencpass-rescue
+            archive: tar
+          - os: windows-latest
+            name: Windows
+            binary: bencpass-rescue.exe
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Toolkit dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+
+      # -H=windowsgui on Windows so the program does not open a console window
+      # behind its own window. internal/winconsole then attaches the parent's
+      # console when a headless flag is used, which is what keeps -list and
+      # -version working from a terminal.
+      - name: Build
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          flags="-s -w -X main.Version=${version}"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            flags="$flags -H=windowsgui"
+          fi
+          go build -trimpath -ldflags "$flags" -o "build/${{ matrix.binary }}" .
+        working-directory: rescue
+
+      - name: It runs
+        shell: bash
+        run: ./build/${{ matrix.binary }} -version
+        working-directory: rescue
+
+      # It must also be able to open a real vault, on the platform it was just
+      # built for. A binary that starts and cannot do the one thing it exists
+      # for has passed every check that matters least.
+      - name: It opens a vault
+        shell: bash
+        run: |
+          out=$(printf '%s' 'correct horse battery staple' \
+            | ./build/${{ matrix.binary }} -list internal/vault/testdata/backup.json)
+          echo "$out"
+          echo "$out" | grep -q '3 record(s)'
+        working-directory: rescue
+
+      # Windows gets a zip and everything else a tar, because GitHub's zip does
+      # not carry the executable bit and a downloaded binary that needs a chmod
+      # before it will start is one nobody expects.
+      - name: Package
+        shell: bash
+        run: |
+          cd rescue/build
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "bencpass-rescue-${{ matrix.name }}.zip" "${{ matrix.binary }}"
+          else
+            tar czf "bencpass-rescue-${{ matrix.name }}.tar.gz" "${{ matrix.binary }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencpass-rescue-${{ matrix.name }}
+          path: |
+            rescue/build/*.tar.gz
+            rescue/build/*.zip
+          if-no-files-found: error

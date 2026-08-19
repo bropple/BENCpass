@@ -252,6 +252,23 @@ readable. Its wire format is documented in `ARCHITECTURE.md` §4.
 
 ---
 
+## The rescue tool is not part of this submission either
+
+`rescue/` is a small Go program a user may optionally download to open their own
+vault when this add-on cannot be reached — a profile that will not load, or a
+machine that is gone. It is not bundled, not downloaded by the extension, and
+not required.
+
+It reads two things: the encrypted backup the add-on can write (Settings → Your
+data), and a sync server's data file. It is read-only, makes no network request
+of any kind, and cannot unlock anything without the master password or the
+recovery code.
+
+It is in the repository because the vault format now has two implementations and
+both should be readable. The tests are cross-language for that reason: the Go
+fixtures are sealed by `src/core/` itself, and its exports are read back by
+`src/core/transfer.js`, so the two cannot drift unnoticed.
+
 ## Things a reviewer may notice, answered
 
 **MV2.** The unlocked vault key lives in a persistent background page and is a

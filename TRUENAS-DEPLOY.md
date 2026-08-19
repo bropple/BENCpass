@@ -274,6 +274,14 @@ data directory.
 
 **Snapshot the dataset.** ZFS snapshots are the whole answer here.
 
+And note what the dataset is, before you need it: `store.json` holds the vault
+header and every record, all encrypted. That makes it a complete backup of the
+vault as well as a server's working state. [BENCpass
+Rescue](rescue/) opens it directly — point it at the dataset and it finds the
+file — with your master password or your recovery code. So a NAS snapshot is
+also a way back into your passwords if every machine is lost, which is worth
+knowing on the day it happens rather than after.
+
 ---
 
 ## Revoking a device
