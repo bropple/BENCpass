@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -49,12 +50,15 @@ const Format = 1
 // These ceilings are far above anything the extension writes (128 MiB, t=3,
 // p=1) and far below anything that takes the process down.
 const (
-	maxFileBytes   = 256 << 20 // a vault of 10,000 records is a few MiB
-	maxMemoryKiB   = 2 << 20   // 2 GiB
+	maxMemoryKiB   = 2 << 20 // 2 GiB
 	maxIterations  = 32
 	maxParallelism = 16
 	keyLen         = 32 // AES-256
 )
+
+// A var rather than a const so that a test can lower it and prove the bound
+// without writing 256 MiB to do it.
+var maxFileBytes int64 = 256 << 20 // a vault of 10,000 records is a few MiB
 
 // ErrWrongSecret is returned when the vault will not open.
 //
@@ -147,13 +151,31 @@ func Read(path string) (*File, error) {
 		// take it and find the file inside.
 		return Read(strings.TrimRight(path, "/\\") + string(os.PathSeparator) + "store.json")
 	}
-	if info.Size() > maxFileBytes {
-		return nil, fmt.Errorf("%s is %d bytes, larger than this tool will read", path, info.Size())
-	}
-
-	raw, err := os.ReadFile(path)
+	// Bounded while reading rather than by asking stat first.
+	//
+	// The first version checked info.Size() and then called os.ReadFile, which
+	// is not a bound at all: stat reports 0 for a FIFO and for /dev/zero, and
+	// os.ReadFile reads to EOF regardless — verified, 4 MiB through a fifo that
+	// stat called empty, and /dev/zero never reaches EOF at all. A regular file
+	// could also be grown between the stat and the read. The limit belongs on
+	// the read.
+	//
+	// Non-regular files are deliberately still accepted: reading a decrypted
+	// backup straight from a pipe — `rescue -list <(gpg -d backup.json.gpg)` —
+	// is a good way to use this, and refusing it to fix the bound would cost
+	// more than it bought.
+	fh, err := os.Open(path)
 	if err != nil {
 		return nil, err
+	}
+	defer fh.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(fh, maxFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > maxFileBytes {
+		return nil, fmt.Errorf("%s is larger than the %d bytes this tool will read", path, maxFileBytes)
 	}
 
 	f := &File{Path: path}

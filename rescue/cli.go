@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -59,8 +61,32 @@ func askSecret(prompt string) (string, error) {
 		}
 		return strings.TrimRight(line, "\r\n"), nil
 	}
+	// Ctrl-C during the prompt would otherwise kill the process between
+	// term.ReadPassword disabling echo and its deferred restore, leaving the
+	// shell silently typing nothing back. The person reaching for this tool is
+	// already having a bad day; handing back a terminal that looks broken is a
+	// poor addition to it.
+	fd := int(os.Stdin.Fd())
+	state, err := term.GetState(fd)
+	if err == nil {
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+		defer func() {
+			signal.Stop(stop)
+			close(stop)
+		}()
+		go func() {
+			if _, ok := <-stop; !ok {
+				return
+			}
+			_ = term.Restore(fd, state)
+			fmt.Fprintln(os.Stderr)
+			os.Exit(130) // 128 + SIGINT, what a shell expects
+		}()
+	}
+
 	fmt.Fprint(os.Stderr, prompt)
-	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	b, err := term.ReadPassword(fd)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return "", err
@@ -130,6 +156,12 @@ func list(v *vault.Vault) {
 
 // show prints one record in full, passwords included, having said so.
 func show(v *vault.Vault, want string) error {
+	// Said here too, and this is the mode where it matters most: somebody
+	// asking for one password by name. If that record is the damaged one, the
+	// answer without this line is "nothing matches", which reads as "you never
+	// saved it" rather than "it is here and will not open".
+	report(os.Stderr, v)
+
 	want = strings.ToLower(want)
 	var hits []vault.Record
 	for _, r := range v.Records {

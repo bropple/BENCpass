@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -354,6 +353,12 @@ func (s *session) buildVault() fyne.CanvasObject {
 			widget.NewButton("Lock and choose another", func() {
 				s.vlt.Close()
 				s.vlt = nil
+				// Close nils the vault's own slice, but this one is a separate
+				// header still pointing at every decrypted record. Go cannot
+				// truly wipe those strings — the same admission wipe() makes —
+				// so dropping the reference is all there is, and keeping it
+				// would hold the whole vault in a locked session.
+				s.shown = nil
 				s.showChooser("")
 			})),
 		container.NewVBox(warnings...),
@@ -487,17 +492,9 @@ func (s *session) writeExport(path string) {
 	}
 	// The save dialog has already asked about replacing, so this truncates
 	// rather than refusing — unlike the command line, where nothing asked.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		s.fail(err)
-		return
-	}
-	if _, err := f.Write(body); err != nil {
-		f.Close()
-		s.fail(err)
-		return
-	}
-	if err := f.Close(); err != nil {
+	// Writing it is export's business, including the file mode the dialog just
+	// promised: see WriteReplacing for why that needs an explicit chmod.
+	if err := export.WriteReplacing(path, body); err != nil {
 		s.fail(err)
 		return
 	}

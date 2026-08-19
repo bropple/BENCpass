@@ -2,8 +2,10 @@ package export
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -163,5 +165,62 @@ func TestDoesNotEscapeHTMLInPasswords(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `a<b>c&d`) {
 		t.Errorf("password was escaped on the way out:\n%s", body)
+	}
+}
+
+// The window's save dialog creates the file before handing back a path, and
+// the mode argument to OpenFile applies only on create. Every GUI export
+// therefore landed at the umask's mode — 0644 on an ordinary machine — while
+// the dialog promised "created readable only by you".
+func TestReplacingAnExistingFileStillEndsUpPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix modes")
+	}
+	path := filepath.Join(t.TempDir(), "export.json")
+
+	// Exactly what the toolkit does first.
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteReplacing(path, []byte("every password")); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("export left at %v, want 0600 — anyone on this machine can read it", perm)
+	}
+}
+
+// The dialog's default filename is predictable, which is enough to plant a
+// link for on a shared machine.
+func TestRefusesToWriteThroughASymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privilege here")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "attacker-can-read-this")
+	link := filepath.Join(dir, "bencpass-export.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot symlink here: %v", err)
+	}
+
+	err := WriteReplacing(link, []byte("every password"))
+	if err == nil {
+		t.Fatal("wrote every password through a symlink")
+	}
+	if !strings.Contains(err.Error(), "symbolic link") {
+		t.Errorf("unhelpful message: %v", err)
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Error("the link's target was created anyway")
 	}
 }

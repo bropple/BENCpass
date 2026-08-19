@@ -1,12 +1,15 @@
 package vault
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -449,4 +452,79 @@ func TestReportsWhatTheVaultHas(t *testing.T) {
 	if !strings.Contains(f.KDFDescription(), "128 MiB") {
 		t.Errorf("kdf description = %q", f.KDFDescription())
 	}
+}
+
+// The read bound has to be a bound on the read.
+//
+// It used to be a check of os.Stat's size followed by os.ReadFile, which is no
+// bound at all: stat reports 0 bytes for a fifo and for /dev/zero, and
+// os.ReadFile reads to EOF whatever stat said. A store.json on a NAS is a file
+// an attacker may be able to replace with either.
+func TestRefusesToReadPastTheLimit(t *testing.T) {
+	was := maxFileBytes
+	maxFileBytes = 4096 // so the test does not have to write 256 MiB
+	t.Cleanup(func() { maxFileBytes = was })
+
+	path := filepath.Join(t.TempDir(), "huge.json")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("A"), int(maxFileBytes)+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Read(path)
+	if err == nil {
+		t.Fatal("a file over the limit was read")
+	}
+	if !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("unhelpful message: %v", err)
+	}
+}
+
+// The case the stat-then-read version could not see at all: something that
+// reports no size and then hands over as much as it likes.
+func TestRefusesAFileThatLiesAboutItsSize(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no fifos")
+	}
+	was := maxFileBytes
+	maxFileBytes = 4096
+	t.Cleanup(func() { maxFileBytes = was })
+
+	path := filepath.Join(t.TempDir(), "store.json")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skipf("cannot make a fifo here: %v", err)
+	}
+
+	// A writer that would go on for ever if anything let it.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			return
+		}
+		defer w.Close()
+		chunk := bytes.Repeat([]byte("A"), 4096)
+		for i := 0; i < 4096; i++ {
+			if _, err := w.Write(chunk); err != nil {
+				return // the reader stopped, which is the point
+			}
+		}
+	}()
+
+	if fi, err := os.Stat(path); err == nil && fi.Size() != 0 {
+		t.Fatalf("this test assumes a fifo stats as 0 bytes, got %d", fi.Size())
+	}
+
+	_, err := Read(path)
+	if err == nil {
+		t.Fatal("a fifo claiming to be empty was read without limit")
+	}
+	// The message has to be the bound refusing it, not a parse error further
+	// on. Asserting only that "an error happened" passed against the very
+	// stat-then-ReadFile version this test exists to reject: it read sixteen
+	// megabytes of As and then failed on the JSON, which is an error and is
+	// not the guarantee.
+	if !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("the fifo was read past the limit and failed later instead: %v", err)
+	}
+	<-done
 }

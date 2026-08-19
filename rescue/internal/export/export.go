@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -121,6 +122,48 @@ func csvCell(s string) string {
 		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 	}
 	return s
+}
+
+// WriteReplacing writes an export to a path the user has already agreed to
+// replace — the window's save dialog asks, so refusing here would be asking
+// twice and answering differently.
+//
+// It exists because the obvious version was wrong in a way nothing showed. The
+// toolkit's save dialog creates the file itself, before handing back a path,
+// so by the time this runs the file exists — and the mode argument to
+// OpenFile applies only when a file is *created*. Every export written from
+// the window landed 0644 while a dialog three lines earlier promised it was
+// "created readable only by you". The chmod is not belt and braces; it is the
+// only thing setting the mode at all.
+//
+// The symlink check is the other half. O_EXCL gives the command line a free
+// refusal of a planted link; a path the dialog has already agreed to replace
+// has no such protection, and the dialog's default filename is predictable
+// enough to plant one for.
+func WriteReplacing(path string, content []byte) error {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symbolic link — writing every password through it "+
+			"would put them somewhere you did not choose", path)
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// Before the plaintext goes in, not after.
+	if err := f.Chmod(0o600); err != nil {
+		// Windows has no unix modes to set and says so; the write is still
+		// worth doing there.
+		if runtime.GOOS != "windows" {
+			return fmt.Errorf("could not make %s readable only by you: %w", path, err)
+		}
+	}
+	if _, err := f.Write(content); err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // ToFile writes an export, refusing to overwrite anything.
