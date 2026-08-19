@@ -44,11 +44,20 @@ jobs:
           "$(go env GOPATH)/bin/govulncheck" ./...
         working-directory: server
 
+      # govulncheck loads packages, which for this module means compiling
+      # against a windowing stack. Without these it fails on cgo rather than on
+      # anything it was asked to look for — "Package gl was not found", from a
+      # job that never mentions graphics.
+      - name: Toolkit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev
+
       # The rescue tool is a second Go module and a much larger dependency
       # tree — a GUI toolkit rather than net/http and crypto — so it is the one
       # more likely to be the subject of an advisory, not less. It is also the
       # program that opens vaults, which makes leaving it unscanned the wrong
-      # way round.
+      # way round. It found four on its first run.
       - name: govulncheck (rescue tool)
         run: "$(go env GOPATH)/bin/govulncheck ./..."
         working-directory: rescue
