@@ -445,6 +445,65 @@ test('a tombstone flipped to live stays deleted', async () => {
   assert.equal(reopened.list().length, 0, 'a deleted record came back');
 });
 
+// Two vaults on one key, the way two enrolled machines share one vault.
+async function pair() {
+  const a = await Vault.create({ password: 'hunter2', kdf: FAST });
+  const meta = a.toJSON().meta;
+  const master = await deriveMasterKey('hunter2', fromB64(meta.kdf.salt), meta.kdf);
+  const vaultKey = await unwrapVaultKey(meta.wraps.password, master);
+  const b = Vault.load({ meta: structuredClone(meta), envelopes: [], syncedRev: {} });
+  await b.unlockWithVaultKey(vaultKey);
+  return [a, b];
+}
+
+test('a flag flipped to deleted on a NEWER live envelope cannot cross a tombstone, even via a locked sync', async () => {
+  // The one flag-flip with teeth. merge, key-free, lets a claimed tombstone
+  // fast-forward over a local tombstone — that is how two machines deleting
+  // the same record settle — so a server can dress another machine's live
+  // edit as a deletion to get it past ours. A LOCKED sync cannot open the
+  // body to notice; it must therefore remember that this envelope crossed a
+  // tombstone on the flag's word, and the unlock, which can open it, must
+  // honour the deletion and hand the smuggled body to a person instead.
+  const [a, b] = await pair();
+  const id = await a.add({ title: 'Bank', password: 'pw1' });
+  await b.applyEnvelopes(new Map(a.envelopes));
+  await b.update(id, { password: 'pw3' }); // rev 2, live, authentic
+  await a.remove(id); // rev 2, tombstone
+
+  const flipped = { ...b.envelopes.get(id), rev: 3, deleted: true };
+  // Re-seal at rev 3 the honest way (the server can only replay authentic
+  // bytes at their own rev, but a rev-3 edit is authentic too).
+  await b.update(id, { password: 'pw3' });
+  flipped.ct = b.envelopes.get(id).ct;
+  flipped.n = b.envelopes.get(id).n;
+
+  a.lock();
+  await a.applyEnvelopes(new Map([[id, flipped]])); // locked: adopts on the flag's word
+  const master = await deriveMasterKey('hunter2', fromB64(a.meta.kdf.salt), a.meta.kdf);
+  await a.unlockWithVaultKey(await unwrapVaultKey(a.meta.wraps.password, master));
+
+  assert.equal(a.get(id), undefined, 'a deleted record was resurrected by a flipped flag');
+  const forked = await a.resolveParked();
+  assert.equal(forked.length, 1, 'the smuggled live body was dropped instead of parked');
+  assert.match(a.get(forked[0]).title, /\(conflict\)/);
+  assert.equal(a.get(forked[0]).password, 'pw3', 'the parked body must be the smuggled edit');
+});
+
+test('an unlocked apply refuses an incoming envelope whose flag contradicts its body', async () => {
+  const [a, b] = await pair();
+  const id = await a.add({ title: 'Bank', password: 'pw1' });
+  await b.applyEnvelopes(new Map(a.envelopes));
+  await b.update(id, { password: 'pw2' }); // rev 2, live
+
+  const flipped = { ...b.envelopes.get(id), deleted: true };
+  await assert.rejects(
+    () => a.applyEnvelopes(new Map([[id, flipped]])),
+    (err) => err.code === 'tampered',
+    'a flag contradicting the sealed body must be refused, not adopted',
+  );
+  assert.equal(a.get(id).password, 'pw1', 'the refused envelope must change nothing');
+});
+
 test('a record cannot seal its own disappearance', async () => {
   // `deleted` in a sealed body is what a reader takes as proof a record was
   // removed. A record carrying it would vanish at the next unlock with its

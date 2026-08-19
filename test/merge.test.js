@@ -263,3 +263,65 @@ test('a same-numbered tombstone still beats a same-numbered edit', () => {
   assert.equal(r.conflicts[0].kind, 'delete');
   assert.equal(r.envelopes.get('a').deleted, true);
 });
+
+// ---- deletions against a withholding server ---------------------------------
+//
+// A server does not need to forge anything to resurrect a deleted record: it
+// only has to WITHHOLD the tombstone from the other machine, let that machine
+// edit in good faith, and serve the genuinely-newer, genuinely-authentic edit
+// back to the machine that deleted. The integer revision cannot tell "descends
+// from the tombstone" from "never saw the tombstone" — but this client never
+// writes a live body at an id it holds a tombstone for (add, import and
+// conflict forks all mint fresh ids), so a live envelope above our
+// acknowledged tombstone has no honest history at all, and is treated as the
+// divergence it is: the tombstone stays, the edit is parked for a person.
+
+test('a live envelope above an acknowledged tombstone is a conflict, not a fast-forward', () => {
+  const tomb = { ...env('a', 2), deleted: true };
+  const r = merge({
+    local: [tomb],
+    remote: [env('a', 3)], // authentic, newer, written blind to the deletion
+    syncedRev: { a: 2 }, // the server ACKNOWLEDGED our tombstone at 2
+  });
+  assert.equal(r.actions.get('a'), CONFLICT);
+  assert.equal(r.envelopes.get('a').deleted, true, 'the deletion was fast-forwarded away');
+  assert.equal(r.conflicts[0].kind, 'delete');
+  assert.equal(r.conflicts[0].parked.rev, 3, 'the blind edit must be parked, not dropped');
+  assert.deepEqual(r.toPush.map((e) => e.deleted), [true]);
+});
+
+test('two machines deleting the same record still converge: tombstone-over-tombstone fast-forwards', () => {
+  const mine = { ...env('a', 2), deleted: true };
+  const theirs = { ...env('a', 3), deleted: true }; // the other side superseded its tie
+  const r = merge({ local: [mine], remote: [theirs], syncedRev: { a: 2 } });
+  assert.equal(r.actions.get('a'), FAST_FORWARD);
+  assert.equal(r.envelopes.get('a').rev, 3);
+  assert.deepEqual(r.conflicts, []);
+  assert.deepEqual(r.toPush, []);
+});
+
+test('a tombstone at exactly the ancestor revision is a concurrent deletion, not our own echo', () => {
+  // Our acknowledged rev 2 cannot be a tombstone while our local rev 3 is
+  // live — nothing here edits a record it deleted — so a tombstone at rev 2
+  // is another machine's deletion that collided with our numbering. Keeping
+  // local would push the record straight over the deletion on an HONEST
+  // server (found by the model at seed 8675309, case 684677337).
+  const theirs = { ...env('a', 2), deleted: true };
+  const r = merge({ local: [env('a', 3)], remote: [theirs], syncedRev: { a: 2 } });
+  assert.equal(r.actions.get('a'), CONFLICT);
+  assert.equal(r.conflicts[0].kind, 'delete');
+  assert.equal(r.envelopes.get('a').deleted, true);
+  assert.equal(r.conflicts[0].parked.rev, 3, 'our racing edit must be parked, not dropped');
+});
+
+test('a live remote at the ancestor revision is still plain keep-local', () => {
+  const r = merge({ local: [env('a', 3)], remote: [env('a', 2)], syncedRev: { a: 2 } });
+  assert.equal(r.actions.get('a'), KEEP_LOCAL);
+});
+
+test('our own superseded tombstone above a live ancestor is still keep-local', () => {
+  const tomb = { ...env('a', 3), deleted: true };
+  const r = merge({ local: [tomb], remote: [env('a', 2)], syncedRev: { a: 2 } });
+  assert.equal(r.actions.get('a'), KEEP_LOCAL);
+  assert.deepEqual(r.toPush.map((e) => e.rev), [3]);
+});

@@ -123,13 +123,37 @@ export function merge({ local, remote, syncedRev }) {
       // A fast-forward means the remote genuinely moved forward. With the
       // rollback case handled above this reduces to r.rev > b, but the rule is
       // stated in full so it cannot rot into "l.rev === b is enough" again.
-      if (b !== undefined && l.rev === b && r.rev > l.rev) {
+      //
+      // Except over a local tombstone. A higher revision proves the remote is
+      // newer; it does not prove its writer ever SAW the deletion — the integer
+      // cannot tell descent from concurrency. Nothing in this client ever
+      // writes a live body at an id it holds a tombstone for (add, import and
+      // conflict forks all mint fresh ids, and update refuses a deleted id),
+      // so a live envelope above our acknowledged tombstone has exactly one
+      // honest explanation — none — and one dishonest one: the server withheld
+      // the tombstone from that writer and is now asking us to fast-forward
+      // our own deletion away. Falling through to the divergence handling
+      // below keeps the tombstone and parks the edit, so the resurrection is
+      // something a person sees and chooses, never something that just
+      // happens. Tombstone-over-tombstone still fast-forwards (that is how two
+      // machines deleting the same record settle); the remote flag is only a
+      // cleartext claim, so applyEnvelopes re-checks it against the sealed
+      // body the moment there is a key.
+      if (b !== undefined && l.rev === b && r.rev > l.rev && (!l.deleted || r.deleted)) {
         envelopes.set(id, r);
         nextSynced.set(id, r.rev);
         actions.set(id, FAST_FORWARD);
         continue;
       }
-      if (b !== undefined && r.rev === b) {
+      // The server is serving our ancestor back: only we moved. But "the same
+      // revision number as our ancestor" is not "our ancestor" — a tombstone
+      // at exactly rev b is another machine's concurrent deletion colliding
+      // with the revision the server acknowledged for us (our own acknowledged
+      // rev b cannot be a tombstone under a live local: nothing here edits a
+      // record it deleted). Steamrolling it re-pushed the record over a
+      // deletion on an honest server; it falls through to the tombstone-wins
+      // handling instead.
+      if (b !== undefined && r.rev === b && (!r.deleted || l.deleted)) {
         toPush.push(l);
         actions.set(id, KEEP_LOCAL);
         continue;

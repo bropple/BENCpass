@@ -224,6 +224,23 @@ export class Vault {
       // a tombstone and a deleted record comes back. The sealed body is the one
       // that cannot be invented.
       const body = await openRecord(key, e.id, e.rev, e);
+      // An envelope whose cleartext flag claims a deletion its sealed body
+      // does not make is something no client of this code ever wrote — the
+      // two are always set together — so the flag was flipped somewhere. Who
+      // could have flipped it decides who wins. `overTombstone` is stamped by
+      // a LOCKED applyEnvelopes when it replaces this vault's own tombstone
+      // on the flag's unverifiable word; a mismatch there means the SERVER
+      // lied to get past the deletion, and believing the body now would hand
+      // it exactly the resurrection merge refused. The id stays deleted and
+      // the live body is parked: it comes back as a visible "(conflict)"
+      // record — a recovery a person performs, not one a server performs.
+      // Without the stamp the envelope never crossed a tombstone, the flip
+      // can only be local-file tampering, and the sealed body is the
+      // authority as it always was: the record must not vanish.
+      if (e.deleted && !body?.deleted && e.overTombstone) {
+        this.park([e]);
+        continue;
+      }
       if (body?.deleted) continue;
       plain.set(e.id, body);
     }
@@ -626,7 +643,21 @@ export class Vault {
     // body, which is the authority, the moment there is a key to open it with.
     for (const [id, e] of next) {
       const cur = this.envelopes.get(id);
-      if (cur && e.rev < cur.rev && !e.deleted) next.set(id, cur);
+      if (cur && e.rev < cur.rev && !e.deleted) {
+        next.set(id, cur);
+        continue;
+      }
+      // A locked vault replacing its own tombstone is taking the incoming
+      // flag's word for the deletion continuing — the one claim it cannot
+      // verify without the key. The adoption is stamped so that the unlock,
+      // which can verify, knows this envelope crossed a tombstone: if its
+      // sealed body then turns out to be live, the flag was flipped by the
+      // server to resurrect the record, not by someone editing the local
+      // file, and the deletion is honoured. Locked path only — the unlocked
+      // block below verifies immediately and refuses instead.
+      if (this.locked && cur?.deleted && (e.rev !== cur.rev || e.ct !== cur.ct || e.n !== cur.n)) {
+        next.set(id, { ...e, overTombstone: true });
+      }
     }
 
     if (!this.locked) {
@@ -646,6 +677,35 @@ export class Vault {
           // says so, not because the envelope claims it.
           const body = await openRecord(this.#key, id, e.rev, e);
 
+          // The cleartext flag is not covered by the AAD, so the server can
+          // flip it — and merge, key-free, has to take it at its word (it is
+          // what lets tombstone-over-tombstone fast-forward). This is where
+          // the word is checked. No client ever writes the flag and the body
+          // disagreeing, so a mismatch on an INCOMING envelope is tampering,
+          // not a version skew; it is refused loudly like a rollback, before
+          // anything is adopted. An envelope already local (a locked sync
+          // adopted it on the flag's word) is not re-refused — that would turn
+          // one tampered pull into a machine that never syncs again — it is
+          // held to the same rule unlockWithVaultKey applies: stamped as
+          // having crossed our tombstone, it stays deleted and its live body
+          // is parked for a person; unstamped, the body is the authority.
+          if (Boolean(e.deleted) !== Boolean(body?.deleted)) {
+            const changed = !cur || cur.rev !== e.rev || cur.ct !== e.ct || cur.n !== e.n;
+            if (changed) {
+              const err = new Error(
+                `record ${id}@${e.rev}: the envelope's deleted flag contradicts its sealed ` +
+                  `body — the flag was tampered with in transit or on the server`,
+              );
+              err.code = 'tampered';
+              throw err;
+            }
+            if (e.deleted && !body?.deleted && e.overTombstone) {
+              this.park([e]);
+              this.#plain.delete(id);
+              continue;
+            }
+          }
+
           // A live record must never go backwards here.
           //
           // Belt and braces: merge() already refuses a server that serves a
@@ -662,7 +722,6 @@ export class Vault {
           // one machine races an edit on another, and merge resolves that in
           // the tombstone's favour. Deleting is the fail-safe direction, so a
           // regression is refused only when the body says the record is alive.
-          const cur = this.envelopes.get(id);
           if (cur && e.rev < cur.rev && !body?.deleted) {
             next.set(id, cur);
             continue;
@@ -673,7 +732,8 @@ export class Vault {
             continue;
           }
           this.#plain.set(id, body);
-        } catch {
+        } catch (cause) {
+          if (cause?.code === 'tampered') throw cause;
           // Almost always one cause: this vault was pointed at a server holding
           // someone else's — or an older, differently-keyed — vault. Saying so
           // beats a decrypt failure on an arbitrary record, which reads like
