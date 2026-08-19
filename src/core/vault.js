@@ -749,6 +749,15 @@ export class Vault {
     }
 
     if (!this.locked) {
+      // Worked on a copy and committed at the end, with `next`.
+      //
+      // This loop refuses a batch by throwing, and it used to throw having
+      // already edited the live plaintext map while the envelope map was
+      // still the old one. The two then disagreed, and every later get() and
+      // list() dereferenced an id that had no envelope: one flipped flag from
+      // a server and the vault threw on every read until the page was
+      // reloaded. Refusing a batch has to leave the vault exactly as it was.
+      const committed = new Map(this.#plain);
       for (const [id, e] of next) {
         const cur = this.envelopes.get(id);
         // Unchanged means the same bytes, not the same number. Two machines
@@ -758,7 +767,7 @@ export class Vault {
         // Skipping on rev alone left the old plaintext on screen over the new
         // envelope: a same-rev tombstone was stored but the record it deleted
         // stayed visible until the next unlock quietly vanished it.
-        if (cur && cur.rev === e.rev && cur.ct === e.ct && this.#plain.has(id)) continue;
+        if (cur && cur.rev === e.rev && cur.ct === e.ct && committed.has(id)) continue;
         try {
           // Same reasoning as unlockWithVaultKey: the flag is the server's to
           // flip, the seal is not. openEnvelope opens under the claim the
@@ -790,7 +799,7 @@ export class Vault {
             }
             if (e.deleted && !body?.deleted && e.overTombstone) {
               this.park([e]);
-              this.#plain.delete(id);
+              committed.delete(id);
               continue;
             }
           }
@@ -817,10 +826,10 @@ export class Vault {
           }
 
           if (body?.deleted) {
-            this.#plain.delete(id);
+            committed.delete(id);
             continue;
           }
-          this.#plain.set(id, body);
+          committed.set(id, body);
         } catch (cause) {
           if (cause?.code === 'tampered') throw cause;
           // Almost always one cause: this vault was pointed at a server holding
@@ -835,9 +844,11 @@ export class Vault {
           throw err;
         }
       }
-      for (const id of [...this.#plain.keys()]) {
-        if (!next.has(id)) this.#plain.delete(id);
+      for (const id of [...committed.keys()]) {
+        if (!next.has(id)) committed.delete(id);
       }
+      // Both maps change together or neither does.
+      this.#plain = committed;
     }
 
     this.envelopes = next;

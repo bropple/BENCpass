@@ -693,3 +693,25 @@ test('a mark only this machine can make cannot arrive from a server', async () =
   assert.equal(clean.seq, undefined);
   assert.deepEqual(Object.keys(clean).sort(), ['ct', 'deleted', 'id', 'n', 'rev']);
 });
+
+test('a refused batch leaves the vault readable', async () => {
+  // applyEnvelopes refuses a batch by throwing, and it used to throw having
+  // already edited the plaintext map while the envelope map was still the old
+  // one. Every later get() and list() then dereferenced an id with no
+  // envelope: one flipped flag from a server and the vault threw on every
+  // read until the page was reloaded — a brick, from one bit.
+  const v = await Vault.create({ password: 'pw', kdf: FAST });
+  const other = Vault.load(JSON.parse(JSON.stringify(v.toJSON())));
+  await other.unlock('pw');
+  const good = await other.add({ title: 'Good', password: 'p1' });
+  const bad = await other.add({ title: 'Bad', password: 'p2' });
+
+  const envs = JSON.parse(JSON.stringify(other.toJSON().envelopes));
+  envs.find((e) => e.id === bad).deleted = true; // the flag, flipped in transit
+
+  await assert.rejects(() => v.applyEnvelopes(envs), (err) => err.code === 'tampered');
+
+  // Readable, and unchanged — refusing a batch must apply none of it.
+  assert.doesNotThrow(() => v.list());
+  assert.equal(v.get(good), undefined, 'half the refused batch was applied anyway');
+});

@@ -59,6 +59,17 @@ jobs:
       # directories, and the one bug that mattered in them (cleanup handlers
       # killing web-ext while the browser it detached kept running) was a
       # logic error that parsed perfectly.
+      # The model test across eight seeds rather than the one `npm test` uses.
+      #
+      # An audit measured what the single-seed default misses: reintroduce the
+      # fast-forward resurrection guard or the merge-layer rollback report and
+      # it stays green, while both fail within seconds once the seed varies.
+      # A minute here is worth more than any other minute in this file.
+      - name: Sync model, several seeds
+        run: npm run test:model
+        env:
+          MODEL_CASES: '2000'
+
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck

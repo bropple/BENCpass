@@ -3,7 +3,8 @@
   "version": "0.11.0",
   "description": "Self-hosted, end-to-end encrypted password manager for Firefox/Zen",
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:model": "MODEL_CASES=2000 node tools/model-seeds.mjs"
   },
   "keywords": [],
   "author": "",
