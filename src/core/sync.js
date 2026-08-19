@@ -532,6 +532,31 @@ async function settleConflicts(vault, result) {
   }
 }
 
+/**
+ * An envelope as it is allowed to arrive from a server.
+ *
+ * Only the five fields the wire format defines survive. Anything else is
+ * dropped, and one of them mattered: `overTombstone` is a mark a LOCKED
+ * applyEnvelopes puts on an envelope it adopted on the flag's unverifiable
+ * word, and everything downstream treats it as proof that the mark was made
+ * HERE. It is an ordinary cleartext field, so a server could simply write it
+ * itself and be believed — enough to have a live record hidden as a tombstone
+ * and re-minted under a new id as a "(conflict)" fork, pushed to every machine.
+ *
+ * A local mark that the far end can forge is not a local mark. Stripping the
+ * whole shape rather than that one name means the next such field cannot
+ * repeat it.
+ */
+const WIRE_FIELDS = ['id', 'rev', 'deleted', 'n', 'ct'];
+
+export function fromWire(records) {
+  return (records ?? []).map((e) => {
+    const clean = {};
+    for (const k of WIRE_FIELDS) if (e[k] !== undefined) clean[k] = e[k];
+    return clean;
+  });
+}
+
 export async function syncOnce(vault, client, state) {
   // Before the records, because a machine that joins later needs this to exist
   // and the cost when it already does is one unauthenticated-shaped GET.
@@ -542,7 +567,7 @@ export async function syncOnce(vault, client, state) {
 
   let result = merge({
     local: vault.envelopes,
-    remote: pulled.records,
+    remote: fromWire(pulled.records),
     syncedRev: state.syncedRev,
   });
   guardRecordRollback(result);
@@ -594,7 +619,7 @@ export async function syncOnce(vault, client, state) {
 
     result = merge({
       local: vault.envelopes,
-      remote: again.records,
+      remote: fromWire(again.records),
       syncedRev: state.syncedRev,
     });
     guardRecordRollback(result);
@@ -622,7 +647,7 @@ export async function syncOnce(vault, client, state) {
 
     result = merge({
       local: vault.envelopes,
-      remote: all.records,
+      remote: fromWire(all.records),
       syncedRev: state.syncedRev,
     });
     guardRecordRollback(result);

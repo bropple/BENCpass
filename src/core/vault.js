@@ -105,6 +105,15 @@ export class Vault {
     // the vault is locked, and a parked copy that lives only in memory is a
     // parked copy that a browser restart deletes.
     this.parked = [];
+
+    /**
+     * Records that would not open at the last unlock.
+     *
+     * Named rather than silently skipped: a vault quietly holding fewer
+     * records than it did yesterday is the failure this project refuses
+     * everywhere else, and the rescue tool has always reported these.
+     */
+    this.damaged = [];
     // Which parked envelopes have already been forked (or judged empty), so a
     // conflict the merge re-detects before convergence does not fork the same
     // bytes twice. The nonce is fresh per seal, so id:rev:nonce names exactly
@@ -258,6 +267,7 @@ export class Vault {
   async unlockWithVaultKey(vaultKeyBytes) {
     const key = await importKey(vaultKeyBytes, { extractable: false });
     const plain = new Map();
+    this.damaged = [];
     for (const e of this.envelopes.values()) {
       // Opened before it is believed. `deleted` sits beside the ciphertext in
       // the clear, so anyone who last wrote the file — the server, or anyone
@@ -267,7 +277,24 @@ export class Vault {
       // signed, and everything after this line is policy for a detected lie,
       // not detection. Flip a live record to deleted and it must not vanish;
       // flip a tombstone to live and it must not come back.
-      const body = await openEnvelope(key, e);
+      // Tolerated one at a time. A locked sync adopts whatever the server
+      // sends without a key to check it, so a server that serves one record of
+      // random bytes gets it stored — and this loop used to throw on it, at
+      // the next unlock, with the correct master password. The vault was then
+      // durably shut: the bad envelope is persisted, and if the server stops
+      // serving it merge keeps it as in-sync, so it never heals. One
+      // fabricated record for a permanent lockout.
+      //
+      // The rescue tool has always done this properly — it opens what it can
+      // and names what it cannot — and there is no reason the extension should
+      // be the brittle one. Skipped here and reported, never silently dropped.
+      let body;
+      try {
+        body = await openEnvelope(key, e);
+      } catch {
+        this.damaged.push(e.id);
+        continue;
+      }
       // An envelope whose cleartext flag claims a deletion its sealed body
       // does not make is something no client of this code ever wrote — the
       // two are always set together — so the flag was flipped somewhere. Who
@@ -544,6 +571,9 @@ export class Vault {
    *  the cap only stops the list growing without bound over years. */
   static MARKS_MAX = 512;
 
+  /** How many losing envelopes may wait for an unlock. See park(). */
+  static PARKED_MAX = 256;
+
   #mark(e) {
     return `${e.id}:${e.rev}:${e.n}`;
   }
@@ -564,6 +594,15 @@ export class Vault {
       seen.add(this.#mark(e));
       this.parked.push(e);
       added++;
+      // Bounded, like forkedMarks beside it. A server that serves a freshly
+      // sealed conflicting envelope on every poll defeats the dedup mark by
+      // construction, and a locked machine parks each one and persists the
+      // queue: unbounded disk and memory for as long as the vault stays
+      // locked. Oldest go first — the newest disagreement is the one still
+      // worth showing a person.
+      if (this.parked.length > Vault.PARKED_MAX) {
+        this.parked = this.parked.slice(-Vault.PARKED_MAX);
+      }
     }
     return added;
   }

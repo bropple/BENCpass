@@ -461,8 +461,15 @@ test('the flipped-flag recovery cannot be used to hide real damage', async () =>
   ct[0] ^= 0x01;
   env.ct = toB64(ct);
 
+  // The vault still opens — one fabricated envelope adopted by a keyless
+  // locked sync used to shut it for ever, with the correct master password —
+  // but the record is named rather than quietly missing. Silence here would
+  // be the failure openRecord's loud error exists to prevent; a lockout was
+  // the worse one.
   const reopened = Vault.load(shipped);
-  await assert.rejects(() => reopened.unlock('hunter2'), /failed to open/);
+  await reopened.unlock('hunter2');
+  assert.deepEqual(reopened.damaged, [id], 'the corrupted record was dropped without saying so');
+  assert.equal(reopened.get(id), undefined);
 });
 
 test('a tombstone flipped to live stays deleted', async () => {
@@ -668,4 +675,21 @@ test('a tombstone may still arrive below the local revision', async () => {
 
   await v.applyEnvelopes([tomb]);
   assert.equal(v.list().length, 0, 'a deletion was refused because its revision was lower');
+});
+
+test('a mark only this machine can make cannot arrive from a server', async () => {
+  // `overTombstone` says "a locked sync here adopted this on the flag's word",
+  // and everything downstream treats it as proof the mark was made locally. It
+  // is a cleartext field, so a server could write it and be believed: enough
+  // to have a live record hidden as a tombstone and re-minted under a new id
+  // as a visible "(conflict)" fork, pushed to every machine.
+  const { fromWire } = await import('../src/core/sync.js');
+  const hostile = [
+    { id: 'a', rev: 2, deleted: true, n: 'n', ct: 'c', overTombstone: true, seq: 9, extra: 'x' },
+  ];
+  const [clean] = fromWire(hostile);
+  assert.equal(clean.overTombstone, undefined, 'a server-supplied local mark survived');
+  assert.equal(clean.extra, undefined);
+  assert.equal(clean.seq, undefined);
+  assert.deepEqual(Object.keys(clean).sort(), ['ct', 'deleted', 'id', 'n', 'rev']);
 });

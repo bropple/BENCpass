@@ -859,6 +859,27 @@ async function handleCapture(msg, sender) {
   // spot, with nothing to offer and nothing that can be lost by not pressing
   // Save on a toast the navigation is about to kill.
   if (provisional && provisional.password === password) {
+    // Unless this site already has an entry that the password belongs on.
+    //
+    // Generating on a change-password form is a rotation, not a sign-up: the
+    // account exists and so does its record. Completing the provisional entry
+    // regardless left two rows with the same title, one holding the password
+    // just rotated away, distinguishable only by a date in the detail pane —
+    // which is the "which copy is current" drift this program exists to end,
+    // reproduced inside a single machine on the most ordinary task there is.
+    //
+    // So the real entry takes the new password, keeping its username, its
+    // sites and its history, and the scratch entry that was standing in for it
+    // goes.
+    if (overwritable && overwritable.id !== provisional.id) {
+      await vault.update(overwritable.id, { password });
+      await vault.remove(provisional.id);
+      await persistVault();
+      pendingCaptures.delete(origin.tabId);
+      clearCaptureNotice(origin.tabId);
+      paintBadge();
+      return { ok: true, merged: true };
+    }
     await completeGenerated(vault, provisional, username);
     await persistVault();
     pendingCaptures.delete(origin.tabId);
@@ -1556,7 +1577,11 @@ async function handleUnlock(msg, sender) {
     broadcastLockState();
     scheduleSync();
     await forkParkedConflicts();
-    return { ok: true };
+    // Named, never merely skipped. Tolerating an unreadable record is what
+    // stops one fabricated envelope shutting the vault for good; saying
+    // nothing about it would trade a lockout for a vault quietly holding less
+    // than it did yesterday, which is the worse of the two.
+    return { ok: true, damaged: vault.damaged.length };
   } catch (err) {
     return { ok: false, reason: err.code === 'unwrap-failed' ? 'bad-password' : 'error' };
   }

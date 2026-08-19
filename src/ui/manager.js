@@ -689,6 +689,41 @@ $('gate-form').addEventListener('submit', async (e) => {
   const label = btn.textContent;
   // Argon2 at 128 MiB blocks this thread for ~400 ms. Say so rather than
   // letting the button look dead — but say it flatly.
+  // Ask before yielding, not after. permissions.request() is only granted from
+  // a live user gesture, and awaiting anything spends it — Mozilla says so and
+  // the comment beside consentToSync says so, and this handler awaited a
+  // setTimeout for a repaint before ever reaching the join path. The prompt
+  // never appeared, the request was refused, and every attempt to join a
+  // second machine failed with a message about a permission the person was
+  // never offered. Joining is the whole point of the second machine.
+  // Asked here, before the yield below, and nowhere else.
+  //
+  // permissions.request() is granted only from a live user gesture, and
+  // awaiting anything spends it — Mozilla says so and the comment beside
+  // consentToSync says so. This handler awaited a setTimeout for a repaint
+  // before it ever reached the join path, so by the time joinExisting asked,
+  // the gesture was gone: the prompt never appeared, the request was refused,
+  // and joining a second machine failed every time with a message about a
+  // permission nobody was offered. Joining is the entire point of the second
+  // machine.
+  //
+  // joinExisting still asks, and must: it is reached from other callers, and a
+  // second request costs nothing once the permission is held.
+  if ($('gate').dataset.mode === 'join' && $('gate-server').value.trim()) {
+    let granted = false;
+    try {
+      granted = await consentToSync();
+    } catch {
+      granted = false;
+    }
+    if (!granted) {
+      $('gate-error').textContent =
+        'Joining needs permission to send your passwords and addresses to that server.';
+      $('gate-error').hidden = false;
+      return;
+    }
+  }
+
   btn.disabled = true;
   btn.textContent = 'Deriving key';
   await new Promise((r) => setTimeout(r, 0));
