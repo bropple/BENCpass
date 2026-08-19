@@ -35,7 +35,14 @@ import (
 // Format is the vault format this understands. A file claiming any other
 // number is refused by name rather than guessed at: the fields it does not
 // share are exactly the ones that would fail silently.
-const Format = 1
+//
+// There is exactly one, on purpose. Format 2 bound the tombstone flag into the
+// record AAD; format 1 left it a cleartext claim anyone holding the file could
+// flip. A tool that also opened format 1 would be a downgrade path — relabel
+// an envelope and the weaker binding applies — and nothing is lost by refusing
+// it: v0.11.0 wrote format 1 but was never run, so no format-1 vault exists
+// outside the repository's own history.
+const Format = 2
 
 // Bounds on what a file may ask this program to do.
 //
@@ -209,8 +216,16 @@ func Read(path string) (*File, error) {
 	}
 
 	if f.meta.Format != Format {
-		return nil, fmt.Errorf("%s is vault format %d and this tool understands %d — use a newer rescue tool",
-			path, f.meta.Format, Format)
+		// The advice has to point the right way. A higher number means the
+		// extension moved on and this binary is stale; a lower one means an
+		// older BENCpass wrote the file, and its sealing — which did not
+		// authenticate the tombstone flag — is refused rather than read.
+		hint := "use a newer rescue tool"
+		if f.meta.Format < Format {
+			hint = "it was written by an older BENCpass, and its weaker sealing is refused rather than read"
+		}
+		return nil, fmt.Errorf("%s is vault format %d and this tool understands %d — %s",
+			path, f.meta.Format, Format, hint)
 	}
 	if err := f.meta.KDF.check(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
@@ -313,8 +328,18 @@ func (f *File) unlock(w *wrap, wrapping []byte) (*Vault, error) {
 
 	v := &Vault{key: vaultKey, file: f}
 	for _, e := range f.envelopes {
-		body, err := open(vaultKey, &wrap{N: e.N, Ct: e.Ct},
-			fmt.Sprintf("bencpass:v%d:rec:%s:%d", Format, e.ID, e.Rev))
+		body, err := open(vaultKey, &wrap{N: e.N, Ct: e.Ct}, aadRecord(e.ID, e.Rev, e.Deleted))
+		if err != nil {
+			// The tombstone flag is bound into the AAD, so a flipped flag is a
+			// broken seal — and from one failure, indistinguishable from real
+			// damage. A rescue tool must not lose a record to a one-bit lie,
+			// so the only other claim this envelope could have made is tried.
+			// Not a trust fallback: both attempts authenticate the full AAD,
+			// and success here proves the outer flag was flipped by whoever
+			// held the file. The body's own `deleted` — the sealer's word —
+			// is what decides below, exactly as it always has.
+			body, err = open(vaultKey, &wrap{N: e.N, Ct: e.Ct}, aadRecord(e.ID, e.Rev, !e.Deleted))
+		}
 		if err != nil {
 			// One unreadable record does not condemn the rest. In a rescue
 			// tool that is the whole difference between losing one password
@@ -328,10 +353,11 @@ func (f *File) unlock(w *wrap, wrapping []byte) (*Vault, error) {
 			v.Damaged = append(v.Damaged, e.ID)
 			continue
 		}
-		// The `deleted` flag beside the ciphertext is in the clear and is not
-		// covered by the AAD, so it is whatever the last writer said — the
-		// server, or anyone who has the file. The sealed body is the one that
-		// cannot be invented, so that is the one that is believed. Trusting the
+		// The `deleted` flag beside the ciphertext is whatever the last writer
+		// said — the server, or anyone who has the file. The sealed body is
+		// the one that cannot be invented, so that is the one that is
+		// believed; the AAD binding above guarantees the two can only differ
+		// if the outer flag was tampered with after sealing. Trusting the
 		// outer flag would let a tombstone be flipped back into a live record,
 		// or a live record be hidden from its owner by the machine holding it.
 		if del, _ := fields["deleted"].(bool); del {
@@ -431,6 +457,17 @@ func NormaliseCode(code string) string {
 
 // CodeLength is how many characters a whole recovery code has, ignoring dashes.
 const CodeLength = 30
+
+// aadRecord is the string a record was sealed under: format, id, revision, and
+// the tombstone bit. It must match src/core/crypto.js character for character —
+// the cross-language fixtures exist to catch it drifting.
+func aadRecord(id string, rev int, deleted bool) string {
+	d := 0
+	if deleted {
+		d = 1
+	}
+	return fmt.Sprintf("bencpass:v%d:rec:%s:%d:%d", Format, id, rev, d)
+}
 
 func b64(s string) ([]byte, error) { return base64.StdEncoding.DecodeString(s) }
 

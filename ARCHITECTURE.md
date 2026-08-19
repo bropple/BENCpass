@@ -116,7 +116,8 @@ most important decision in the document.
   "rev":     17,                // per-record, monotonic, client-incremented
   "deleted": false,             // tombstone; never hard-delete on the server
   "nonce":   "<12 random bytes>",
-  "ct":      "AES-256-GCM(vaultKey, nonce, plaintext, aad = id || rev)"
+  "ct":      "AES-256-GCM(vaultKey, nonce, plaintext,
+                          aad = 'bencpass:v2:rec:{id}:{rev}:{0|1 deleted}')"
 }
 ```
 
@@ -149,9 +150,25 @@ than a few minutes in the future is clamped to now and the original kept for
 display, because a bad clock somewhere upstream should not produce a record
 dated 2049.
 
-The **AAD binding of `id || rev` is not optional.** Without it a hostile or
-compromised server can swap ciphertexts between records or replay an old
-revision, and the client cannot tell. With it, either attack fails to decrypt.
+The **AAD binding of `id || rev || deleted` is not optional.** Without the
+first two a hostile or compromised server can swap ciphertexts between records
+or replay an old revision, and the client cannot tell. Without the third,
+`deleted` is a cleartext claim nobody signed: merge runs on a locked vault and
+routes by that flag, and whoever holds the file — or the server — could flip
+it with no key at all. Bound, each of those attacks fails to decrypt. The
+sealer reads the AAD bit off the body itself, so the envelope flag and the
+sealed truth cannot be written to disagree; a reader that hits a broken seal
+retries the only other claim the envelope could have made, which either proves
+the flag was flipped (an attack there is policy for: refuse it, or park the
+body for a person) or confirms real damage. Both attempts authenticate the
+full AAD, so nothing is ever believed that the sealer did not sign.
+
+The format number (`2`, in the vault header and in every AAD) versions the
+cryptography itself, and there is exactly one. Format 1, which left `deleted`
+outside the AAD, is refused by name rather than opened by a compatibility
+branch — a reader that accepts an older AAD is a downgrade path, and no
+format-1 vault exists outside this repository's history (v0.11.0 shipped it,
+nobody ran it).
 
 Plaintext, once decrypted. A `type` discriminator selects the field set:
 

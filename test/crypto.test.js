@@ -132,6 +132,82 @@ test('a record sealed at one revision will not open at another', async () => {
   await assert.rejects(() => openRecord(key, 'id-1', 8, blob), /failed to open/);
 });
 
+test('a flipped deleted flag fails to decrypt, in both directions', async () => {
+  // The flag is the one routing fact outside the ciphertext — merge steers by
+  // it on a locked vault — so it is bound into the AAD. Unbound, either flip
+  // needed no key: dress a live record as a tombstone and it vanishes for its
+  // owner; dress a tombstone as live and a deleted password comes back.
+  const key = await importKey(newVaultKey());
+
+  const live = await sealRecord(key, 'id-1', 3, { password: 'hunter2' });
+  await assert.rejects(() => openRecord(key, 'id-1', 3, { ...live, deleted: true }), /failed to open/);
+
+  const tomb = await sealRecord(key, 'id-1', 4, { deleted: true, at: 1 });
+  await assert.rejects(() => openRecord(key, 'id-1', 4, { ...tomb, deleted: false }), /failed to open/);
+  // ...and openRecord reads the claim off the blob, so a tombstone that
+  // carries its flag honestly still opens.
+  assert.deepEqual(await openRecord(key, 'id-1', 4, { ...tomb, deleted: true }), {
+    deleted: true,
+    at: 1,
+  });
+});
+
+test('the seal takes the tombstone bit from the body, so the two cannot be sealed disagreeing', async () => {
+  // sealRecord has no `deleted` parameter on purpose: the bit comes off the
+  // plaintext, so there is no call site at which an envelope flag and its
+  // sealed body could be written to contradict each other. A body that says
+  // deleted only opens as deleted.
+  const key = await importKey(newVaultKey());
+  const tomb = await sealRecord(key, 'id-1', 2, { deleted: true, at: 9 });
+  await assert.rejects(() => openRecord(key, 'id-1', 2, tomb), /failed to open/);
+  assert.equal((await openRecord(key, 'id-1', 2, { ...tomb, deleted: true })).deleted, true);
+});
+
+test('the AAD strings are the published format, character for character', async () => {
+  // Sealed here by hand, against the literal strings, and opened by the real
+  // code. The Go rescue tool builds the same strings independently; the
+  // cross-language fixtures prove Go agrees with JavaScript, but only this
+  // pins what both must agree ON — if the implementation drifts from the
+  // documented format, this is the test that says so rather than both sides
+  // drifting together.
+  const keyBytes = newVaultKey();
+  const key = await importKey(keyBytes);
+  const sealWith = async (aad, plain) => {
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: nonce, additionalData: new TextEncoder().encode(aad) },
+      key,
+      new TextEncoder().encode(JSON.stringify(plain)),
+    );
+    return { n: toB64(nonce), ct: toB64(new Uint8Array(ct)) };
+  };
+
+  const live = await sealWith('bencpass:v2:rec:id-1:7:0', { password: 'hunter2' });
+  assert.deepEqual(await openRecord(key, 'id-1', 7, live), { password: 'hunter2' });
+
+  const tomb = await sealWith('bencpass:v2:rec:id-1:8:1', { deleted: true });
+  assert.deepEqual(await openRecord(key, 'id-1', 8, { ...tomb, deleted: true }), {
+    deleted: true,
+  });
+
+  // The wrap label too: it is what stops a blob from one slot opening in
+  // another, so its exact spelling is part of the format.
+  const master = await deriveMasterKey('hunter2', newSalt(), FAST);
+  const mk = await importKey(master);
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const wrapped = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv: nonce,
+      additionalData: new TextEncoder().encode('bencpass:v2:wrap:password'),
+    },
+    mk,
+    keyBytes,
+  );
+  const blob = { wrapper: 'password', n: toB64(nonce), ct: toB64(new Uint8Array(wrapped)) };
+  assert.equal(toHex(await unwrapVaultKey(blob, master)), toHex(keyBytes));
+});
+
 test('a flipped bit in the ciphertext is detected', async () => {
   const key = await importKey(newVaultKey());
   const blob = await sealRecord(key, 'id-1', 1, { password: 'hunter2' });

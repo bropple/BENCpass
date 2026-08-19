@@ -14,7 +14,16 @@
 import { argon2id } from './argon2.js';
 import { toB64, fromB64, utf8, fromUtf8 } from './bytes.js';
 
-export const FORMAT = 1;
+// The format number is stamped on the vault header and bound into every AAD,
+// so it versions the cryptography itself: bump it and nothing sealed before
+// opens. Format 2 added the `deleted` flag to the record AAD; format 1 left it
+// a cleartext claim anyone holding the file could flip. There is deliberately
+// no code that still reads format 1 — a reader that accepts an older AAD is a
+// downgrade path, since an attacker relabelling an envelope as the old format
+// gets the weaker binding back. Nothing is stranded by the refusal: v0.11.0
+// shipped format 1 but was never run, so no format-1 vault exists outside this
+// repository's own history.
+export const FORMAT = 2;
 
 // Measured on the development machine (Artix Linux, hash-wasm 4.12.0, Node
 // 24.18), 2026-08-16. Cost scales linearly with memory here, so the table is
@@ -55,7 +64,14 @@ export const newVaultKey = () => randomBytes(KEY_LEN);
 // record are both "AES-GCM under some key", and a blob from one context can be
 // offered to the other. The label is authenticated, so a swap fails to open.
 const aadWrap = (wrapper) => utf8(`bencpass:v${FORMAT}:wrap:${wrapper}`);
-const aadRecord = (id, rev) => utf8(`bencpass:v${FORMAT}:rec:${id}:${rev}`);
+// The tombstone bit rides in the AAD because it is the one routing fact that
+// lives outside the ciphertext — merge() runs on a locked vault and steers by
+// it. Left unbound it was a claim nobody signed: set it on a live envelope and
+// the record vanishes for its owner, clear it on a tombstone and a deleted
+// password comes back, and no key is needed for either. Bound, a flipped flag
+// is a broken seal.
+const aadRecord = (id, rev, deleted) =>
+  utf8(`bencpass:v${FORMAT}:rec:${id}:${rev}:${deleted ? 1 : 0}`);
 
 /**
  * Stretch a master password into a master key.
@@ -153,19 +169,35 @@ export async function unwrapVaultKey(blob, wrappingKeyBytes) {
 /**
  * Seal one record.
  *
- * The AAD binds the ciphertext to its own id and revision. Without that a
- * hostile or merely buggy server can swap ciphertexts between two records, or
- * hand back an old revision of one — including a password since rotated away
- * from — and the client has no way to notice. With it, either attack fails to
- * decrypt. This is one line and it is not optional.
+ * The AAD binds the ciphertext to its own id, its revision, and whether it is
+ * a tombstone. Without the first two a hostile or merely buggy server can swap
+ * ciphertexts between two records, or hand back an old revision of one —
+ * including a password since rotated away from — and the client has no way to
+ * notice. Without the third, whoever holds the file decides which records
+ * exist. With all three, each attack fails to decrypt.
+ *
+ * The tombstone bit is read off the body being sealed, never taken as a
+ * parameter, so there is no seal site at which the envelope's flag and the
+ * sealed truth can be written to disagree.
  */
 export async function sealRecord(vaultKey, id, rev, plainObject) {
-  return seal(vaultKey, utf8(JSON.stringify(plainObject)), aadRecord(id, rev));
+  return seal(
+    vaultKey,
+    utf8(JSON.stringify(plainObject)),
+    aadRecord(id, rev, Boolean(plainObject?.deleted)),
+  );
 }
 
+/**
+ * Open one record. `blob.deleted` is the envelope's cleartext claim, and it
+ * goes into the AAD — so a claim the sealer never made fails the tag here
+ * rather than being believed by whatever reads the result.
+ */
 export async function openRecord(vaultKey, id, rev, blob) {
   try {
-    return JSON.parse(fromUtf8(await open(vaultKey, blob, aadRecord(id, rev))));
+    return JSON.parse(
+      fromUtf8(await open(vaultKey, blob, aadRecord(id, rev, Boolean(blob.deleted)))),
+    );
   } catch {
     throw new Error(`record ${id}@${rev} failed to open: wrong key or tampering`);
   }

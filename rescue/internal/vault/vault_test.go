@@ -178,10 +178,13 @@ func TestRefusesTheWrongSecret(t *testing.T) {
 // The tombstone rule, and the reason it is not a one-line check of a boolean.
 //
 // `deleted` sits beside the ciphertext in the clear, so it is whatever the last
-// writer said — the server, or anyone holding the file. Both directions are
+// writer said — the server, or anyone holding the file. It is bound into the
+// AAD, so a flipped flag is a broken seal; a rescue tool must not lose records
+// to a one-bit lie, so unlock retries the only other claim the envelope could
+// have made and believes the sealed body it recovers. Both directions are
 // tested by flipping the outer flag and asserting nothing moves: a tombstone
 // cannot be resurrected into a live record, and a live record cannot be hidden
-// from its owner by the machine storing it.
+// from its owner by the machine storing it — and none of it lands in Damaged.
 func TestBelievesTheSealedBodyRatherThanTheFlag(t *testing.T) {
 	want := load(t)
 
@@ -227,9 +230,38 @@ func TestBelievesTheSealedBodyRatherThanTheFlag(t *testing.T) {
 	if v.Deleted != 1 {
 		t.Errorf("skipped %d tombstones, want 1", v.Deleted)
 	}
+	if len(v.Damaged) != 0 {
+		t.Errorf("flipped flags were reported as damage: %v", v.Damaged)
+	}
 	for _, r := range v.Records {
 		if r.ID == want.Tombstone {
 			t.Error("the deleted record came back when its cleartext flag was flipped")
+		}
+	}
+}
+
+// The property the flipped-flag recovery rests on: the flag is authenticated,
+// so an envelope does not open under a flag its sealer never wrote. Without
+// this, the retry above would be reading an unauthenticated claim rather than
+// proving one — which is exactly the format-1 hole this format exists to close.
+func TestAFlippedFlagBreaksTheSeal(t *testing.T) {
+	want := load(t)
+	f, err := Read(filepath.Join("testdata", "backup.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := f.UnlockWithPassword(want.Password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+
+	for _, e := range f.envelopes {
+		if _, err := open(v.key, &wrap{N: e.N, Ct: e.Ct}, aadRecord(e.ID, e.Rev, e.Deleted)); err != nil {
+			t.Errorf("record %s does not open under its own flag: %v", e.ID, err)
+		}
+		if _, err := open(v.key, &wrap{N: e.N, Ct: e.Ct}, aadRecord(e.ID, e.Rev, !e.Deleted)); err == nil {
+			t.Errorf("record %s opened under a flipped flag", e.ID)
 		}
 	}
 }
@@ -353,6 +385,40 @@ func TestRefusesAnUnknownFormat(t *testing.T) {
 	// The message has to tell the user what to do, not just that it failed.
 	if !strings.Contains(err.Error(), "newer rescue tool") {
 		t.Errorf("unhelpful message: %v", err)
+	}
+}
+
+// Format 1 left the tombstone flag outside the AAD. A tool that still opened
+// it would be a downgrade path — relabel a file as format 1 and the flippable
+// flag is back — and nothing is stranded by refusing: v0.11.0 wrote format 1
+// but was never run. The refusal must say which direction the mismatch is,
+// because "use a newer rescue tool" is exactly the wrong advice here.
+func TestRefusesTheRetiredFormat(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "backup.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := doc["meta"].(map[string]any)
+	meta["format"] = 1
+
+	path := filepath.Join(t.TempDir(), "retired.json")
+	out, _ := json.Marshal(doc)
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Read(path)
+	if err == nil {
+		t.Fatal("the retired format was accepted")
+	}
+	if !strings.Contains(err.Error(), "older BENCpass") {
+		t.Errorf("unhelpful message: %v", err)
+	}
+	if strings.Contains(err.Error(), "newer rescue tool") {
+		t.Errorf("the message points the wrong way: %v", err)
 	}
 }
 

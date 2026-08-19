@@ -60,6 +60,37 @@ function sameContent(a, b) {
   return stable(a) === stable(b);
 }
 
+/**
+ * Open a stored envelope, whatever its cleartext `deleted` flag claims.
+ *
+ * The flag is bound into the AAD, so openRecord under a flipped flag fails the
+ * tag. That single failure is ambiguous — wrong key, damage, or a lie one bit
+ * wide — and the three deserve different endings: the first two are fatal, the
+ * lie is an attack this vault has policy for below. So on failure the one
+ * other claim the envelope could have made is tried. This is not a trust
+ * fallback: both attempts authenticate the full AAD, and whichever verifies
+ * proves what the sealer actually wrote — the body that comes back cannot be a
+ * forgery, and its own `deleted` field equals the sealed bit by construction
+ * (sealRecord reads the bit off the body). Callers keep comparing e.deleted
+ * against body.deleted to spot the lie, exactly as before; what changed is
+ * that the truth they compare against is now signed.
+ *
+ * Without the retry, one flipped bit — adopted by a locked sync, which has no
+ * key to check it with — would persist an envelope that fails every unlock for
+ * ever: a tampering the design already survives, upgraded into a lockout.
+ */
+async function openEnvelope(key, e) {
+  try {
+    return await openRecord(key, e.id, e.rev, e);
+  } catch (err) {
+    try {
+      return await openRecord(key, e.id, e.rev, { ...e, deleted: !e.deleted });
+    } catch {
+      throw err; // the first failure stands: wrong key or damage, not a flipped flag
+    }
+  }
+}
+
 export class Vault {
   #key = null; // CryptoKey, non-extractable, null while locked
   #plain = new Map(); // id -> decrypted record, populated only while unlocked
@@ -112,8 +143,20 @@ export class Vault {
 
   /** Rehydrate from storage. Always comes back locked. */
   static load(persisted) {
-    if (persisted.meta?.format !== FORMAT) {
-      throw new Error(`unsupported vault format: ${persisted.meta?.format}`);
+    const format = persisted.meta?.format;
+    if (format !== FORMAT) {
+      // Refused by name, never opened by a compatibility branch. Format 1 left
+      // `deleted` outside the AAD, so a reader that still accepts it hands an
+      // attacker the flippable flag back — relabel the envelope and the weaker
+      // binding applies. Nobody is stranded: v0.11.0 wrote format 1 but was
+      // never run, so the only format-1 vaults are this repository's own
+      // fixtures. A stray one deserves a plain statement, not a quiet open.
+      throw new Error(
+        `unsupported vault format: ${format} — this build reads format ${FORMAT} only` +
+          (typeof format === 'number' && format < FORMAT
+            ? `; format ${format} was written by an older BENCpass, and its weaker sealing is refused rather than read`
+            : ''),
+      );
     }
     const v = new Vault(
       persisted.meta,
@@ -217,13 +260,14 @@ export class Vault {
     const plain = new Map();
     for (const e of this.envelopes.values()) {
       // Opened before it is believed. `deleted` sits beside the ciphertext in
-      // the clear and is not covered by the AAD, so skipping on it means taking
-      // the word of whoever last wrote the file — which is the server, or
-      // anyone with the profile, neither of which is trusted here. Flip it on a
-      // live record and the record silently vanishes for its owner; flip it off
-      // a tombstone and a deleted record comes back. The sealed body is the one
-      // that cannot be invented.
-      const body = await openRecord(key, e.id, e.rev, e);
+      // the clear, so anyone who last wrote the file — the server, or anyone
+      // with the profile — can flip it; skipping on it unopened would take
+      // their word. It is bound into the AAD, so a flipped flag no longer
+      // opens as anything: openEnvelope recovers the claim the sealer actually
+      // signed, and everything after this line is policy for a detected lie,
+      // not detection. Flip a live record to deleted and it must not vanish;
+      // flip a tombstone to live and it must not come back.
+      const body = await openEnvelope(key, e);
       // An envelope whose cleartext flag claims a deletion its sealed body
       // does not make is something no client of this code ever wrote — the
       // two are always set together — so the flag was flipped somewhere. Who
@@ -435,10 +479,11 @@ export class Vault {
    *
    * The tombstone carries a sealed body rather than an empty one so that it is
    * authenticated like any other revision. A bare `deleted: true` flag would be
-   * something the server could invent — which is exactly why the readers open
-   * the body and do not trust the flag beside it. The flag stays in the
-   * envelope because merge.js works on a locked vault and needs to see that a
-   * removal exists; it is a hint for sorting, never the authority.
+   * something the server could invent. The flag stays in the envelope because
+   * merge.js works on a locked vault and needs to see that a removal exists —
+   * and it is bound into the AAD, so the copy merge steers by is the copy the
+   * sealer signed: inventing or flipping it breaks the seal at the first
+   * decrypt.
    */
   async remove(id, now = Date.now()) {
     const key = this.#require();
@@ -545,7 +590,11 @@ export class Vault {
 
       let body;
       try {
-        body = await openRecord(key, e.id, e.rev, e);
+        // openEnvelope, because what gets parked includes the one envelope
+        // whose flag is known to lie: a live edit the server dressed as a
+        // tombstone to cross ours. Its flag fails the AAD; the seal beneath
+        // is genuine, and that body is exactly what the person needs to see.
+        body = await openEnvelope(key, e);
       } catch {
         // Sealed under a different key. This vault cannot ever read it, and
         // keeping it parked would just re-fail here forever.
@@ -613,7 +662,7 @@ export class Vault {
     if (!env) throw new Error(`no such record: ${id}`);
 
     const rev = Math.max(env.rev, aboveRev) + 1;
-    const body = this.#plain.get(id) ?? (await openRecord(key, env.id, env.rev, env));
+    const body = this.#plain.get(id) ?? (await openEnvelope(key, env));
     const blob = await sealRecord(key, id, rev, body);
     this.envelopes.set(id, { id, rev, deleted: Boolean(body?.deleted), ...blob });
     return rev;
@@ -673,15 +722,16 @@ export class Vault {
         if (cur && cur.rev === e.rev && cur.ct === e.ct && this.#plain.has(id)) continue;
         try {
           // Same reasoning as unlockWithVaultKey: the flag is the server's to
-          // set, the body is not. A removal is honoured because the plaintext
-          // says so, not because the envelope claims it.
-          const body = await openRecord(this.#key, id, e.rev, e);
+          // flip, the seal is not. openEnvelope opens under the claim the
+          // sealer signed even when the stored flag lies about it.
+          const body = await openEnvelope(this.#key, e);
 
-          // The cleartext flag is not covered by the AAD, so the server can
-          // flip it — and merge, key-free, has to take it at its word (it is
-          // what lets tombstone-over-tombstone fast-forward). This is where
-          // the word is checked. No client ever writes the flag and the body
-          // disagreeing, so a mismatch on an INCOMING envelope is tampering,
+          // The flag is bound into the AAD, but merge, key-free, still has to
+          // take it at its word (it is what lets tombstone-over-tombstone
+          // fast-forward). This is where the word is checked, now against a
+          // sealed truth rather than a plausible one. No client ever writes
+          // the flag and the body disagreeing — sealRecord reads the AAD bit
+          // off the body — so a mismatch on an INCOMING envelope is tampering,
           // not a version skew; it is refused loudly like a rollback, before
           // anything is adopted. An envelope already local (a locked sync
           // adopted it on the flag's word) is not re-refused — that would turn

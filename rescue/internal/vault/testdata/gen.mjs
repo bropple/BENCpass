@@ -45,8 +45,9 @@ await v.add(
     'postal-code': '12345', 'country': 'US', 'tel': '+1 555 0100',
     'email': 'ben@ropple.net' }, T + 2);
 
-// A tombstone. The Go side must not list it, and must decide that by opening
-// the sealed body rather than by believing the cleartext `deleted` flag.
+// A tombstone. The Go side must not list it — and since the `deleted` flag is
+// bound into the AAD, this envelope also pins that binding across languages:
+// Go can only open it by building the same v2 AAD, tombstone bit and all.
 const doomed = await v.add(
   { type: 'login', title: 'Deleted', username: 'x', password: 'y' }, T + 3);
 await v.remove(doomed, T + 4);

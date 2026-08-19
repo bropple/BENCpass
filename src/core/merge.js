@@ -136,9 +136,10 @@ export function merge({ local, remote, syncedRev }) {
       // below keeps the tombstone and parks the edit, so the resurrection is
       // something a person sees and chooses, never something that just
       // happens. Tombstone-over-tombstone still fast-forwards (that is how two
-      // machines deleting the same record settle); the remote flag is only a
-      // cleartext claim, so applyEnvelopes re-checks it against the sealed
-      // body the moment there is a key.
+      // machines deleting the same record settle); the remote flag is a claim
+      // this key-free code cannot verify, but it is bound into the AAD, so a
+      // flipped one is a broken seal — applyEnvelopes settles it the moment
+      // there is a key, and a lie cannot get further than the first decrypt.
       if (b !== undefined && l.rev === b && r.rev > l.rev && (!l.deleted || r.deleted)) {
         envelopes.set(id, r);
         nextSynced.set(id, r.rev);

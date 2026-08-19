@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Vault, VaultLockedError } from '../src/core/vault.js';
 import { MemoryStorage } from '../src/core/storage.js';
 import { deriveMasterKey, unwrapVaultKey, randomBytes } from '../src/core/crypto.js';
-import { fromB64 } from '../src/core/bytes.js';
+import { fromB64, toB64 } from '../src/core/bytes.js';
 
 const FAST = { name: 'argon2id', memoryKiB: 1024, iterations: 1, parallelism: 1 };
 const mk = (password = 'hunter2') => Vault.create({ password, kdf: FAST });
@@ -73,6 +73,17 @@ test('an unsupported format is refused rather than guessed at', async () => {
   const bad = (await mk()).toJSON();
   bad.meta.format = 99;
   assert.throws(() => Vault.load(bad), /unsupported vault format/);
+});
+
+test('the retired format 1 is refused by name, never opened', async () => {
+  // Format 1 left the `deleted` flag outside the AAD, so a reader that still
+  // accepted it would be a downgrade path: relabel an envelope as format 1 and
+  // the flippable flag is back. Nobody is stranded by the refusal — v0.11.0
+  // wrote format 1 but was never run — so a stray test vault gets told what it
+  // is, plainly, instead of being opened under weaker rules.
+  const bad = (await mk()).toJSON();
+  bad.meta.format = 1;
+  assert.throws(() => Vault.load(bad), /older BENCpass/);
 });
 
 test('the biometric path reaches the same vault key', async () => {
@@ -408,10 +419,16 @@ test('a secret that travelled as base64 through a message still enrols', async (
 
 // ---- the `deleted` flag is not the server's to set ---------------------------
 //
-// It sits beside the ciphertext in the clear and no AAD covers it, so anyone who
-// can write the vault file — or the server, which this design does not trust —
-// can flip it. The sealed body is the authority; these pin that the readers
-// actually consult it.
+// It sits beside the ciphertext in the clear, but the AAD covers it, so anyone
+// who flips it — the server, or anyone who can write the vault file — breaks
+// the seal rather than changing what a reader believes. These two tests
+// predate the binding, and their meaning has shifted underneath them: they
+// used to pin that readers consulted the sealed body instead of the flag; now
+// they pin that a one-bit lie in the local file is survived rather than turned
+// into a lockout. The vault re-opens the envelope under the only other claim
+// it could have made — both attempts authenticate the full AAD, so what comes
+// back is the sealer's word, not the tamperer's — and the record neither
+// vanishes nor resurrects.
 
 test('a record flipped to deleted in the file does not vanish', async () => {
   const v = await Vault.create({ password: 'hunter2', kdf: FAST });
@@ -427,6 +444,25 @@ test('a record flipped to deleted in the file does not vanish', async () => {
 
   assert.equal(reopened.list().length, 1, 'a record was suppressed by a flag nobody signed');
   assert.equal(reopened.get(id).title, 'Bank');
+});
+
+test('the flipped-flag recovery cannot be used to hide real damage', async () => {
+  // The unlock retries a failed envelope under the inverted flag, and only
+  // there. If it treated every failure as a flipped flag it would loop; if it
+  // swallowed the second failure it would silently drop a corrupted record —
+  // the failure mode openRecord's loud error exists to prevent. A ciphertext
+  // bit-flip must therefore still fail the unlock, with the original error.
+  const v = await Vault.create({ password: 'hunter2', kdf: FAST });
+  const id = await v.add({ title: 'Bank', password: 'hunter2' });
+
+  const shipped = v.toJSON();
+  const env = shipped.envelopes.find((e) => e.id === id);
+  const ct = fromB64(env.ct);
+  ct[0] ^= 0x01;
+  env.ct = toB64(ct);
+
+  const reopened = Vault.load(shipped);
+  await assert.rejects(() => reopened.unlock('hunter2'), /failed to open/);
 });
 
 test('a tombstone flipped to live stays deleted', async () => {
