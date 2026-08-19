@@ -16,7 +16,7 @@
 // do with it. That keeps this file testable and keeps the decision about where
 // plaintext goes at the surface where a person can see it.
 
-import { LOGIN, ADDRESS, TYPES, EMPTY_ADDRESS, newRecord } from './model.js';
+import { LOGIN, ADDRESS, TYPES, EMPTY_ADDRESS, HISTORY_MAX, newRecord } from './model.js';
 
 export const EXPORT_FORMAT = 'bencpass-export';
 export const EXPORT_VERSION = 1;
@@ -53,6 +53,11 @@ export const MAX_URLS = 64; // sites on one login
  * import time rather than restored. That is deliberate, and it is why a record
  * arriving from a file cannot bring its own shape with it; but it means a
  * restore from JSON loses password ages, not that the export omits them.
+ *
+ * Password history goes out with everything else. It used to be stripped as
+ * "bookkeeping", which quietly cut the safety net out of the safety copy: the
+ * old passwords applyPatch keeps exist so a bad rotation is recoverable, and a
+ * restore from this file was exactly the day someone would need them.
  */
 export function toJson(records, now = Date.now()) {
   return `${JSON.stringify(
@@ -64,17 +69,11 @@ export function toJson(records, now = Date.now()) {
       // be found later in a downloads folder by someone who has forgotten what
       // it is.
       warning: 'This file contains your passwords in plain text. Anyone who can read it can read them.',
-      records: records.map(strip),
+      records,
     },
     null,
     2,
   )}\n`;
-}
-
-/** Drop the bookkeeping that means nothing outside the vault it came from. */
-function strip(record) {
-  const { history, ...rest } = record;
-  return rest;
 }
 
 const CSV_COLUMNS = ['name', 'url', 'username', 'password', 'note'];
@@ -130,6 +129,17 @@ export function fromJson(text) {
 
   const list = Array.isArray(parsed) ? parsed : parsed?.records;
   if (!Array.isArray(list)) {
+    // The encrypted backup is the file a person is most likely to be holding on
+    // the bad day, and it is the one this importer cannot read: it is sealed
+    // envelopes, not records. "Does not look like an export" sent that person
+    // away thinking the file was broken. Name it, and name the way through.
+    if (Array.isArray(parsed?.envelopes) && parsed?.meta) {
+      throw new TransferError(
+        'That is an encrypted backup. Import reads plain exports, not sealed ones — ' +
+          'open the backup with BENCpass Rescue, export JSON from there, and import that file.',
+        'encrypted-backup',
+      );
+    }
     throw new TransferError('That JSON does not look like a BENCpass export.', 'not-ours');
   }
   checkCount(list.length);
@@ -175,6 +185,7 @@ function recordFrom(raw, now = Date.now()) {
       notes: str(raw.notes),
       totp: str(raw.totp),
       urls,
+      history: historyFrom(raw.history),
     },
     now,
   );
@@ -182,6 +193,26 @@ function recordFrom(raw, now = Date.now()) {
 }
 
 const str = (v) => (typeof v === 'string' ? v.slice(0, MAX_FIELD) : '');
+
+/**
+ * Old passwords from a file, built entry by entry like everything else here.
+ *
+ * Restored rather than dropped because the file is the safety copy: the whole
+ * point of applyPatch keeping old passwords is recovering from a bad rotation,
+ * and the export-then-reimport path is exactly the day that matters. Only the
+ * two known keys survive, and a `changed` that is not a finite number becomes
+ * 0 — undated, never invented.
+ */
+function historyFrom(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((h) => h && typeof h === 'object' && typeof h.password === 'string' && h.password)
+    .slice(0, HISTORY_MAX)
+    .map((h) => ({
+      password: str(h.password),
+      changed: Number.isFinite(h.changed) ? h.changed : 0,
+    }));
+}
 
 /** The file itself, before anything tries to make sense of it. */
 function checkSize(text) {

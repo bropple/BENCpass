@@ -277,6 +277,17 @@ select { color: var(--text); font: inherit; }
 .age-warn { color: var(--warn); }
 .age-bad  { color: var(--bad); }
 
+/* The password-history disclosure inside the meta list. */
+.history summary { cursor: pointer; color: var(--text-dim); }
+.history-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+}
+.history-when { flex: none; color: var(--text-dim); }
+.history-row .value { flex: 1; }
+
 .detail-actions { display: flex; gap: 8px; margin-top: 20px; }
 
 /* ---- generator ----------------------------------------------------------- */

@@ -170,6 +170,12 @@ export function captureTarget(records, host, username) {
     forHost,
     candidate,
     overwritable: candidate && belongsOnlyTo(candidate, host) ? candidate : null,
+    // The entry keepGenerated wrote the moment a password was generated for
+    // this site — saved with no username, because none had been typed yet. A
+    // capture on the same host is the missing half arriving, so the caller
+    // completes this record instead of standing up a duplicate beside it.
+    // Only ours can match: keepGenerated writes exactly one URL for the host.
+    provisional: forHost.find((r) => r.provisional) ?? null,
   };
 }
 

@@ -5,7 +5,7 @@
 // ever needs to remember a password between two functions, something upstream
 // is wrong.
 
-import { Vault } from '../core/vault.js';
+import { Vault, VaultLockedError } from '../core/vault.js';
 import { pickStorage } from '../core/storage.js';
 import { generate, entropyBits } from '../core/generate.js';
 import { ADDRESS_SCHEMA, countryOptions, countryName, splitName } from '../core/address.js';
@@ -132,6 +132,15 @@ let localAutolockAt = 0; // only used when this page owns the vault
 let clipboardTimer = null;
 let revealTimer = null;
 
+// A half-written entry, carried across a lock. The auto-lock fires when nobody
+// is at the machine, which is precisely when an entry is most likely to be
+// sitting half-typed in the editor — and wiping it with the rest of the DOM
+// made Save-after-lock a button that silently ate the work. This deliberately
+// keeps user-typed plaintext in this page's memory while the vault is shut:
+// the screen is still cleared, and the alternative is destroying something the
+// person typed and cannot get back. It dies with the page like everything else.
+let editDraft = null;
+
 const bumpAutolock = () => vaultHost?.bump();
 
 // Displays the countdown; only locks when this page is the vault's owner.
@@ -216,9 +225,11 @@ const askBackground = async (type, extra = {}) => {
   }
 };
 
-/** What to call it, in the words the platform uses for itself. */
+/** What to call it, in the words the platform uses for itself. The fallback
+ *  is deliberately not "your security key": enrolment pins the platform
+ *  authenticator, so a plugged-in key is never what this feature means. */
 const bioName = () =>
-  bio.os === 'mac' ? 'Touch ID' : bio.os === 'win' ? 'Windows Hello' : 'your security key';
+  bio.os === 'mac' ? 'Touch ID' : bio.os === 'win' ? 'Windows Hello' : "this machine's authenticator";
 
 
 // Raised once when the gate appears. A prompt that returns the instant it is
@@ -355,12 +366,17 @@ function renderBioSetting() {
   // are not the same sentence: the second is a browser that has not caught up,
   // and saying "no authenticator" to someone looking at their own fingerprint
   // reader reads as BENCpass failing to see hardware that plainly works.
+  // No mention of plugged-in security keys: enrolment pins the *platform*
+  // authenticator (webauthn.js asks for authenticatorAttachment: 'platform'),
+  // so a USB key is never asked for — and on Linux, where there is no platform
+  // authenticator at all, the old sentence promised a feature that then never
+  // worked. The copy and the code have to tell the same story.
   $('s-bio-note').textContent =
     bio.reason === 'no-webauthn'
       ? 'This browser does not support WebAuthn.'
       : bio.reason === 'no-prf'
         ? `${name} is here, but this browser will not derive a key from it, so it cannot unlock the vault. Your master password still works.`
-        : 'No authenticator on this machine. A Mac with Touch ID, a PC with Windows Hello, or a plugged-in security key would each do.';
+        : 'No built-in authenticator on this machine. This needs a Mac with Touch ID or a PC with Windows Hello; plugged-in security keys are not supported. Your master password works everywhere.';
 }
 
 $('s-bio-btn').addEventListener('click', async () => {
@@ -535,32 +551,39 @@ $('gate-recovery-btn').addEventListener('click', () => {
 let sheetDone;
 
 /**
- * Mint a recovery code, enrol it, and put it on screen until it is confirmed.
+ * Mint a recovery code, put it on screen, and enrol it only once it is
+ * acknowledged.
  *
- * Failing to enrol is not a reason to stop: a vault with no way back is the
+ * The order is the point. This used to enrol and persist before showing the
+ * sheet, so closing the tab at the sheet left a phantom: the gate offered
+ * "use a recovery code" for a code that had never been on anyone's screen —
+ * a way back in that nobody holds. Minting still proves the master password
+ * (a wrong one fails before anything is shown); the vault only changes on
+ * "I have written it down", and bailing out before that leaves everything
+ * exactly as it was.
+ *
+ * Failing to mint is not a reason to stop: a vault with no way back is the
  * state everything was in until today, and it is better than refusing to
  * finish setup. The sheet says so rather than pretending it worked.
  */
 async function showRecoverySheet(password) {
   const code = newRecoveryCode();
-  let enrolled = false;
+  let wrap = null;
   try {
-    await state.vault.enrolRecovery(password, code);
-    await persist();
-    enrolled = true;
+    wrap = await state.vault.mintRecoveryWrap(password, code);
   } catch (err) {
     // A wrong master password is the caller's to report — at setup it cannot
     // happen, and from Settings it is the whole answer. Anything else is ours,
     // and setup carries on without a code rather than refusing to finish.
     if (err?.code === 'unwrap-failed') throw err;
-    console.error('BENCpass: could not enrol the recovery code', err);
+    console.error('BENCpass: could not mint the recovery code', err);
   }
 
-  $('kit-code').textContent = enrolled ? code : '';
+  $('kit-code').textContent = wrap ? code : '';
   $('kit-created').textContent = new Date().toLocaleDateString();
   $('kit-device').textContent = navigator.platform || 'this machine';
 
-  if (!enrolled) {
+  if (!wrap) {
     $('kit-status').textContent =
       'A recovery code could not be created. Your vault is fine and your master password works — you can make one later under the gear.';
     $('kit-ack').checked = true;
@@ -571,6 +594,10 @@ async function showRecoverySheet(password) {
   await new Promise((resolve) => {
     sheetDone = resolve;
   });
+  if (wrap) {
+    state.vault.adoptRecoveryWrap(wrap);
+    await persist();
+  }
   $('kit').hidden = true;
   $('kit-code').textContent = '';
 }
@@ -638,7 +665,7 @@ async function joinExisting(password) {
     const why = {
       'bad-endpoint': 'That is not a URL.',
       'insecure-endpoint':
-        'Plain http is only allowed to a private address. Use https, or a LAN or Tailscale name.',
+        'Plain http is only allowed to a LAN address. A Tailscale name needs https too — its range cannot be told apart from ISP NAT.',
       'bad-code': 'The server did not accept that code. They are single-use and expire after 30 minutes.',
       'bad-enrolment': 'That is not a code. Paste what the server printed, or a `device-id:key` pair.',
       unreachable: 'Nothing answered at that address.',
@@ -720,6 +747,38 @@ function enterApp() {
   render();
   refreshBiometrics();
   $('search').focus();
+  if (editDraft) restoreDraft();
+}
+
+/** Put a draft the lock interrupted back into the editor. */
+function restoreDraft() {
+  const d = editDraft;
+  editDraft = null;
+
+  // The editor's shape follows the section, so the section follows the draft.
+  state.section = d.type === 'address' ? 'address' : 'login';
+  for (const b of document.querySelectorAll('.seg-btn')) {
+    b.setAttribute('aria-selected', String(b.dataset.section === state.section));
+  }
+
+  // The record may have been deleted on another machine while this one sat
+  // locked; the draft still deserves a home, so it reopens as a new entry.
+  const target = d.editing !== 'new' && state.vault.get(d.editing) ? d.editing : 'new';
+  openEditor(target);
+
+  $('e-title').value = d.fields.title ?? '';
+  $('e-notes').value = d.fields.notes ?? '';
+  if (d.type === 'address') {
+    for (const input of $('e-address').querySelectorAll('[data-address-key]')) {
+      const value = d.fields[input.dataset.addressKey];
+      if (value !== undefined) input.value = value;
+    }
+  } else {
+    $('e-username').value = d.fields.username ?? '';
+    $('e-password').value = d.fields.password ?? '';
+    $('e-urls').value = (d.fields.urls ?? []).join('\n');
+  }
+  say('Your unsaved edit was kept across the lock.');
 }
 
 function lock(why = '') {
@@ -737,6 +796,12 @@ function lock(why = '') {
  * broadcast it back here, a cycle nobody needs.
  */
 function lockUi(why = '') {
+  // Before the wipe below: keep what was being typed, so unlocking puts the
+  // person back in the editor instead of in front of an empty pane.
+  if (state.editing !== null && !$('edit-form').hidden) {
+    editDraft = { editing: state.editing, type: state.editingType, fields: readEditorFields() };
+  }
+
   state.selected = null;
   state.editing = null;
   clearTimeout(revealTimer);
@@ -1011,8 +1076,13 @@ function renderMeta(r) {
 
   add('Created', date(r.created));
 
+  // Shown on every kind of record, not only addresses. Two copies of the same
+  // login after a sync conflict differ in exactly one readable way — when each
+  // was last written — and without this the person is asked to choose between
+  // them with nothing to choose on.
+  if (r.updated && r.updated !== r.created) add('Updated', date(r.updated));
+
   if (r.type === 'address') {
-    add('Updated', date(r.updated));
     if (r.claimedTime) {
       const note = document.createElement('span');
       note.className = 'age-warn';
@@ -1032,7 +1102,23 @@ function renderMeta(r) {
 
   add('Last used', r.lastUsed ? `${date(r.lastUsed)} (${r.timesUsed}×)` : 'never');
 
-  if (r.history?.length) add('Previous', `${r.history.length} kept`);
+  if (r.history?.length) add('Previous', historyList(r));
+
+  if (r.provisional) {
+    const note = document.createElement('span');
+    note.className = 'age-warn';
+    note.textContent =
+      'Generated and saved before the sign-up finished. If the account exists, this is its password — add the username; if not, delete this entry.';
+    add('Unconfirmed', note);
+  }
+
+  if (r.conflictOf) {
+    const note = document.createElement('span');
+    note.className = 'age-warn';
+    note.textContent =
+      "Another machine's version of an entry both machines edited. Compare with the current entry and delete whichever is wrong.";
+    add('Sync conflict', note);
+  }
 
   // Reuse is checked across the whole vault, not against a breach list — no
   // network call, and nothing leaves the machine to find it out.
@@ -1052,6 +1138,58 @@ function renderMeta(r) {
     note.textContent = `source claimed ${date(r.claimedTime)}`;
     add('Imported', note);
   }
+}
+
+/**
+ * The old passwords applyPatch keeps, as something a person can actually open.
+ *
+ * "N kept" with no viewer was a safety net that could not be reached by any
+ * route — not here, not in the exports, not in the rescue tool — which made it
+ * no safety net at all. Each row is the password as it was, the date it was
+ * set, and the two things someone recovering from a bad rotation needs: see
+ * it, and copy it. Revealed values ride the same 30-second countdown as the
+ * main password; the timer's redraw rebuilds this list masked and closed.
+ */
+function historyList(r) {
+  const box = document.createElement('details');
+  box.className = 'history';
+
+  const sum = document.createElement('summary');
+  sum.textContent = `${r.history.length} kept`;
+  box.append(sum);
+
+  for (const h of r.history) {
+    const row = document.createElement('div');
+    row.className = 'history-row';
+
+    const when = document.createElement('span');
+    when.className = 'history-when';
+    when.textContent = h.changed ? `set ${date(h.changed)}` : 'undated';
+
+    const value = document.createElement('span');
+    value.className = 'value mono secret';
+    value.textContent = '•'.repeat(12);
+    let shown = false;
+
+    const reveal = document.createElement('button');
+    reveal.className = 'btn btn-sm';
+    reveal.textContent = 'Reveal';
+    reveal.addEventListener('click', () => {
+      shown = !shown;
+      value.textContent = shown ? h.password : '•'.repeat(12);
+      reveal.textContent = shown ? 'Hide' : 'Reveal';
+      if (shown) armRevealTimer();
+    });
+
+    const copy = document.createElement('button');
+    copy.className = 'btn btn-sm';
+    copy.textContent = 'Copy';
+    copy.addEventListener('click', () => copyText(h.password, 'Old password'));
+
+    row.append(when, value, reveal, copy);
+    box.append(row);
+  }
+  return box;
 }
 
 const date = (ms) => new Date(ms).toISOString().slice(0, 10);
@@ -1108,8 +1246,16 @@ async function copyText(text, label, isSecret = false) {
   clearTimeout(clipboardTimer);
   clipboardTimer = setTimeout(async () => {
     // Best effort, and worth being honest about: a clipboard manager has
-    // already taken a copy by now, and this cannot reach into one.
-    try { await navigator.clipboard.writeText(''); } catch { /* not focused */ }
+    // already taken a copy by now, and this cannot reach into one. A refusal
+    // — usually this page no longer having focus — must not be announced as
+    // a clear: "Clipboard cleared." over a clipboard still holding the
+    // password is the message teaching someone the opposite of the truth.
+    try {
+      await navigator.clipboard.writeText('');
+    } catch {
+      say('Could not clear the clipboard — it still holds what was copied.');
+      return;
+    }
     say('Clipboard cleared.');
   }, CLIPBOARD_MS);
 }
@@ -1598,7 +1744,11 @@ $('s-import-file').addEventListener('change', async (e) => {
   let added = 0;
   try {
     for (const r of records) {
-      const { type, created, updated, lastUsed, timesUsed, passwordChanged, history, ...fields } = r;
+      // History stays. It is the safety net applyPatch keeps — the old
+      // passwords a bad rotation is recovered from — and dropping it here
+      // meant the one file people restore from was the one place it did not
+      // survive. The timestamps are still re-stamped; see toJson's note.
+      const { type, created, updated, lastUsed, timesUsed, passwordChanged, ...fields } = r;
       await state.vault.add({ ...fields, type });
       added++;
     }
@@ -1690,7 +1840,7 @@ async function saveSetting(patch) {
   const problems = {
     'bad-endpoint': 'That is not a URL.',
     'insecure-endpoint':
-      'Plain http is only allowed to a private address. Use https, or a LAN or Tailscale name.',
+      'Plain http is only allowed to a LAN address. A Tailscale name needs https too — its range cannot be told apart from ISP NAT.',
     unreachable: 'Neither address answered.',
     'bad-autolock': 'Between 1 minute and 24 hours.',
     'bad-enrolment': 'That is not a code. Paste what the server printed, or a `device-id:key` pair.',
@@ -1802,7 +1952,12 @@ $('s-sync-btn').addEventListener('click', async () => {
   $('s-rebuilt').hidden = true;
   const reply = await askBackground(MSG.SYNC);
   if (reply?.ok) {
-    const conflicts = reply.conflicts ? ` ${reply.conflicts} conflict(s) kept.` : '';
+    // "Kept" is finally true: the other machine's copy is forked into its own
+    // "(conflict)" entry during the sync (see settleConflicts in core/sync.js),
+    // so the sentence points at something that exists in the list below it.
+    const conflicts = reply.conflicts
+      ? ` ${reply.conflicts} conflict(s): both versions kept — look for "(conflict)" entries and delete the wrong one.`
+      : '';
     $('s-sync-note').textContent = `Synced.${conflicts}`;
     render();
   } else {
@@ -1972,39 +2127,55 @@ function addressInput(field, value) {
   return input;
 }
 
+/** What the editor currently holds, in the shape add() and update() take. */
+function readEditorFields() {
+  return state.editingType === 'address'
+    ? {
+        type: 'address',
+        title: $('e-title').value.trim(),
+        notes: $('e-notes').value,
+        // The editor showed the name in parts, so the whole-name key an older
+        // record kept is now stale. Cleared rather than left behind, so there
+        // is only ever one answer to what this address's name is.
+        name: '',
+        ...Object.fromEntries(
+          [...$('e-address').querySelectorAll('[data-address-key]')].map((i) => [
+            i.dataset.addressKey,
+            i.value.trim(),
+          ]),
+        ),
+      }
+    : {
+        type: 'login',
+        title: $('e-title').value.trim(),
+        username: $('e-username').value,
+        password: $('e-password').value,
+        urls: $('e-urls').value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
+        notes: $('e-notes').value,
+      };
+}
+
 $('edit-form').addEventListener('submit', async (e) => {
   e.preventDefault();
 
-  const fields =
-    state.editingType === 'address'
-      ? {
-          type: 'address',
-          title: $('e-title').value.trim(),
-          notes: $('e-notes').value,
-          // The editor showed the name in parts, so the whole-name key an older
-          // record kept is now stale. Cleared rather than left behind, so there
-          // is only ever one answer to what this address's name is.
-          name: '',
-          ...Object.fromEntries(
-            [...$('e-address').querySelectorAll('[data-address-key]')].map((i) => [
-              i.dataset.addressKey,
-              i.value.trim(),
-            ]),
-          ),
-        }
-      : {
-          type: 'login',
-          title: $('e-title').value.trim(),
-          username: $('e-username').value,
-          password: $('e-password').value,
-          urls: $('e-urls').value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
-          notes: $('e-notes').value,
-        };
+  const fields = readEditorFields();
 
-  if (state.editing === 'new') {
-    state.selected = await state.vault.add(fields);
-  } else {
-    await state.vault.update(state.editing, fields);
+  try {
+    if (state.editing === 'new') {
+      state.selected = await state.vault.add(fields);
+    } else {
+      await state.vault.update(state.editing, fields);
+    }
+  } catch (ex) {
+    // The auto-lock won the race against the Save click. The button used to do
+    // nothing at all here — the throw went nowhere and the draft went with the
+    // gate. lockUi stashes the draft and enterApp reopens it, so losing the
+    // race costs an unlock, not the work.
+    if (ex instanceof VaultLockedError) {
+      lockUi('Auto-locked.');
+      return;
+    }
+    throw ex;
   }
 
   state.editing = null;

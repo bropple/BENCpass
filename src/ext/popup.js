@@ -53,8 +53,10 @@ async function refresh() {
 // again every time afterwards is the thing the fingerprint was meant to spare
 // you, and it is what "I still have to type my password" means.
 
+// The fallback matches the manager's: the platform authenticator is what is
+// enrolled, never a plugged-in key, so it is not called one.
 const bioName = (os) =>
-  os === 'mac' ? 'Touch ID' : os === 'win' ? 'Windows Hello' : 'your security key';
+  os === 'mac' ? 'Touch ID' : os === 'win' ? 'Windows Hello' : "this machine's authenticator";
 
 // Never raised on its own here. WebAuthn wants a user gesture, and opening a
 // popup is not reliably one — so this is a button. What pressing it does is
@@ -183,6 +185,10 @@ const reason = (r) =>
     'insecure-page': 'This page is not encrypted.',
     locked: 'Vault is locked.',
     'no-tab': 'No page to fill.',
+    // Search no longer offers addresses, so this is belt and braces — but the
+    // refusal exists, and "Could not fill." for it sent people looking for a
+    // bug instead of the form's own menu.
+    'not-a-login': 'Addresses fill from the menu on the form itself.',
   })[r] ?? 'Could not fill.';
 
 let sayTimer;
@@ -256,7 +262,7 @@ $('sync-btn').addEventListener('click', async () => {
   }
   say(
     reply.conflicts
-      ? `${reply.conflicts} conflict${reply.conflicts === 1 ? '' : 's'} — open the manager`
+      ? `${reply.conflicts} conflict${reply.conflicts === 1 ? '' : 's'} — both versions kept, see the manager`
       : `Synced (${reply.pulled} in, ${reply.pushed} out)`,
   );
   await refresh();

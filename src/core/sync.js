@@ -487,6 +487,50 @@ async function shareHeader(vault, client) {
   return { published: true };
 }
 
+/**
+ * Make a merge's conflicts stick, and stop them coming back.
+ *
+ * Two jobs, both owed to the person whose machines disagreed:
+ *
+ * Park the losing side. merge() hands the other machine's bytes over in
+ * `conflicts[].parked` and, until this existed, nothing kept them — the
+ * manager said "kept" about a copy that was already gone, and a tombstone
+ * racing an edit deleted the edit with no way back. vault.park needs no key,
+ * so this holds on a locked background sync too; the parked copies become
+ * visible "(conflict)" records at the next unlocked pass, and those go up
+ * with the push so every machine sees the same two versions.
+ *
+ * Break the tie. Two machines editing from the same ancestor both count to
+ * the same rev with different bytes, so each machine's merge kept its own
+ * copy and re-pushed it — the server flipped between the two on every sync,
+ * forever, and neither side converged. Re-sealing the kept copy above both
+ * revs turns the next pull on the other machine into a plain fast-forward.
+ * Only the side being pushed is bumped; when the remote side won (a
+ * tombstone beating a local edit), the local copy is already gone and there
+ * is nothing to supersede.
+ *
+ * Needs the key, so on a locked vault only the park happens and the same
+ * conflict is re-detected — and re-deduplicated — until an unlocked sync
+ * settles it.
+ */
+async function settleConflicts(vault, result) {
+  vault.park(result.conflicts.map((c) => c.parked).filter(Boolean));
+  if (vault.locked) return;
+
+  for (const c of result.conflicts) {
+    const at = result.toPush.findIndex((e) => e.id === c.id);
+    if (at === -1) continue;
+    await vault.supersede(c.id, Math.max(c.local.rev, c.remote.rev));
+    result.toPush[at] = vault.envelopes.get(c.id);
+  }
+
+  // Everything parked — this round's and anything left over from locked
+  // rounds — becomes a record and joins the push.
+  for (const id of await vault.resolveParked()) {
+    result.toPush.push(vault.envelopes.get(id));
+  }
+}
+
 export async function syncOnce(vault, client, state) {
   // Before the records, because a machine that joins later needs this to exist
   // and the cost when it already does is one unauthenticated-shaped GET.
@@ -503,6 +547,7 @@ export async function syncOnce(vault, client, state) {
   guardRecordRollback(result);
 
   await vault.applyEnvelopes(result.envelopes);
+  await settleConflicts(vault, result);
   state.seq = pulled.seq;
   state.highestSeq = Math.max(state.highestSeq, pulled.seq);
   state.syncedRev = result.syncedRev;
@@ -529,6 +574,7 @@ export async function syncOnce(vault, client, state) {
     });
     guardRecordRollback(result);
     await vault.applyEnvelopes(result.envelopes);
+    await settleConflicts(vault, result);
     state.seq = again.seq;
     state.highestSeq = Math.max(state.highestSeq, again.seq);
     state.syncedRev = result.syncedRev;

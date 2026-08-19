@@ -23,6 +23,10 @@ safe on a USB stick or a cloud drive — and it is the only practical way to get
 the vault out of `browser.storage.local`, which lives inside Firefox's IndexedDB
 and is not something anyone extracts by hand in a hurry.
 
+The extension's own Import button cannot read this file — it is sealed, and
+Import reads plain exports. **This tool is the restore path**: open the backup
+here, export it as `.json`, and import that into BENCpass.
+
 **A sync server's `store.json`**, or the data directory holding it. If you ran
 the server, this is a complete copy of the vault that survives the loss of every
 machine. Point the tool at the dataset and it finds the file.
@@ -53,8 +57,14 @@ carry two other things instead.
 
 ```sh
 sha256sum -c SHA256SUMS                       # matches the release page
-gh attestation verify bencpass-rescue-Linux.tar.gz --repo bropple/BENCpass
+gh attestation verify bencpass-rescue-v0.11.0-Linux.tar.gz --repo bropple/BENCpass
 ```
+
+The archive is named for the release tag and the platform —
+`bencpass-rescue-<tag>-<OS>.tar.gz` (`.zip` on Windows) — so substitute the
+tag you downloaded. The old form of this command named a file that has never
+been attached to any release, and failed with "not found" against a perfectly
+good download.
 
 The second is the stronger one. A checksum sitting on the same page as the file
 only proves they agree; the attestation ties the archive to the workflow run and

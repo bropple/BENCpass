@@ -136,7 +136,12 @@ export function newRecord(fields = {}, now = Date.now()) {
     // Set even when the password starts empty: an entry that later gains one
     // should not read as "changed at the dawn of time".
     rec.passwordChanged = now;
-    rec.history = [];
+    // A provided history rides along. Resetting it unconditionally is how the
+    // JSON export's history was thrown away on the way back in: the importer
+    // validated it, passed it here, and this line replaced it with [] — so the
+    // "cheapest safety net" did not survive its own backup. Callers that pass
+    // one are responsible for its shape; the importer builds it entry by entry.
+    rec.history = Array.isArray(fields.history) ? fields.history.slice(0, HISTORY_MAX) : [];
   }
   return rec;
 }

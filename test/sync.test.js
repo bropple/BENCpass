@@ -981,3 +981,135 @@ test('a fingerprint never reaches the server, and is never inherited', async (t)
   // And it still opens the way a joining machine actually opens it.
   await joined.unlock('pw');
 });
+
+// ---- convergence ------------------------------------------------------------
+//
+// The drift this project exists to eliminate, reproduced by the sync itself:
+// two machines that edit from the same ancestor both count to the same rev
+// with different bytes. Each machine's merge kept its own copy and re-pushed
+// it, so the server flipped between the two on every sync, forever, and the
+// answer to "which password is the latest" depended on who synced last. These
+// tests pin the fix: the kept copy is re-sealed above both sides, the losing
+// copy becomes a "(conflict)" record on every machine, and the round after
+// next reports no conflict at all.
+
+test('conflicting edits converge instead of flip-flopping forever', { ...skip }, async (t) => {
+  const { a: aClient, b: bClient } = await pair(t);
+
+  const a = await mkVault();
+  const aState = emptySyncState();
+  const id = await a.add({ title: 'Shared', password: 'original' });
+  await syncOnce(a, aClient, aState);
+
+  const b = await follower(a);
+  const bState = emptySyncState();
+  await syncOnce(b, bClient, bState);
+  await b.unlock('hunter2');
+
+  // The offline case: both edit before either sees the other.
+  await a.update(id, { password: 'from-a' });
+  await b.update(id, { password: 'from-b' });
+
+  await syncOnce(a, aClient, aState);
+  const clash = await syncOnce(b, bClient, bState);
+  assert.equal(clash.conflicts.length, 1, 'the disagreement is reported once');
+
+  // From here on, silence. The old behaviour re-detected this same conflict
+  // on every sync of either machine, forever.
+  assert.deepEqual((await syncOnce(a, aClient, aState)).conflicts, []);
+  assert.deepEqual((await syncOnce(b, bClient, bState)).conflicts, []);
+  assert.deepEqual((await syncOnce(a, aClient, aState)).conflicts, []);
+
+  // Both machines agree, byte for byte, on which version is current...
+  assert.equal(a.get(id).password, 'from-b');
+  assert.equal(b.get(id).password, 'from-b');
+  assert.equal(a.envelopes.get(id).ct, b.envelopes.get(id).ct);
+
+  // ...and the version that lost is a record of its own on both machines, so
+  // the person — not the merge — decides which of the two was right.
+  const forkA = a.list().find((r) => r.conflictOf === id);
+  const forkB = b.list().find((r) => r.conflictOf === id);
+  assert.equal(forkA?.password, 'from-a');
+  assert.equal(forkB?.password, 'from-a');
+  assert.match(forkA.title, /\(conflict\)$/);
+
+  // Deleting the copy the person rejects converges too — that is the "choose"
+  // half of the story, and it must not resurrect on the next sync.
+  await a.remove(forkA.id);
+  await syncOnce(a, aClient, aState);
+  await syncOnce(b, bClient, bState);
+  assert.equal(b.get(forkA.id), undefined);
+  assert.deepEqual((await syncOnce(a, aClient, aState)).conflicts, []);
+});
+
+test('a deletion racing an edit keeps the edit as a conflict copy on every machine', { ...skip }, async (t) => {
+  const { a: aClient, b: bClient } = await pair(t);
+
+  const a = await mkVault();
+  const aState = emptySyncState();
+  const id = await a.add({ title: 'Shared', password: 'original' });
+  await syncOnce(a, aClient, aState);
+
+  const b = await follower(a);
+  const bState = emptySyncState();
+  await syncOnce(b, bClient, bState);
+  await b.unlock('hunter2');
+
+  // a rotates the password; b deletes the record. Neither has seen the other.
+  await a.update(id, { password: 'CURRENT' });
+  await b.remove(id);
+
+  await syncOnce(b, bClient, bState);
+  const round = await syncOnce(a, aClient, aState);
+  assert.equal(round.conflicts[0]?.kind, 'delete');
+
+  // The tombstone wins — a deletion must not be undone by an edit racing it —
+  // but the password it beat is not gone: it is its own record, here and, one
+  // sync later, on the machine that deleted.
+  assert.equal(a.get(id), undefined);
+  const forkA = a.list().find((r) => r.conflictOf === id);
+  assert.equal(forkA?.password, 'CURRENT');
+
+  await syncOnce(b, bClient, bState);
+  const forkB = b.list().find((r) => r.conflictOf === id);
+  assert.equal(forkB?.password, 'CURRENT');
+
+  // And the disagreement is settled, not re-fought every round.
+  assert.deepEqual((await syncOnce(a, aClient, aState)).conflicts, []);
+  assert.deepEqual((await syncOnce(b, bClient, bState)).conflicts, []);
+});
+
+test('a conflict met while locked is kept, and settles at the next unlocked sync', { ...skip }, async (t) => {
+  const { a: aClient, b: bClient } = await pair(t);
+
+  const a = await mkVault();
+  const aState = emptySyncState();
+  const id = await a.add({ title: 'Shared', password: 'original' });
+  await syncOnce(a, aClient, aState);
+
+  const b = await follower(a);
+  const bState = emptySyncState();
+  await syncOnce(b, bClient, bState);
+  await b.unlock('hunter2');
+
+  await a.update(id, { password: 'from-a' });
+  await b.update(id, { password: 'from-b' });
+  await syncOnce(a, aClient, aState);
+
+  // The background sync fires while b sits locked. The conflict cannot be
+  // settled without the key, but the losing bytes must not evaporate either.
+  b.lock();
+  const locked = await syncOnce(b, bClient, bState);
+  assert.equal(locked.conflicts.length, 1);
+  assert.equal(b.parked.length, 1, 'the losing copy is parked, key or no key');
+
+  // The park survives what a browser restart does to a vault.
+  const reloaded = Vault.load(b.toJSON());
+  assert.equal(reloaded.parked.length, 1);
+
+  await reloaded.unlock('hunter2');
+  await syncOnce(reloaded, bClient, bState);
+  const fork = reloaded.list().find((r) => r.conflictOf === id);
+  assert.equal(fork?.password, 'from-a', 'the parked copy became a record after unlock');
+  assert.equal(reloaded.parked.length, 0);
+});

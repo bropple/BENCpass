@@ -122,3 +122,33 @@ test('the wrappings are bound to their own names', async () => {
 
   await assert.rejects(() => Vault.load(shipped).unlock('hunter2'));
 });
+
+test('minting a recovery wrap commits nothing until it is adopted', async () => {
+  // The sheet shows the code before the vault commits to it. Enrolling first
+  // and displaying second left a phantom: close the tab at the sheet and the
+  // gate offers a recovery code that was never on anyone's screen. So minting
+  // proves the password and builds the wrap, and only adopting makes it real.
+  const v = await mk();
+  const code = newRecoveryCode();
+
+  const wrap = await v.mintRecoveryWrap('hunter2', code);
+  assert.equal(v.hasRecovery, false, 'nothing may change before the code is acknowledged');
+
+  // Bailing out here — the tab closed at the sheet — leaves a vault that
+  // never heard of the code. That is the whole point.
+  const bailed = Vault.load(v.toJSON());
+  assert.equal(bailed.hasRecovery, false);
+  await assert.rejects(() => bailed.unlockWithRecoveryCode(code));
+
+  v.adoptRecoveryWrap(wrap);
+  assert.equal(v.hasRecovery, true);
+  const reopened = Vault.load(v.toJSON());
+  await reopened.unlockWithRecoveryCode(code);
+  assert.equal(reopened.locked, false);
+});
+
+test('minting still proves the master password before anything is shown', async () => {
+  const v = await mk();
+  await assert.rejects(() => v.mintRecoveryWrap('wrong password', newRecoveryCode()));
+  assert.equal(v.hasRecovery, false);
+});

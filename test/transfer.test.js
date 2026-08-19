@@ -327,3 +327,81 @@ test('a huge url cannot slip past the field cap', () => {
   assert.ok(rec.urls[0].length <= MAX_FIELD, `url kept ${rec.urls[0].length} characters`);
   assert.ok(rec.urls.length <= MAX_URLS, `kept ${rec.urls.length} urls`);
 });
+
+// ---- password history through the round trip --------------------------------
+
+test('password history survives export and import', () => {
+  // The history is the safety net applyPatch keeps — the old password a bad
+  // rotation is recovered from — and stripping it from the export cut it out
+  // of the one file people restore from.
+  const records = [
+    newRecord(
+      {
+        type: LOGIN,
+        title: 'Example',
+        username: 'ben',
+        password: 'new',
+        urls: ['https://example.com'],
+        history: [{ password: 'old', changed: 1_700_000_000_000 }],
+      },
+      1_700_000_100_000,
+    ),
+  ];
+
+  const back = fromJson(toJson(records));
+  assert.deepEqual(back[0].history, [{ password: 'old', changed: 1_700_000_000_000 }]);
+});
+
+test('history from a file is built entry by entry, never adopted wholesale', () => {
+  const raw = JSON.stringify({
+    records: [
+      {
+        type: 'login',
+        title: 'Example',
+        username: 'ben',
+        password: 'new',
+        history: [
+          { password: 'kept', changed: 123 },
+          { password: 'undated', changed: 'not-a-number' },
+          { password: '', changed: 5 }, // nothing to keep
+          'junk',
+          { changed: 9 }, // no password at all
+          { password: 'extra-keys', changed: 7, evil: { deep: true } },
+        ],
+      },
+    ],
+  });
+
+  const [rec] = fromJson(raw);
+  assert.deepEqual(rec.history, [
+    { password: 'kept', changed: 123 },
+    { password: 'undated', changed: 0 },
+    { password: 'extra-keys', changed: 7 },
+  ]);
+});
+
+test('a login with no history imports with an empty one, not a missing one', () => {
+  const [rec] = fromJson(JSON.stringify([{ type: 'login', username: 'ben', password: 'x' }]));
+  assert.deepEqual(rec.history, []);
+});
+
+// ---- the encrypted backup, named for what it is -----------------------------
+
+test('an encrypted backup is refused by name, with the way through', () => {
+  // On the bad day a person reaches for Import holding the backup file, and
+  // "does not look like a BENCpass export" told them the file was broken. It
+  // is not broken; it is sealed, and the message now says what actually reads
+  // it.
+  const backup = JSON.stringify({
+    meta: { format: 'bencpass-vault', kdf: {} },
+    envelopes: [{ id: 'x', rev: 1, n: 'n', ct: 'ct' }],
+  });
+
+  assert.throws(
+    () => parse(backup),
+    (err) =>
+      err instanceof TransferError &&
+      err.code === 'encrypted-backup' &&
+      /Rescue/.test(err.message),
+  );
+});

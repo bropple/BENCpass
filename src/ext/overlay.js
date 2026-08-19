@@ -121,7 +121,11 @@ async function render() {
     list.append(
       row({
         title: 'Generate a password',
-        sub: '20 characters, saved when you submit',
+        // "Saved when you submit" was a promise nothing kept: submitting only
+        // *offered* a save, and the offer died with the navigation, the tab,
+        // or a lock. The background now saves the password the moment it is
+        // generated (see handleGenerate), so the words can finally match.
+        sub: '20 characters, saved to the vault as it fills',
         className: 'gen',
         onPick: () => browser.runtime.sendMessage({ type: MSG.GENERATE, sessionId }),
       }),

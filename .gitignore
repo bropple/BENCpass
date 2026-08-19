@@ -42,3 +42,8 @@ server/*.exe
 *.swp
 *~
 *.log
+
+# Worktrees, which Claude Code creates here when an agent works in isolation.
+# They are checkouts of this repository, so committing one would nest a copy of
+# the tree inside itself.
+.claude/

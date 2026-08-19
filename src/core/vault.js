@@ -33,6 +33,33 @@ export class VaultLockedError extends Error {
   }
 }
 
+/**
+ * Are two record bodies the same thing, once the clock noise is set aside?
+ *
+ * Used to decide whether a parked conflict is worth forking: `updated`,
+ * `lastUsed` and `timesUsed` move whenever a record is touched, so two copies
+ * that differ only there are one record, not two versions of it. Key order can
+ * differ between a freshly built body and one parsed back out of a seal, so
+ * the comparison sorts keys rather than trusting stringify's order. Being
+ * wrong here only costs a duplicate fork, which a person can delete — never a
+ * lost version.
+ */
+function sameContent(a, b) {
+  const canon = (x) => {
+    if (Array.isArray(x)) return x.map(canon);
+    if (x && typeof x === 'object') {
+      return Object.fromEntries(
+        Object.keys(x)
+          .sort()
+          .map((k) => [k, canon(x[k])]),
+      );
+    }
+    return x;
+  };
+  const stable = ({ updated, lastUsed, timesUsed, ...rest }) => JSON.stringify(canon(rest));
+  return stable(a) === stable(b);
+}
+
 export class Vault {
   #key = null; // CryptoKey, non-extractable, null while locked
   #plain = new Map(); // id -> decrypted record, populated only while unlocked
@@ -41,6 +68,17 @@ export class Vault {
     this.meta = meta;
     this.envelopes = envelopes;
     this.syncedRev = syncedRev;
+    // Envelopes the merge parked in a conflict: the other machine's bytes,
+    // still sealed, waiting for an unlocked vault to fork them into records a
+    // person can see. Persisted, because a sync can run — and conflict — while
+    // the vault is locked, and a parked copy that lives only in memory is a
+    // parked copy that a browser restart deletes.
+    this.parked = [];
+    // Which parked envelopes have already been forked (or judged empty), so a
+    // conflict the merge re-detects before convergence does not fork the same
+    // bytes twice. The nonce is fresh per seal, so id:rev:nonce names exactly
+    // one envelope ever.
+    this.forkedMarks = [];
   }
 
   get locked() {
@@ -77,11 +115,14 @@ export class Vault {
     if (persisted.meta?.format !== FORMAT) {
       throw new Error(`unsupported vault format: ${persisted.meta?.format}`);
     }
-    return new Vault(
+    const v = new Vault(
       persisted.meta,
       new Map(persisted.envelopes.map((e) => [e.id, e])),
       new Map(Object.entries(persisted.syncedRev ?? {})),
     );
+    v.parked = Array.isArray(persisted.parked) ? persisted.parked : [];
+    v.forkedMarks = Array.isArray(persisted.forkedMarks) ? persisted.forkedMarks : [];
+    return v;
   }
 
   toJSON() {
@@ -89,6 +130,8 @@ export class Vault {
       meta: this.meta,
       envelopes: [...this.envelopes.values()],
       syncedRev: Object.fromEntries(this.syncedRev),
+      parked: this.parked,
+      forkedMarks: this.forkedMarks,
     };
   }
 
@@ -248,6 +291,21 @@ export class Vault {
    * derivation served both, so cracking either would be cracking both.
    */
   async enrolRecovery(password, code, now = Date.now()) {
+    this.adoptRecoveryWrap(await this.mintRecoveryWrap(password, code, now));
+  }
+
+  /**
+   * Build the recovery wrapping without adopting it.
+   *
+   * Split from enrolRecovery so the UI can show the code before the vault
+   * commits to it. Enrolling first and displaying second left a phantom: close
+   * the tab at the sheet and the gate offers a recovery code that was never on
+   * anyone's screen — a way back in that nobody holds. Minting here still
+   * proves the master password (a wrong one fails the unwrap before anything
+   * is shown), but nothing changes until adoptRecoveryWrap is called with the
+   * result, which the sheet does only on "I have written it down".
+   */
+  async mintRecoveryWrap(password, code, now = Date.now()) {
     if (!password) throw new Error('a master password is required');
     const cleaned = normaliseCode(code);
     if (cleaned.length < CODE_LENGTH) throw new Error('that is not a full recovery code');
@@ -258,11 +316,16 @@ export class Vault {
 
     const salt = newSalt();
     const recoveryKey = await deriveMasterKey(cleaned, salt, kdf);
-    this.meta.wraps.recovery = {
+    return {
       ...(await wrapVaultKey(vaultKeyBytes, recoveryKey, 'recovery')),
       salt: toB64(salt),
       created: now,
     };
+  }
+
+  /** The moment the code becomes real. The caller persists. */
+  adoptRecoveryWrap(wrap) {
+    this.meta.wraps.recovery = wrap;
   }
 
   /** Is there a way back in without the master password? */
@@ -402,6 +465,143 @@ export class Vault {
     );
   }
 
+  // ---- conflicts -----------------------------------------------------------
+  //
+  // merge() parks the losing side of a conflict — the other machine's bytes,
+  // or the edit a tombstone beat. For a long time that was where the story
+  // ended: nothing persisted the parked envelope, and the manager's "N
+  // conflict(s) kept" described a keep that never happened. Deleting the other
+  // machine's password silently is the one thing a sync must never do, so the
+  // park is now real: envelopes land here (no key needed, so a background sync
+  // on a locked vault keeps them too), survive in storage, and are forked into
+  // ordinary records the next time the vault is open. The person then sees
+  // both versions side by side and deletes the wrong one — a decision that
+  // syncs like any other, so every machine converges on it.
+
+  /** How many fork marks to remember. Far above any plausible conflict rate;
+   *  the cap only stops the list growing without bound over years. */
+  static MARKS_MAX = 512;
+
+  #mark(e) {
+    return `${e.id}:${e.rev}:${e.n}`;
+  }
+
+  /**
+   * Keep the losing envelopes of a merge. Key-free on purpose: this is called
+   * from the sync path, which runs on a locked vault.
+   *
+   * Deduplicated against what is already parked and what was already forked,
+   * because the same conflict is re-detected on every sync until the machines
+   * converge, and each detection hands over the same bytes.
+   */
+  park(envelopes) {
+    const seen = new Set([...this.forkedMarks, ...this.parked.map((e) => this.#mark(e))]);
+    let added = 0;
+    for (const e of envelopes) {
+      if (!e || seen.has(this.#mark(e))) continue;
+      seen.add(this.#mark(e));
+      this.parked.push(e);
+      added++;
+    }
+    return added;
+  }
+
+  /**
+   * Turn every parked envelope into a record a person can see.
+   *
+   * Each live body becomes a fresh record titled "<title> (conflict)", carrying
+   * `conflictOf` so the UI can say what it is. A parked tombstone is dropped —
+   * there is nothing in it to recover — and a body identical to the current
+   * record (timestamps aside) is dropped too, since forking it would only
+   * manufacture a duplicate of the copy that won.
+   *
+   * Needs the key, so it runs after unlock. The caller persists.
+   *
+   * @returns the ids of the records forked.
+   */
+  async resolveParked(now = Date.now()) {
+    const key = this.#require();
+    const forked = [];
+
+    for (const e of this.parked) {
+      this.forkedMarks.push(this.#mark(e));
+
+      let body;
+      try {
+        body = await openRecord(key, e.id, e.rev, e);
+      } catch {
+        // Sealed under a different key. This vault cannot ever read it, and
+        // keeping it parked would just re-fail here forever.
+        continue;
+      }
+      if (!body || body.deleted) continue;
+
+      const current = this.#plain.get(e.id);
+      if (current && sameContent(current, body)) continue;
+
+      const stamp = new Date(now).toISOString().slice(0, 10);
+      const changed = new Date(body.updated ?? body.created ?? now).toISOString().slice(0, 10);
+      const plain = {
+        ...body,
+        title: `${body.title || '(untitled)'} (conflict)`,
+        conflictOf: e.id,
+        notes: [
+          body.notes,
+          `Kept from a sync conflict found on ${stamp}: another machine changed or ` +
+            `deleted this entry at the same time as this copy was written. ` +
+            `This copy was last changed on ${changed}. Compare it with the current ` +
+            `entry, if one still exists, and delete whichever is wrong.`,
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        // `updated` is deliberately NOT stamped to now. Deciding which of two
+        // copies to keep means knowing which was written last, and stamping the
+        // fork with the moment it was forked destroys exactly that — both
+        // copies then claim the same date, and the one question the person has
+        // becomes unanswerable. The conflict's own date is in the note above,
+        // where it belongs; this field stays the date this copy was written.
+        updated: body.updated ?? now,
+      };
+
+      const id = crypto.randomUUID();
+      await this.#write(key, id, 1, plain);
+      forked.push(id);
+    }
+
+    this.parked = [];
+    if (this.forkedMarks.length > Vault.MARKS_MAX) {
+      this.forkedMarks = this.forkedMarks.slice(-Vault.MARKS_MAX);
+    }
+    return forked;
+  }
+
+  /**
+   * Re-seal a record's current content at a revision above `aboveRev`.
+   *
+   * This is what makes a conflict converge instead of recurring. Two machines
+   * that edit from the same ancestor both count to the same rev with different
+   * bytes; each one's merge keeps its own copy and pushes it, so the server
+   * flips between the two forever and neither side ever fast-forwards. Sealing
+   * the surviving copy one revision above both sides breaks the tie: the next
+   * pull on the other machine is a plain fast-forward, and the version it lost
+   * comes back to it as the forked "(conflict)" record. Revisions only ever
+   * move up here, which is also what the rollback guards insist on.
+   *
+   * Works on tombstones as well as live records — a deletion that wins a
+   * conflict at an equal rev has exactly the same tie to break.
+   */
+  async supersede(id, aboveRev) {
+    const key = this.#require();
+    const env = this.envelopes.get(id);
+    if (!env) throw new Error(`no such record: ${id}`);
+
+    const rev = Math.max(env.rev, aboveRev) + 1;
+    const body = this.#plain.get(id) ?? (await openRecord(key, env.id, env.rev, env));
+    const blob = await sealRecord(key, id, rev, body);
+    this.envelopes.set(id, { id, rev, deleted: Boolean(body?.deleted), ...blob });
+    return rev;
+  }
+
   // ---- sync ----------------------------------------------------------------
 
   /**
@@ -417,10 +617,29 @@ export class Vault {
     const next =
       envelopes instanceof Map ? new Map(envelopes) : new Map(envelopes.map((e) => [e.id, e]));
 
+    // The revision comparison runs for a locked vault too — it needs only the
+    // numbers, not the key. It used to live solely inside the unlocked block
+    // below, which meant the one sync that runs unattended, the background
+    // sync on a locked vault, was exactly the one with no belt at all. The
+    // cleartext `deleted` flag is the best a locked vault can do for the
+    // tombstone exception; the unlocked path re-checks against the sealed
+    // body, which is the authority, the moment there is a key to open it with.
+    for (const [id, e] of next) {
+      const cur = this.envelopes.get(id);
+      if (cur && e.rev < cur.rev && !e.deleted) next.set(id, cur);
+    }
+
     if (!this.locked) {
       for (const [id, e] of next) {
         const cur = this.envelopes.get(id);
-        if (cur && cur.rev === e.rev && this.#plain.has(id)) continue;
+        // Unchanged means the same bytes, not the same number. Two machines
+        // that edit from one ancestor both count to the same rev with
+        // different ciphertext, and merge resolves that divergence — so an
+        // envelope at the current rev can still be a different envelope.
+        // Skipping on rev alone left the old plaintext on screen over the new
+        // envelope: a same-rev tombstone was stored but the record it deleted
+        // stayed visible until the next unlock quietly vanished it.
+        if (cur && cur.rev === e.rev && cur.ct === e.ct && this.#plain.has(id)) continue;
         try {
           // Same reasoning as unlockWithVaultKey: the flag is the server's to
           // set, the body is not. A removal is honoured because the plaintext

@@ -27,6 +27,7 @@ import {
   addressSummary,
 } from '../core/address.js';
 import { generate } from '../core/generate.js';
+import { keepGenerated, completeGenerated } from '../core/provisional.js';
 import { SyncClient, syncOnce, joinVault, loadSyncState, dumpSyncState, PROTOCOL } from '../core/sync.js';
 import { MSG, publicCandidate, publicAddress, isMessage, asString, asId } from './protocol.js';
 
@@ -100,6 +101,25 @@ function bumpAutolock() {
   const after = settings.autolockMs || AUTOLOCK_MS;
   autolockAt = Date.now() + after;
   autolockTimer = setTimeout(() => lock(), after);
+}
+
+/**
+ * Fork any conflict copies a locked-vault sync parked, now that there is a key.
+ *
+ * Called after every successful unlock, whichever surface it came through. The
+ * unlocked sync path does this itself inside syncOnce; this covers the person
+ * who unlocks, looks, and locks again before the five-minute timer ever runs —
+ * they deserve to see the "(conflict)" entries too, not a list that pretends
+ * the machines agreed.
+ */
+async function forkParkedConflicts() {
+  if (!vault || vault.locked || !vault.parked.length) return;
+  try {
+    const forked = await vault.resolveParked();
+    if (forked.length) await persistVault();
+  } catch (err) {
+    console.error('BENCpass: could not fork parked conflict copies', err);
+  }
 }
 
 function lock() {
@@ -621,6 +641,7 @@ async function handleUnlocked(sender) {
   paintBadge();
   broadcastLockState();
   scheduleSync();
+  await forkParkedConflicts();
 
   const managerTab = sender.tab?.id;
   if (managerTab === undefined || !unlockReturns.has(managerTab)) return { ok: true };
@@ -724,10 +745,19 @@ async function handleSave(msg, sender) {
     } else {
       await vault.add({ type: 'address', title, ...pending.address });
     }
-  } else if (pending.existingId) {
+  } else if (pending.existingId && vault.get(pending.existingId)) {
     // The old password is kept in the record's history by applyPatch, so a
     // capture that turns out to be a typo is recoverable.
-    await vault.update(pending.existingId, { password: pending.password });
+    const target = vault.get(pending.existingId);
+    const patch = { password: pending.password };
+    if (target.provisional) {
+      // Saving over a provisional entry is the sign-up finishing by another
+      // route: the username arrives with it, and the entry stops being a
+      // half-made one.
+      patch.username = pending.username || target.username || '';
+      patch.provisional = false;
+    }
+    await vault.update(pending.existingId, patch);
   } else {
     await vault.add({
       title: pending.host,
@@ -765,19 +795,38 @@ const sanitizeTokens = (raw) => {
   return out;
 };
 
-/** A generated password goes to the page, but is never stored until saved. */
+/**
+ * A generated password is stored before it is filled.
+ *
+ * It used to go to the page and nowhere else until the user pressed Save — and
+ * the offer to save could die with the navigation the submit causes, or with
+ * the tab, or with an idle lock. Every one of those left the site holding a
+ * password nobody knew. So the vault now keeps it as a provisional entry the
+ * moment it exists; submitting the form completes the entry with the username
+ * (see handleCapture), and a sign-up abandoned halfway leaves a record the
+ * person can see and delete rather than a password that exists nowhere.
+ */
 async function handleGenerate(msg, sender) {
   if (!isExtensionPage(sender)) return { ok: false };
+  // Locking clears the sessions, so this is belt and braces — but a password
+  // that cannot be saved must never be filled, so the belt stays.
+  if (!vault || vault.locked) return { ok: false, reason: 'locked' };
   const session = sessions.get(asString(msg.sessionId, 64));
   if (!session) return { ok: false };
 
   const password = generate({ length: 20 });
+  await keepGenerated(vault, {
+    host: session.frameHost,
+    url: session.frameHost ? `${session.frameProtocol ?? 'https:'}//${session.frameHost}` : '',
+    password,
+  });
+  await persistVault();
   await browser.tabs.sendMessage(
     session.tabId,
     { type: MSG.FILL, kind: 'generated', values: { password } },
     { frameId: session.frameId },
   );
-  return { ok: true, password };
+  return { ok: true };
 }
 
 /**
@@ -798,11 +847,25 @@ async function handleCapture(msg, sender) {
   const password = asString(msg.password, 1024);
   if (!password) return { ok: false };
 
-  const { forHost, candidate, overwritable } = captureTarget(
+  const { forHost, candidate, overwritable, provisional } = captureTarget(
     vault.list(),
     origin.frameHost,
     username,
   );
+
+  // The password came out of our own generator and is already saved as a
+  // provisional entry (see handleGenerate). This submit is the missing half —
+  // the username it was generated for — so the record is completed on the
+  // spot, with nothing to offer and nothing that can be lost by not pressing
+  // Save on a toast the navigation is about to kill.
+  if (provisional && provisional.password === password) {
+    await completeGenerated(vault, provisional, username);
+    await persistVault();
+    pendingCaptures.delete(origin.tabId);
+    clearCaptureNotice(origin.tabId);
+    paintBadge();
+    return { ok: true };
+  }
 
   // Updating in place is only offered for an entry that belongs to this site
   // and no other.
@@ -818,7 +881,13 @@ async function handleCapture(msg, sender) {
   // A wider entry is not refused, only not silently overwritten: the password
   // is offered as a new entry scoped to this site, which costs a duplicate to
   // tidy and cannot cost the password.
-  const existing = overwritable;
+  //
+  // A provisional entry is the other legitimate landing spot: the person
+  // generated a password here, then typed a different one before submitting.
+  // Offering to update the half-made entry beats standing up a duplicate next
+  // to it — and it is ours, made with exactly one URL, so it cannot carry the
+  // password anywhere else.
+  const existing = overwritable ?? provisional;
 
   // Nothing to learn if this host already has this exact password on file. The
   // username is only required to match when there was one to see: the second
@@ -1350,6 +1419,7 @@ async function handleBioUnlock(msg, sender) {
   paintBadge();
   broadcastLockState();
   scheduleSync();
+  await forkParkedConflicts();
 
   // Asked from the menu on a login field: put that menu back, against the same
   // field, now with entries in it. Otherwise the fingerprint opens the vault
@@ -1485,6 +1555,7 @@ async function handleUnlock(msg, sender) {
     paintBadge();
     broadcastLockState();
     scheduleSync();
+    await forkParkedConflicts();
     return { ok: true };
   } catch (err) {
     return { ok: false, reason: err.code === 'unwrap-failed' ? 'bad-password' : 'error' };
@@ -1497,7 +1568,10 @@ async function handleSearch(msg, sender) {
   // After the authorisation check, not before — a caller that is refused must
   // not be able to hold the vault unlocked by asking.
   bumpAutolock();
-  return { results: vault.search(asString(msg.query, 256)).map(publicCandidate) };
+  // Logins only. The popup's rows do exactly one thing — fill into the active
+  // tab — and an address cannot go down that path: offering one produced a row
+  // that failed with a reason the popup did not even have words for.
+  return { results: vault.search(asString(msg.query, 256), 'login').map(publicCandidate) };
 }
 
 // ---- sync ------------------------------------------------------------------
@@ -1626,13 +1700,41 @@ browser.menus.create({
 
 browser.menus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== 'bencpass-generate' || !tab?.id) return;
+
+  // A locked vault cannot keep what this would generate, and a password that
+  // is filled but kept nowhere is the worst outcome this extension can
+  // produce — submit it, miss the one toast, and the site holds a password
+  // nobody knows. So instead of filling, open the menu on the field, which
+  // offers the way to unlock; this path used to fill regardless, with no lock
+  // check at all.
+  if (!vault || vault.locked) {
+    browser.tabs
+      .sendMessage(tab.id, { type: MSG.DISMISS, open: true }, { frameId: info.frameId ?? 0 })
+      .catch(() => {});
+    return;
+  }
+
+  const source = info.frameUrl ?? info.pageUrl ?? tab.url ?? '';
+  const host = hostOf(source);
+  let protocol = 'https:';
+  try {
+    protocol = new URL(source).protocol;
+  } catch {
+    /* left as https:, same stricter assumption as originOf */
+  }
+
+  const password = generate({ length: 20 });
+  // Kept before it is filled, same as the menu path — see handleGenerate.
+  await keepGenerated(vault, { host, url: host ? `${protocol}//${host}` : '', password });
+  await persistVault();
+
   await browser.tabs
     .sendMessage(
       tab.id,
       {
         type: MSG.FILL_TARGET,
         targetElementId: info.targetElementId,
-        values: { password: generate({ length: 20 }) },
+        values: { password },
       },
       { frameId: info.frameId ?? 0 },
     )
