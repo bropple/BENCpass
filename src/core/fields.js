@@ -77,6 +77,34 @@ const OTP_HINTS = /(otp|one-?time|2fa|mfa|totp|auth(entication)?-?code|verificat
 // filled with an email address on every page load.
 const NOT_A_CREDENTIAL = /(search|query|coupon|promo|discount|voucher|captcha|zip|postal)/;
 
+/**
+ * Could this captured value actually be a username?
+ *
+ * A value check, not a field check, because the field that fails here looks
+ * exactly like a username to the classifier. Seen in real use on the TrueNAS
+ * SCALE web UI: the save toast offered "Save 14 for 10.0.0.214?" — an Angular
+ * page with runtime-built forms, no autocomplete attributes worth reading, and
+ * numeric settings (ports, counts, sizes) in the same form as a password box.
+ * The field before the password IS the username on real sign-in forms, which
+ * is why position wins in classifyLoginFields; on a settings page it is a
+ * port number, and only the value can tell the two apart.
+ *
+ * Bare digits are refused. The cost is a missed save offer on the rare site
+ * whose usernames are all-numeric account IDs typed without any punctuation —
+ * the entry can still be added by hand, and the fill side never asks this
+ * question. The gain is that the toast stops offering obvious rubbish, because
+ * a toast people have learned to dismiss unread is worthless on the day it
+ * holds something real.
+ *
+ * Empty stays capturable on purpose: the second page of a two-step sign-in has
+ * no username box at all, and that capture is legitimate and already handled.
+ */
+export function plausibleUsername(value) {
+  const v = String(value ?? '').trim();
+  if (!v) return true;
+  return !/^\d+$/.test(v);
+}
+
 export function isFillableInput(f) {
   if (f.tag !== 'input' && f.tag !== 'textarea') return false;
   if (f.disabled || f.readOnly) return false;

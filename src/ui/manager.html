@@ -53,6 +53,22 @@
           <input type="text" id="gate-server" autocomplete="off"
                  placeholder="http://10.0.0.20:8788">
         </label>
+        <!-- What the box will and will not take, said before it refuses:
+             the rules are only otherwise discoverable by being refused. -->
+        <p class="gate-field-note">
+          https, or plain http to a LAN address or a <code>.local</code> name.
+          A Tailscale name needs its <code>https://</code> form — a Tailscale
+          IP over plain http is refused.
+        </p>
+        <!-- The same Test as Settings → Sync: /v1/health is unauthenticated
+             and needs no vault, and this gate is where the address is typed
+             for the first time, against a code that expires in thirty
+             minutes. Without it, a typo surfaces only AFTER the password and
+             the code have been spent, dressed as a join error. -->
+        <div class="gate-test-row">
+          <button type="button" class="btn btn-sm" id="gate-server-test">Test</button>
+          <span class="settings-note" id="gate-server-status" role="status"></span>
+        </div>
 
         <label class="field">
           <span class="label">Enrolment code</span>
@@ -472,6 +488,17 @@
         </div>
         <input type="checkbox" id="s-insecure" class="setting-check">
       </label>
+
+      <!-- The sites "Never for this site" on the save toast has silenced.
+           Visible and editable here because that button gets pressed in a
+           hurry, and a decision that cannot be found cannot be undone. -->
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Never offer to save</span>
+          <span class="setting-note" id="s-never-note"></span>
+          <ul class="never-list" id="s-never-list"></ul>
+        </div>
+      </div>
 
       <div class="setting">
         <div class="setting-text">

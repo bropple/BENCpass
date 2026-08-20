@@ -324,12 +324,15 @@ have a clean state to come back to.
 logins**. It writes a CSV in plain text; treat it accordingly and delete it
 when you are done.
 
-**3. Import on ONE machine only.** Settings → Your data → **Import**, then let
-sync carry it to the others. Importing the same file on two machines gives you
-every login twice on both: import mints a fresh id per row and never merges, so
-sync sees two unrelated records rather than a conflict and says nothing about
-it. This is a real limitation and it is written down in TODO.md; until it is
-fixed, import once.
+**3. Import.** Settings → Your data → **Import**. Importing merges rather than
+blindly adds: a row is matched against what the vault already holds on
+registrable domain and username, an identical row is skipped, and a row whose
+password is newer than the vault's updates the existing entry with the old
+password kept in its history. So importing the same file on a second machine —
+or restoring an export over a live vault — does not double anything; the
+status line under the button says exactly what was added, updated, skipped and
+left alone. Letting sync carry an import from one machine is still the tidier
+route, but it is no longer the only safe one.
 
 **4. Turn Firefox's own password manager off.** `about:preferences#privacy`,
 and uncheck:

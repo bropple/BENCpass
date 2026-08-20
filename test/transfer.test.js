@@ -214,8 +214,9 @@ test('parse picks the reader from the text, not the file name', () => {
 });
 
 test('an imported record is a real record with fresh timestamps', () => {
-  // Not the exporting machine's clock: a record dated 2049 sorts to the top of
-  // every list forever, and imports are where such dates come from.
+  // Chrome's CSV carries no dates at all, so the import time is the only
+  // honest stamp there is. (Where the file DOES carry dates — Firefox — they
+  // are kept instead; the tests below pin that.)
   const now = 1_700_000_000_000;
   const [r] = fromCsv(CHROME, now);
   assert.equal(r.created, now);
@@ -223,6 +224,93 @@ test('an imported record is a real record with fresh timestamps', () => {
   assert.equal(r.passwordChanged, now);
   assert.equal(r.timesUsed, 0);
   assert.deepEqual(r.history, []);
+});
+
+test('a Firefox export keeps the dates it carried', () => {
+  // "Which copy is the newest" is the question this program exists to answer,
+  // and the importer used to flatten the only evidence: every imported record
+  // claimed to have been created and changed at import time.
+  const created = 1_600_000_000_000;
+  const used = 1_650_000_000_000;
+  const changed = 1_700_000_000_000;
+  const csv =
+    '"url","username","password","httpRealm","formActionOrigin","guid","timeCreated","timeLastUsed","timePasswordChanged"\n' +
+    `"https://example.com","ben","hunter2",,"https://example.com","{abc}","${created}","${used}","${changed}"\n`;
+
+  const [r] = fromCsv(csv, changed + 1_000_000);
+  assert.equal(r.created, created);
+  assert.equal(r.lastUsed, used);
+  assert.equal(r.passwordChanged, changed);
+  // The nearest thing the file has to "last written".
+  assert.equal(r.updated, changed);
+});
+
+test("Firefox's zeroes and blanks mean nothing, not January 1970", () => {
+  // timeLastUsed is "0" for a login never filled; an empty cell says even
+  // less. Both must fall back to the importer's own stamps, not become epoch.
+  const now = 1_700_000_000_000;
+  const [r] = fromCsv(FIREFOX.replace('"1700000000000","0","1700000000000"', '"0","0",""'), now);
+  assert.equal(r.created, now);
+  assert.equal(r.lastUsed, 0);
+  assert.equal(r.passwordChanged, now);
+});
+
+test('a file that carries epoch seconds is not read as 1970', () => {
+  // Firefox writes milliseconds; some tools write seconds. Read as
+  // milliseconds, 1.7e9 is three weeks into 1970, and that record wins every
+  // "oldest password" audit forever.
+  const seconds = 1_600_000_000;
+  const csv =
+    'url,username,password,timeCreated,timePasswordChanged\n' +
+    `https://example.com,ben,hunter2,${seconds},${seconds}\n`;
+  const [r] = fromCsv(csv);
+  assert.equal(r.created, seconds * 1000);
+  assert.equal(r.passwordChanged, seconds * 1000);
+});
+
+test('timestamps survive the JSON round trip', () => {
+  // The JSON export is the safety copy, and a restore from it is exactly the
+  // day password ages matter. Re-stamping them at import re-dated every
+  // restored record to today.
+  const rec = newRecord(
+    { type: LOGIN, title: 'Example', username: 'ben', password: 'p', urls: ['https://example.com'] },
+    1_600_000_000_000,
+  );
+  rec.updated = 1_650_000_000_000;
+  rec.lastUsed = 1_660_000_000_000;
+  rec.timesUsed = 7;
+  rec.passwordChanged = 1_640_000_000_000;
+
+  const [after] = fromJson(toJson([rec]));
+  assert.equal(after.created, 1_600_000_000_000);
+  assert.equal(after.updated, 1_650_000_000_000);
+  assert.equal(after.lastUsed, 1_660_000_000_000);
+  assert.equal(after.timesUsed, 7);
+  assert.equal(after.passwordChanged, 1_640_000_000_000);
+});
+
+test('a timestamp from a file has to be a number to survive', () => {
+  // The importer builds records key by key precisely so a file cannot bring
+  // its own shape in; the timestamps must not become the exception.
+  const [r] = fromJson(
+    JSON.stringify([
+      {
+        title: 'x',
+        password: 'p',
+        created: 'yesterday',
+        updated: { evil: true },
+        lastUsed: -5,
+        timesUsed: 'lots',
+        passwordChanged: null,
+      },
+    ]),
+  );
+  const now = Date.now();
+  assert.ok(Math.abs(r.created - now) < 60_000);
+  assert.ok(Math.abs(r.updated - now) < 60_000);
+  assert.equal(r.lastUsed, 0);
+  assert.equal(r.timesUsed, 0);
+  assert.ok(Math.abs(r.passwordChanged - now) < 60_000);
 });
 
 // ---- hostile files ----------------------------------------------------------

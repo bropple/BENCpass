@@ -43,6 +43,7 @@ export const MSG = Object.freeze({
   NOTICE_STATE: 'notice-state', // "what should the toast in this tab say?"
   SAVE: 'save', // "keep the credentials I just submitted"
   DISCARD: 'discard',
+  NEVER: 'never-site', // "stop offering to save anything on this site"
   UNLOCK: 'unlock',
   LOCK: 'lock',
   SEARCH: 'search',

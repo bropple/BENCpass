@@ -21,7 +21,11 @@ import {
 } from './crypto.js';
 import { normalise as normaliseCode, CODE_LENGTH } from './recovery.js';
 import { toB64, fromB64 } from './bytes.js';
+import { hostOf, captureTarget, belongsOnlyTo } from './match.js';
 import {
+  LOGIN,
+  ADDRESS,
+  EMPTY_ADDRESS,
   newRecord,
   applyPatch,
   markUsed,
@@ -1165,16 +1169,126 @@ export class Vault {
   /**
    * Bulk import. Timestamps are normalised and future-dated ones clamped, since
    * importers are where nonsensical clocks arrive from.
+   *
+   * Merges before it adds. Minting a fresh uuid for every row was how the same
+   * Firefox export, imported on two machines, doubled every login on both:
+   * sync treats different ids as different records, so both copies propagated
+   * everywhere and no conflict was ever raised — the drift this program exists
+   * to prevent, created by its own importer. So a row is matched against what
+   * is already here the same way a capture is (registrable domain plus
+   * username, via captureTarget), and:
+   *
+   *  - an identical match learns nothing and is skipped;
+   *  - a match with a different password is updated IN PLACE when the file's
+   *    copy is newer — the record keeps its id, so sync sees an edit, and the
+   *    displaced password lands in history exactly as a capture's would;
+   *  - a match whose vault copy is newer is left alone, counted so the caller
+   *    can say so;
+   *  - a match that names other sites too is never written into (see
+   *    belongsOnlyTo — the imported password would be offered elsewhere), so
+   *    the row is added beside it instead;
+   *  - everything else is added.
+   *
+   * A duplicate is therefore something a person makes on purpose, by editing,
+   * not something importing the same file twice manufactures 534 times.
    */
   async importRecords(records, now = Date.now()) {
     const key = this.#require();
-    const ids = [];
+    const added = [];
+    const merged = [];
+    let unchanged = 0;
+    let stale = 0;
+
     for (const input of records) {
+      // Cloned for the same reason add() clones: the rows belong to the caller,
+      // which in the extension is another document whose compartment dies with
+      // it. See add().
+      const body = normalise(structuredClone(input), now);
+
+      if (body.type === LOGIN) {
+        const match = this.#importTarget(body);
+        if (match) {
+          const { id, current, host } = match;
+          if (current.password === body.password) {
+            unchanged++;
+            continue;
+          }
+          if (belongsOnlyTo(current, host)) {
+            // The file wins only when it is newer — or when the record here has
+            // no password at all, where "newer" is beside the point. A vault
+            // password rotated after the export was taken must not be rolled
+            // back by restoring that export.
+            if (!current.password || body.passwordChanged > (current.passwordChanged ?? 0)) {
+              const patched = applyPatch(current, { password: body.password }, now);
+              // applyPatch stamps passwordChanged with now, which is right for
+              // an edit and wrong here: the file said when this password was
+              // set, and that date is the evidence "which copy is newest"
+              // questions are answered from. normalise already clamped it.
+              patched.passwordChanged = body.passwordChanged;
+              await this.#write(key, id, this.envelopes.get(id).rev + 1, patched);
+              merged.push(id);
+            } else {
+              stale++;
+            }
+            continue;
+          }
+          // Matched an entry that also names other sites: fall through and add
+          // the row as its own record rather than write into it.
+        } else if (
+          !(body.urls ?? []).length &&
+          this.list(LOGIN).some(
+            (r) =>
+              !(r.urls ?? []).length &&
+              (r.username ?? '') === (body.username ?? '') &&
+              r.password === body.password,
+          )
+        ) {
+          // A row with no URL cannot be matched by site, but an exact twin of
+          // it is still nothing to learn — importing the same export twice must
+          // not double these either.
+          unchanged++;
+          continue;
+        }
+      } else if (body.type === ADDRESS && this.#sameAddressExists(body)) {
+        unchanged++;
+        continue;
+      }
+
       const id = crypto.randomUUID();
-      await this.#write(key, id, 1, normalise(input, now));
-      ids.push(id);
+      await this.#write(key, id, 1, body);
+      added.push(id);
     }
-    return ids;
+    return { added, merged, unchanged, stale };
+  }
+
+  /**
+   * The record an imported login row is a version of, if one is here already.
+   *
+   * The same question capture answers, asked with the same code: an entry for
+   * this row's registrable domain carrying this row's username. Tried per URL
+   * because a row can carry several; the first hit wins, which is fine — a row
+   * whose URLs match two different records is already ambiguous, and adding it
+   * (the fall-through) is the honest answer for the rest of its URLs too.
+   */
+  #importTarget(body) {
+    const logins = this.list(LOGIN);
+    for (const url of body.urls ?? []) {
+      const host = hostOf(url);
+      if (!host) continue;
+      const { candidate } = captureTarget(logins, host, body.username ?? '');
+      if (candidate) return { id: candidate.id, current: this.#plain.get(candidate.id), host };
+    }
+    return null;
+  }
+
+  /** An address identical in every stored field. Addresses have no site or
+   *  username to match on, so only an exact twin is safe to call "already
+   *  here" — anything less would merge two genuinely different addresses. */
+  #sameAddressExists(body) {
+    // EMPTY_ADDRESS carries title and notes too, so this is every stored field.
+    return this.list(ADDRESS).some((r) =>
+      Object.keys(EMPTY_ADDRESS).every((k) => (r[k] ?? '') === (body[k] ?? '')),
+    );
   }
 
   /**

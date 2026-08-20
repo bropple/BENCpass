@@ -260,3 +260,196 @@ test('the readiness promise the manager awaits settles with boot', async () => {
   assert.ok(bg.bencpass.vault, 'boot finished without loading the stored vault');
   assert.equal(bg.bencpass.vault.locked, true);
 });
+
+// ---- captures ---------------------------------------------------------------
+//
+// The capture path is deliberately forgiving — a missed save loses a password
+// the person just chose — but forgiving is not the same as credulous, and
+// these pin the two places it declines.
+
+/** The sender a content script has: the page's own URL, a real tab. */
+const PAGE = (url, tabId = 5) => ({ url, tab: { id: tabId, url }, frameId: 0 });
+
+test('a bare-digit username is not offered for saving', async () => {
+  // Seen in real use on the TrueNAS SCALE UI: "Save 14 for 10.0.0.214?" — a
+  // numeric setting classified as the username. An offer with obvious rubbish
+  // in it teaches people to dismiss the toast unread, so none is made.
+  const fake = fakeBrowser();
+  const bg = await loadBackground(fake);
+  await bg.send({ type: MSG.SETUP, password: 'correct horse' });
+
+  const refused = await bg.send(
+    { type: MSG.CAPTURE, username: '14', password: 'a real password' },
+    PAGE('https://10.0.0.214/ui/apps'),
+  );
+  assert.equal(refused.ok, false);
+  assert.equal(bg.bencpass.takePending(5), undefined, 'an offer was made anyway');
+
+  // The same submission with a username a person could actually have is the
+  // control: everything else about the capture was fine.
+  const offered = await bg.send(
+    { type: MSG.CAPTURE, username: 'admin', password: 'a real password' },
+    PAGE('https://10.0.0.214/ui/apps'),
+  );
+  assert.equal(offered.ok, true);
+  const pending = bg.bencpass.takePending(5);
+  assert.equal(pending.username, 'admin');
+});
+
+test('a generated password still completes its record when the username is rubbish', async () => {
+  // The interaction that must not break: generating IS saving (the provisional
+  // entry exists before the page ever sees the password), and the submit is
+  // what completes it. A numeric non-username must not leave that half-made —
+  // and must not be written into it either.
+  const fake = fakeBrowser();
+  const bg = await loadBackground(fake);
+  await bg.send({ type: MSG.SETUP, password: 'correct horse' });
+
+  const id = await bg.bencpass.vault.add({
+    title: '10.0.0.214',
+    username: '',
+    password: 'gen-Xy7!pass',
+    urls: ['https://10.0.0.214'],
+    provisional: true,
+  });
+
+  const reply = await bg.send(
+    { type: MSG.CAPTURE, username: '14', password: 'gen-Xy7!pass' },
+    PAGE('https://10.0.0.214/ui/apps'),
+  );
+  assert.equal(reply.ok, true);
+
+  const rec = bg.bencpass.vault.get(id);
+  assert.equal(rec.provisional, false, 'the record was left half-made');
+  assert.equal(rec.username, '', 'a port number was stored as the username');
+});
+
+// ---- "never for this site" ---------------------------------------------------
+
+/** An extension page whose sender carries the capture's tab. */
+const EXT_PAGE = (tabId) => ({ url: 'moz-extension://test/ui/manager.html', tab: { id: tabId } });
+
+test('NEVER silences the whole site, survives in settings, and can be undone there', async () => {
+  const fake = fakeBrowser();
+  const bg = await loadBackground(fake);
+  await bg.send({ type: MSG.SETUP, password: 'correct horse' });
+
+  // A real offer stands...
+  const offered = await bg.send(
+    { type: MSG.CAPTURE, username: 'ben', password: 'pw-one' },
+    PAGE('https://login.example.com/signin'),
+  );
+  assert.equal(offered.ok, true);
+
+  // ...and "never" clears it and records the registrable domain, not the
+  // subdomain the person happened to be on.
+  const never = await bg.send({ type: MSG.NEVER }, EXT_PAGE(5));
+  assert.equal(never.ok, true);
+  assert.equal(never.site, 'example.com');
+  assert.equal(bg.bencpass.takePending(5), undefined, 'the pending offer outlived the answer');
+
+  // The next sign-in on any host of that site is not offered — www as much as
+  // login, or the button would read as broken.
+  const again = await bg.send(
+    { type: MSG.CAPTURE, username: 'ben', password: 'pw-two' },
+    PAGE('https://www.example.com/signin'),
+  );
+  assert.equal(again.ok, false);
+  assert.equal(bg.bencpass.takePending(5), undefined);
+
+  // Addresses typed there are covered too: the person silenced the asking.
+  const addr = await bg.send(
+    {
+      type: MSG.CAPTURE,
+      kind: 'address',
+      address: { 'address-line1': '1 Test Street', 'postal-code': 'SW1A 1AA', 'address-level2': 'London' },
+    },
+    PAGE('https://www.example.com/checkout'),
+  );
+  assert.equal(addr.ok, false);
+
+  // Other sites are untouched.
+  const other = await bg.send(
+    { type: MSG.CAPTURE, username: 'ben', password: 'pw-three' },
+    PAGE('https://other.net/signin'),
+  );
+  assert.equal(other.ok, true);
+  bg.bencpass.takePending(5);
+
+  // The decision is visible where it can be undone, survives a restart, and
+  // removing it there brings the offers back.
+  const s = await bg.send({ type: MSG.SETTINGS_GET });
+  assert.deepEqual(s.neverSites, ['example.com']);
+  assert.deepEqual(fake.data.get('bencpass.settings')?.neverSites, ['example.com']);
+
+  await bg.send({ type: MSG.SETTINGS_SET, neverSites: [] });
+  const back = await bg.send(
+    { type: MSG.CAPTURE, username: 'ben', password: 'pw-two' },
+    PAGE('https://www.example.com/signin'),
+  );
+  assert.equal(back.ok, true);
+});
+
+test('a generated password is still kept and completed on a silenced site', async () => {
+  // The interaction TODO warned about: generating IS saving (the provisional
+  // entry exists before the page sees the password), and a "never" preference
+  // set weeks earlier must not turn that into a password that vanishes. The
+  // block applies to captures of passwords typed by hand, and only those.
+  const fake = fakeBrowser();
+  const bg = await loadBackground(fake);
+  await bg.send({ type: MSG.SETUP, password: 'correct horse' });
+  await bg.send({ type: MSG.SETTINGS_SET, neverSites: ['10.0.0.214'] });
+
+  // What handleGenerate leaves behind the moment a password is generated.
+  const id = await bg.bencpass.vault.add({
+    title: '10.0.0.214',
+    username: '',
+    password: 'gen-Zq9!pass',
+    urls: ['https://10.0.0.214'],
+    provisional: true,
+  });
+
+  // The submit arrives: the record is completed, silence or no silence.
+  const done = await bg.send(
+    { type: MSG.CAPTURE, username: 'admin', password: 'gen-Zq9!pass' },
+    PAGE('https://10.0.0.214/ui/signup'),
+  );
+  assert.equal(done.ok, true);
+  const rec = bg.bencpass.vault.get(id);
+  assert.equal(rec.provisional, false, 'the generated password was left half-made');
+  assert.equal(rec.username, 'admin');
+
+  // A password typed by hand on the same site is what the silence is for.
+  const typed = await bg.send(
+    { type: MSG.CAPTURE, username: 'admin', password: 'typed-by-hand' },
+    PAGE('https://10.0.0.214/ui/signin'),
+  );
+  assert.equal(typed.ok, false);
+  assert.equal(bg.bencpass.takePending(5), undefined);
+});
+
+test('the never list is normalised on the way in and refused from page senders', async () => {
+  const fake = fakeBrowser();
+  const bg = await loadBackground(fake);
+  await bg.send({ type: MSG.SETUP, password: 'correct horse' });
+
+  // Whatever shape a person pastes, what is stored is what is matched.
+  const set = await bg.send({
+    type: MSG.SETTINGS_SET,
+    neverSites: ['https://www.Example.com/login', 'login.example.com', '10.0.0.214', 'not a host at all', 42, ''],
+  });
+  assert.equal(set.ok, true);
+  assert.deepEqual(set.settings.neverSites, ['example.com', '10.0.0.214']);
+
+  // NEVER writes a durable preference, so a content script cannot send it —
+  // the same line SAVE draws.
+  await bg.send(
+    { type: MSG.CAPTURE, username: 'ben', password: 'pw' },
+    PAGE('https://other.net/signin'),
+  );
+  const refused = await bg.send({ type: MSG.NEVER }, PAGE('https://other.net/signin'));
+  assert.equal(refused?.ok ?? false, false, 'a page sender silenced a site');
+  assert.ok(bg.bencpass.takePending(5), 'the page discarded an offer it should not reach');
+  const s = await bg.send({ type: MSG.SETTINGS_GET });
+  assert.deepEqual(s.neverSites, ['example.com', '10.0.0.214'], 'the page grew the list');
+});

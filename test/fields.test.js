@@ -8,6 +8,7 @@ import {
   isUsernameOnlyStep,
   autocompleteToken,
   autocompleteSection,
+  plausibleUsername,
 } from '../src/core/fields.js';
 
 // Descriptors, not elements — the classifier is pure so the awkward cases can
@@ -74,6 +75,42 @@ test('position beats keywords for the username', () => {
     { name: 'newsletter_email', type: 'email' },
   );
   assert.equal(classifyLoginFields(fields).username.name, 'account_id');
+});
+
+test('an appliance settings form: the classifier picks the port box, the value rule catches it', () => {
+  // The observed failure, as a shape: the TrueNAS SCALE web UI (an Angular
+  // SPA, forms built at runtime, no autocomplete attributes) put a numeric
+  // setting immediately before a password box, and the toast offered
+  // "Save 14 for 10.0.0.214?". The classifier CANNOT tell this field from a
+  // username — position is its strongest signal, and on a real sign-in form
+  // the field before the password is the username. This pins both halves:
+  // the classifier does pick it (so nobody "fixes" this in the classifier
+  // and breaks real sign-in forms), and plausibleUsername is what refuses
+  // the value at capture time.
+  const fields = form(
+    { name: 'lie_period', label: 'Lie period', type: 'text' },
+    { name: 'passwd', label: 'Password', type: 'password' },
+  );
+  const picked = classifyLoginFields(fields).username;
+  assert.equal(picked.name, 'lie_period');
+  assert.equal(plausibleUsername('14'), false);
+});
+
+test('bare digits are not a plausible username; everything else still is', () => {
+  assert.equal(plausibleUsername('14'), false);
+  assert.equal(plausibleUsername('8080'), false);
+  assert.equal(plausibleUsername(' 443 '), false);
+
+  // Empty is legitimate: the second page of a two-step sign-in has no
+  // username box at all, and that capture must keep working.
+  assert.equal(plausibleUsername(''), true);
+  assert.equal(plausibleUsername(null), true);
+
+  // Anything a person could actually sign in with.
+  assert.equal(plausibleUsername('ben'), true);
+  assert.equal(plausibleUsername('ben@ropple.net'), true);
+  assert.equal(plausibleUsername('user2'), true);
+  assert.equal(plausibleUsername('+44 1234 567890'), true); // phone logins carry punctuation
 });
 
 test('a search box is not mistaken for a username', () => {

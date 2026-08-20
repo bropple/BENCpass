@@ -643,7 +643,34 @@ $('kit-ack').addEventListener('change', () => {
 
 $('kit-done').addEventListener('click', () => sheetDone?.());
 
-$('kit-print').addEventListener('click', () => window.print());
+/**
+ * Print, except where printing silently cannot happen.
+ *
+ * window.print() from a sidebar panel does nothing at all — no dialog, no
+ * error, confirmed from real use — and this button is the recommended path for
+ * a code that is shown once and stored nowhere. A person who presses Print,
+ * sees nothing, and closes the sheet has lost the code. So the one context
+ * where the call is a no-op says so instead, and points at the two things that
+ * do work right here: the code is on screen, and Copy is beside this button.
+ *
+ * "Am I a sidebar" is asked as "do I have a tab": tabs.getCurrent() resolves
+ * to one in a tab and to undefined in the sidebar, which is exactly the line
+ * printing works along. In a tab the call is the browser's own print dialog
+ * and needs no help. Outside the extension (the preview tool) there is no
+ * tabs API and printing works, so no answer means print.
+ */
+$('kit-print').addEventListener('click', async () => {
+  const inSidebar = await (globalThis.browser?.tabs?.getCurrent
+    ? browser.tabs.getCurrent().then((tab) => !tab, () => false)
+    : Promise.resolve(false));
+  if (inSidebar) {
+    $('kit-status').textContent =
+      'The sidebar cannot open a print dialog — nothing was printed. ' +
+      'Write the code down, or press Copy and paste it somewhere permanent.';
+    return;
+  }
+  window.print();
+});
 
 $('kit-copy').addEventListener('click', async () => {
   try {
@@ -1736,14 +1763,19 @@ $('s-pwchange-form').addEventListener('submit', async (e) => {
 // /v1/health is unauthenticated on purpose, so this works before a device is
 // enrolled — which is precisely when the address is most likely wrong.
 
+// `which` is the input's element id. The same machinery serves three boxes:
+// the two in Settings → Sync, and the server box on the join gate — where the
+// check matters most, because a wrong address there is otherwise discovered
+// after the master password and a thirty-minute enrolment code have been
+// spent on it. The status span is `${which}-status`, the button `${which}-test`.
 function endpointStatus(which, text, kind = '') {
-  const el = $(`s-${which}-status`);
+  const el = $(`${which}-status`);
   el.textContent = text;
   el.className = `settings-note ${kind}`.trim();
 }
 
 async function testEndpoint(which) {
-  const raw = $(`s-${which}`).value.trim().replace(/\/+$/, '');
+  const raw = $(which).value.trim().replace(/\/+$/, '');
 
   // An empty box is not a failed test, it is no test. Saying "could not reach"
   // about an address nobody has entered is a wrong answer to a question that
@@ -1765,7 +1797,7 @@ async function testEndpoint(which) {
     return;
   }
 
-  const btn = $(`s-${which}-test`);
+  const btn = $(`${which}-test`);
   btn.disabled = true;
   endpointStatus(which, 'Trying…');
 
@@ -1821,10 +1853,10 @@ async function testEndpoint(which) {
   }
 }
 
-for (const which of ['endpoint', 'fallback']) {
-  $(`s-${which}-test`).addEventListener('click', () => testEndpoint(which));
+for (const which of ['s-endpoint', 's-fallback', 'gate-server']) {
+  $(`${which}-test`).addEventListener('click', () => testEndpoint(which));
   // Editing invalidates whatever the last answer was about.
-  $(`s-${which}`).addEventListener('input', () => endpointStatus(which, ''));
+  $(which).addEventListener('input', () => endpointStatus(which, ''));
 }
 
 // ---- import and export -------------------------------------------------------
@@ -1959,31 +1991,39 @@ $('s-import-file').addEventListener('change', async (e) => {
     return;
   }
 
-  // Added rather than merged, and never overwriting: a duplicate is a nuisance
-  // somebody can delete, and a silently replaced password is one they cannot
-  // get back. Deciding which of two entries is the better one is not a decision
-  // to make on their behalf at three hundred records a second.
-  let added = 0;
+  // Merged rather than blindly added. importRecords matches each row against
+  // what is already here the way a capture would (registrable domain plus
+  // username) — an identical row is skipped, a newer password updates the
+  // existing entry in place with the old one kept in its history, and only
+  // genuinely new rows become new records. Always adding was how importing the
+  // same export on two machines doubled every login on both: sync treats fresh
+  // ids as unrelated records, so both copies propagated everywhere and nothing
+  // ever called it a conflict. Timestamps ride along too — the vault clamps
+  // the implausible ones — because "which copy is newest" is answered from
+  // them, and re-stamping everything with today destroyed the answer.
+  let result;
   try {
-    for (const r of records) {
-      // History stays. It is the safety net applyPatch keeps — the old
-      // passwords a bad rotation is recovered from — and dropping it here
-      // meant the one file people restore from was the one place it did not
-      // survive. The timestamps are still re-stamped; see toJson's note.
-      const { type, created, updated, lastUsed, timesUsed, passwordChanged, ...fields } = r;
-      await state.vault.add({ ...fields, type });
-      added++;
-    }
+    result = await state.vault.importRecords(records);
     await persist();
   } catch (err) {
     await persist();
-    transferStatus(`Added ${added} before failing: ${err?.message ?? err}`, 'bad');
+    transferStatus(`The import failed partway: ${err?.message ?? err}. Whatever was read before the failure was kept.`, 'bad');
     render();
     return;
   }
 
   render();
-  transferStatus(`Added ${added} ${added === 1 ? 'entry' : 'entries'}. Nothing was replaced.`, 'good');
+  const bits = [];
+  const { added, merged, unchanged, stale } = result;
+  if (added.length) bits.push(`added ${added.length}`);
+  if (merged.length)
+    bits.push(
+      `updated ${merged.length} from the file (each entry's old password is kept in its history)`,
+    );
+  if (unchanged) bits.push(`${unchanged} already in the vault`);
+  if (stale) bits.push(`left ${stale} alone — the vault's copy is newer than the file's`);
+  const summary = bits.length ? bits.join(', ') : 'nothing to import';
+  transferStatus(summary[0].toUpperCase() + summary.slice(1) + '.', 'good');
 });
 
 function say(msg) {
@@ -2047,6 +2087,8 @@ async function loadSettings() {
     $('s-rebuilt').hidden = s.syncProblem.reason !== 'rollback';
   }
 
+  renderNeverSites(s.neverSites ?? []);
+
   const about = $('s-about');
   about.replaceChildren();
   for (const [k, v] of [
@@ -2062,6 +2104,39 @@ async function loadSettings() {
     const dd = document.createElement('dd');
     dd.textContent = v;
     about.append(dt, dd);
+  }
+}
+
+/**
+ * The sites the save toast's "Never for this site" has silenced.
+ *
+ * Each row is the site and a Remove — removing is the only edit, because the
+ * only way ON to the list is the button on a real offer, which keeps the list
+ * meaning "sites where I refused a real prompt" rather than filling up with
+ * guesses. The whole list is sent back on a change; the background reduces
+ * each entry to a registrable domain, so what is shown after the round trip
+ * is what is actually matched. This is a per-machine preference and does not
+ * sync — the note says so, because everything else here quietly does.
+ */
+function renderNeverSites(sites) {
+  $('s-never-note').textContent = sites.length
+    ? 'Saving is not offered on these sites. This list stays on this machine — it does not sync.'
+    : 'Nothing silenced. "Never for this site" on the save prompt adds a site here.';
+  const ul = $('s-never-list');
+  ul.replaceChildren();
+  for (const site of sites) {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = site;
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'btn btn-sm';
+    rm.textContent = 'Remove';
+    rm.addEventListener('click', () =>
+      saveSetting({ neverSites: sites.filter((x) => x !== site) }),
+    );
+    li.append(name, rm);
+    ul.append(li);
   }
 }
 

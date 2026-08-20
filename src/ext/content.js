@@ -612,8 +612,10 @@
     frame.id = TOAST_ID;
     frame.setAttribute(MARK, 'toast');
     frame.src = browser.runtime.getURL('ext/toast.html');
-    // An address needs room for the name box; a login does not.
-    const height = kind === 'address' ? 148 : 104;
+    // An address needs room for the name box; a login does not. Both carry a
+    // second row of actions now — "Never for this site" does not fit beside
+    // Save and Not now in 330px, and it wraps rather than truncates.
+    const height = kind === 'address' ? 176 : 132;
     frame.style.cssText =
       `all: initial; position: fixed; right: 16px; bottom: 16px; width: 330px;` +
       `height: ${height}px; z-index: 2147483647; border: 1px solid #1e2c3d;` +

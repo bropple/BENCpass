@@ -36,9 +36,15 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
               border: 1px solid var(--border); border-radius: 2px; padding: 4px 6px; }
 .name input:focus { outline: none; border-color: var(--accent); }
 
-.actions { margin-top: auto; display: flex; gap: 6px; }
+/* Wraps: "Never for this site" will not fit beside the other two in 330px,
+   and truncating it would hide the one word that says what it does. */
+.actions { margin-top: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 .btn { background: none; border: 1px solid var(--border); border-radius: 2px;
        color: inherit; font: inherit; padding: 3px 10px; cursor: pointer; }
 .btn:hover, .btn:focus { border-color: var(--accent); outline: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #06101c; }
 .btn.primary:hover, .btn.primary:focus { filter: brightness(1.12); }
+/* Quieter than Save and Not now: a standing decision, not the common answer. */
+.btn.quiet { border-color: transparent; color: var(--dim); padding-left: 0; }
+.btn.quiet:hover, .btn.quiet:focus { color: var(--text); border-color: transparent;
+                                     text-decoration: underline; }

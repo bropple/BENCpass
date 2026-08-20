@@ -113,6 +113,27 @@ export async function enrol({ rpId = RP_ID, name = 'BENCpass' } = {}) {
         { type: 'public-key', alg: -257 }, // RS256
       ],
       authenticatorSelection: {
+        // Platform only, which on Linux Firefox means the feature is simply
+        // absent — there is no platform authenticator there. Roaming
+        // authenticators (a plugged-in FIDO2 key) are DELIBERATELY out of
+        // scope, decided 2026-08, for three reasons worth keeping:
+        //
+        //  1. Availability cannot be probed without raising a prompt, so the
+        //     interface would have to offer an unlock it cannot promise — a
+        //     button that fails on every machine without a key plugged in,
+        //     which is most of them, forever.
+        //  2. Everything in this file was measured before it was shipped
+        //     (tools/webauthn-probe.sh, tools/rpid-probe.sh), and PRF over a
+        //     hardware key on Firefox's Linux CTAP2 stack has not been — no
+        //     key on hand. Shipping it unmeasured is how a vault claims a
+        //     second key it does not have.
+        //  3. Nothing is lost that the design does not already cover: the
+        //     master password works everywhere, and the recovery code is the
+        //     way back. This wrapping is a convenience, not a capability.
+        //
+        // If this is ever revisited: the code change is this line plus the
+        // availability gate in available() plus the settings copy — but
+        // measure first, with a real key, by extending the probe.
         authenticatorAttachment: 'platform',
         userVerification: 'required',
         // On a Mac the platform authenticator behind this is iCloud Keychain,

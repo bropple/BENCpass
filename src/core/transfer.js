@@ -48,11 +48,12 @@ export const MAX_URLS = 64; // sites on one login
  * and it silently drops everything a spreadsheet has no column for.
  *
  * "No loss" would be too strong in one direction: importing this back builds
- * each record from the known field set, so custom fields and the timestamps —
- * created, updated, passwordChanged, and the use counts — are re-stamped at
- * import time rather than restored. That is deliberate, and it is why a record
- * arriving from a file cannot bring its own shape with it; but it means a
- * restore from JSON loses password ages, not that the export omits them.
+ * each record from the known field set, so a custom field the file grew some
+ * other way does not survive — a record arriving from a file cannot bring its
+ * own shape with it. The timestamps and use counts DO survive now (see
+ * carryTimes): re-stamping them at import re-dated every restored record to
+ * today, which flattened password ages and made "which copy is newest"
+ * unanswerable from the one file meant to answer it.
  *
  * Password history goes out with everything else. It used to be stripped as
  * "bookkeeping", which quietly cut the safety net out of the safety copy: the
@@ -164,6 +165,7 @@ function recordFrom(raw, now = Date.now()) {
       fields[key] = str(raw[key]);
     }
     const rec = newRecord(fields, now);
+    carryTimes(rec, raw);
     return emptyAddress(rec) ? null : rec;
   }
 
@@ -189,10 +191,31 @@ function recordFrom(raw, now = Date.now()) {
     },
     now,
   );
+  carryTimes(rec, raw);
+  if (Number.isFinite(raw.passwordChanged) && raw.passwordChanged > 0) {
+    rec.passwordChanged = raw.passwordChanged;
+  }
   return empty(rec) ? null : rec;
 }
 
 const str = (v) => (typeof v === 'string' ? v.slice(0, MAX_FIELD) : '');
+
+/**
+ * The timestamps a record arrived with, kept.
+ *
+ * newRecord stamps its own clock, which for a record being *made* is right and
+ * for one being *restored* re-dates every entry to today — flattening the one
+ * piece of evidence that says which copy is newest. Only finite positive
+ * numbers survive; everything else means the file said nothing, and newRecord's
+ * stamp stands. Nothing here is trusted with sorting: normalise clamps the
+ * future-dated ones on the way into the vault, as it always has.
+ */
+function carryTimes(rec, raw) {
+  for (const k of ['created', 'updated', 'lastUsed']) {
+    if (Number.isFinite(raw[k]) && raw[k] > 0) rec[k] = raw[k];
+  }
+  if (Number.isFinite(raw.timesUsed) && raw.timesUsed > 0) rec.timesUsed = raw.timesUsed;
+}
 
 /**
  * Old passwords from a file, built entry by entry like everything else here.
@@ -260,7 +283,30 @@ const ALIASES = {
   password: ['password', 'login_password', 'pass'],
   notes: ['notes', 'note', 'comments', 'comment'],
   totp: ['totp', 'login_totp', 'otpauth', 'otp'],
+  // Firefox's export carries these three, and they are evidence, not
+  // decoration: "which copy is the newest" is the question this program exists
+  // to answer, and an import that re-stamps everything with today flattens the
+  // only record of it. Chrome and Bitwarden carry none, so these simply miss.
+  timeCreated: ['timecreated', 'time created', 'created', 'creation time'],
+  timeLastUsed: ['timelastused', 'time last used', 'last used'],
+  timePasswordChanged: ['timepasswordchanged', 'time password changed', 'password changed'],
 };
+
+/**
+ * An epoch timestamp out of a CSV cell, in milliseconds.
+ *
+ * Firefox writes milliseconds. A file that carries seconds instead (some tools
+ * do) would land every record in January 1970 and win every "oldest password"
+ * audit forever, so anything below 1e11 — a millisecond value would mean 1973,
+ * before any of these files existed — is read as seconds. Garbage returns
+ * null, and null means "the file said nothing": newRecord's own stamp stands.
+ */
+function epochMs(cell) {
+  if (!cell) return null;
+  const n = Number(cell);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 1e11 ? n * 1000 : n;
+}
 
 /**
  * Read a CSV export from somewhere else.
@@ -309,6 +355,22 @@ export function fromCsv(text, now = Date.now()) {
       },
       now,
     );
+
+    // Set after newRecord, which stamps its own clock over anything passed in.
+    // These are claims from a file, not facts — a machine that never ran NTP
+    // exports its confusion — so nothing here is trusted with sorting yet:
+    // normalise clamps the future-dated ones at import, where it always has.
+    const created = epochMs(cell(at.timeCreated));
+    const lastUsed = epochMs(cell(at.timeLastUsed));
+    const pwChanged = epochMs(cell(at.timePasswordChanged));
+    if (created) rec.created = created;
+    if (lastUsed) rec.lastUsed = lastUsed;
+    if (pwChanged) rec.passwordChanged = pwChanged;
+    // The nearest thing the file has to "last written". Without it the record
+    // would claim to have been updated at import time, which is the flattening
+    // this whole block exists to stop.
+    if (created || pwChanged) rec.updated = Math.max(created ?? 0, pwChanged ?? 0);
+
     if (!empty(rec)) out.push(rec);
   }
   if (!out.length) throw new TransferError('No entries in that file.', 'empty');

@@ -16,8 +16,10 @@ import {
   hostOf,
   isPrivateHost,
   captureTarget,
+  registrableDomain,
+  normaliseHost,
 } from '../core/match.js';
-import { classifyGroups } from '../core/fields.js';
+import { classifyGroups, plausibleUsername } from '../core/fields.js';
 import {
   ADDRESS_TOKENS,
   valuesForTokens,
@@ -63,6 +65,14 @@ let settings = {
   // what a joining machine starts its rollback defence from. 0 means the code
   // carried none (the server's own bootstrap code, or an older build's).
   enrolFloor: 0,
+  // Sites whose submits are never offered for saving — registrable domains
+  // (or bare hosts/IPs where no domain exists), added from the toast's "Never
+  // for this site" and edited in Settings → Filling. Kept beside the settings
+  // rather than in the vault on purpose: it is a preference about a site, not
+  // a secret, and a vault entry would sync a personal "stop asking" to every
+  // machine whether or not it was wanted there. The cost is re-declaring it
+  // per machine, which is the cheaper mistake to correct.
+  neverSites: [],
 };
 let syncState = loadSyncState(null);
 let autolockTimer = null;
@@ -357,6 +367,8 @@ function dispatch(msg, sender) {
       return handleSave(msg, sender);
     case MSG.DISCARD:
       return handleDiscard(msg, sender);
+    case MSG.NEVER:
+      return handleNever(msg, sender);
     case MSG.CLOSE:
       return handleClose(msg, sender);
     case MSG.OPEN_MANAGER:
@@ -819,6 +831,40 @@ async function handleDiscard(msg, sender) {
   return { ok: true };
 }
 
+/**
+ * "Never for this site": discard the offer and stop making them for its site.
+ *
+ * The site is taken from the pending capture the background itself recorded,
+ * never from the message — the toast is web-accessible, so what it may do is
+ * gated the same way its Save is (pendingFor checks the notice id), and what
+ * it says is limited to naming an offer that really exists. The list lands in
+ * settings, not the vault: see the neverSites note at the top.
+ *
+ * The answer names the site so the toast can say exactly what was silenced —
+ * a person on login.example.com has just silenced example.com entire, and
+ * finding that out later, from the site's sign-in form failing to prompt,
+ * would read as breakage.
+ */
+async function handleNever(msg, sender) {
+  // Extension pages only, like SAVE: this writes a durable preference, and a
+  // content script sharing a DOM with a hostile page must not be able to
+  // silence the site it sits on. (The toast qualifies — it is our document —
+  // and pendingFor still demands its notice id.)
+  if (!isExtensionPage(sender)) return { ok: false };
+  const { tabId, pending } = await pendingFor(msg, sender);
+  if (tabId === undefined || !pending) return { ok: false };
+
+  const site = siteKey(pending.host);
+  if (site && !(settings.neverSites ?? []).includes(site)) {
+    settings.neverSites = [...(settings.neverSites ?? []), site];
+    await persistSettings();
+  }
+  pendingCaptures.delete(tabId);
+  clearCaptureNotice(tabId);
+  paintBadge();
+  return { ok: true, site };
+}
+
 /** The address tokens a page claims to have fields for, kept honest. */
 const sanitizeTokens = (raw) => {
   if (!Array.isArray(raw)) return [];
@@ -865,6 +911,16 @@ async function handleGenerate(msg, sender) {
 }
 
 /**
+ * The unit "never for this site" works in: the registrable domain, the same
+ * unit every match decision uses — silencing login.example.com and being asked
+ * again by www.example.com would read as the button not working. An IP is its
+ * own site, and a host that IS a public suffix falls back to itself.
+ */
+const siteKey = (host) => registrableDomain(host) ?? normaliseHost(host);
+
+const neverForSite = (host) => (settings.neverSites ?? []).includes(siteKey(host));
+
+/**
  * Credentials the user submitted, offered for saving.
  *
  * The password here came from the page — the user typed it — so receiving it
@@ -876,7 +932,13 @@ async function handleCapture(msg, sender) {
   const origin = originOf(sender);
   if (!origin.frameHost || origin.tabId === null) return { ok: false };
 
-  if (msg.kind === 'address') return captureAddress(msg, origin);
+  if (msg.kind === 'address') {
+    // "Never for this site" silences the whole toast for the site, addresses
+    // included: the person who silenced their NAS's admin pages meant the
+    // asking, not one kind of it.
+    if (neverForSite(origin.frameHost)) return { ok: false };
+    return captureAddress(msg, origin);
+  }
 
   const username = asString(msg.username, 256);
   const password = asString(msg.password, 1024);
@@ -915,13 +977,35 @@ async function handleCapture(msg, sender) {
       paintBadge();
       return { ok: true, merged: true };
     }
-    await completeGenerated(vault, provisional, username);
+    // Not without a look at the username first: on a page like the one below,
+    // the field the classifier picked can hold a port number, and completing
+    // the record with "14" is worse than leaving it provisional — the entry
+    // stays visible either way, but only one of them carries rubbish forward.
+    await completeGenerated(vault, provisional, plausibleUsername(username) ? username : '');
     await persistVault();
     pendingCaptures.delete(origin.tabId);
     clearCaptureNotice(origin.tabId);
     paintBadge();
     return { ok: true };
   }
+
+  // A username that cannot be one — bare digits, seen offered as "Save 14 for
+  // 10.0.0.214?" on the TrueNAS SCALE UI, where numeric settings share a form
+  // with password boxes. No offer is made: an offer with obvious rubbish in it
+  // teaches people to dismiss the toast unread, which costs more than the rare
+  // all-digit account id it declines to capture (see plausibleUsername).
+  // Deliberately below the provisional branch — a password from our own
+  // generator is already saved, and the completion above must keep running.
+  if (!plausibleUsername(username)) return { ok: false };
+
+  // A site the person told us to stop asking about. Placed below the
+  // provisional branch, and that placement is the safety property: a GENERATED
+  // password was saved the moment it existed (keepGenerated) and its record
+  // was just completed above, so this block only ever declines to offer a
+  // password typed by hand — which is still in the person's head and on the
+  // page. A preference set weeks ago must never be what loses a password
+  // that exists nowhere else.
+  if (neverForSite(origin.frameHost)) return { ok: false };
 
   // Updating in place is only offered for an entry that belongs to this site
   // and no other.
@@ -1338,6 +1422,9 @@ async function handleSettingsGet() {
     lastSyncVia,
     autolockMinutes: Math.round((settings.autolockMs || AUTOLOCK_MS) / 60000),
     allowInsecure: Boolean(settings.allowInsecure),
+    // Visible and editable in Settings, because "never" gets pressed in a
+    // hurry and a decision that cannot be found cannot be undone.
+    neverSites: [...(settings.neverSites ?? [])],
     // Enough to say "this machine is enrolled with the server" and no more.
     deviceId: settings.deviceId,
     enrolled: Boolean(settings.deviceId && settings.deviceKey),
@@ -1395,6 +1482,26 @@ async function handleSettingsSet(msg) {
   }
 
   if (msg.allowInsecure !== undefined) patch.allowInsecure = Boolean(msg.allowInsecure);
+
+  // The whole list at once, because the manager's only edit is removal and a
+  // remove-by-value message would race two open manager pages. Each entry is
+  // reduced to the same key handleNever stores (a registrable domain, or the
+  // bare host where none exists — an IP, a single-label intranet name), so a
+  // pasted "https://www.example.com/" blocks what the button would have
+  // blocked. Only entries that cannot name a host at all are dropped. Capped
+  // like every other list a page can hand the background.
+  if (Array.isArray(msg.neverSites)) {
+    const clean = [];
+    for (const raw of msg.neverSites.slice(0, 500)) {
+      const s = asString(raw, 253);
+      const host = hostOf(s) || normaliseHost(s);
+      // Host characters only. A row that could never equal a real hostname is
+      // not a preference, it is clutter that can never match anything.
+      const site = /^[a-z0-9.:[\]-]+$/.test(host) ? siteKey(host) : '';
+      if (site && !clean.includes(site)) clean.push(site);
+    }
+    patch.neverSites = clean;
+  }
 
   // What the server hands out, in either of the two shapes a person can have.
   //

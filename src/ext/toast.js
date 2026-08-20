@@ -87,6 +87,7 @@ $('save').addEventListener('click', async () => {
   say(reply?.ok ? (reply.merged ? 'Updated.' : 'Saved.') : 'Could not save.');
   $('name-row').hidden = true;
   $('save').hidden = true;
+  $('never').hidden = true;
   $('dismiss').textContent = 'Close';
   setTimeout(close, 1400);
 });
@@ -94,6 +95,24 @@ $('save').addEventListener('click', async () => {
 $('dismiss').addEventListener('click', async () => {
   await browser.runtime.sendMessage({ type: MSG.DISCARD, noticeId });
   close();
+});
+
+$('never').addEventListener('click', async () => {
+  const reply = await browser.runtime.sendMessage({ type: MSG.NEVER, noticeId });
+  // Say what actually happened before going: the person may be on a subdomain
+  // of the site they just silenced, and this is the one moment to say which
+  // site that was and that it can be undone. A silent close here would make
+  // the next unprompted sign-in on this site read as breakage.
+  say(
+    reply?.ok
+      ? `BENCpass will stop offering to save for ${reply.site || 'this site'}. Undo under the gear in Settings → Filling.`
+      : 'Could not do that.',
+  );
+  $('name-row').hidden = true;
+  $('save').hidden = true;
+  $('never').hidden = true;
+  $('dismiss').textContent = 'Close';
+  setTimeout(close, 3500);
 });
 
 // Escape closes it, the way any dismissible thing should.

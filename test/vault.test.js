@@ -188,7 +188,9 @@ test('a tombstoned record stays absent across a reload', async () => {
 
 test('import normalises timestamps and clamps ones from the future', async () => {
   const v = await mk();
-  const [ok, future, bare] = await v.importRecords(
+  const {
+    added: [ok, future, bare],
+  } = await v.importRecords(
     [
       { title: 'sane', password: 'a', created: T0, passwordChanged: T0 + DAY },
       { title: 'bad clock', password: 'b', created: T0 + 900 * DAY },
@@ -207,6 +209,118 @@ test('import normalises timestamps and clamps ones from the future', async () =>
   assert.equal(v.get(bare).created, T0 + 10 * DAY);
   assert.equal(v.get(bare).timesUsed, 0);
   assert.deepEqual(v.get(bare).urls, []);
+});
+
+test('importing the same file twice adds nothing the second time', async () => {
+  // The real failure this pins: the same Firefox export imported on two
+  // machines minted fresh ids on each, sync saw four unrelated records, and
+  // every login ended up twice everywhere with no conflict ever raised.
+  const v = await mk();
+  const rows = [
+    { title: 'Example', username: 'ben', password: 'p1', urls: ['https://example.com'] },
+    { title: 'no site', username: 'ben', password: 'p2' },
+    { type: 'address', title: 'Home', 'address-line1': '1 Test Street', 'postal-code': 'SW1' },
+  ];
+
+  const first = await v.importRecords(structuredClone(rows));
+  assert.equal(first.added.length, 3);
+
+  const again = await v.importRecords(structuredClone(rows));
+  assert.equal(again.added.length, 0, 'a re-import minted duplicates');
+  assert.equal(again.merged.length, 0);
+  assert.equal(again.unchanged, 3);
+  assert.equal(v.list().length, 3);
+});
+
+test('an import merges a newer password into the existing entry, not a duplicate beside it', async () => {
+  const v = await mk();
+  const id = await v.add(
+    { title: 'Example', username: 'ben', password: 'old', urls: ['https://example.com'] },
+    T0,
+  );
+
+  // The same account, exported from a machine that rotated the password later.
+  // Matching is on registrable domain, so a different subdomain still finds it.
+  const r = await v.importRecords(
+    [
+      {
+        title: 'example.com',
+        username: 'ben',
+        password: 'rotated',
+        urls: ['https://login.example.com'],
+        passwordChanged: T0 + DAY,
+      },
+    ],
+    T0 + 2 * DAY,
+  );
+
+  assert.deepEqual(r.merged, [id]);
+  assert.equal(r.added.length, 0);
+  assert.equal(v.list().length, 1, 'a duplicate stood up beside the entry');
+
+  const rec = v.get(id);
+  assert.equal(rec.password, 'rotated');
+  // The file's own date, not the import's — this is the evidence "which copy
+  // is newest" gets answered from.
+  assert.equal(rec.passwordChanged, T0 + DAY);
+  // The displaced password lands in history exactly as a capture's would.
+  assert.equal(rec.history[0].password, 'old');
+});
+
+test('an import never rolls a rotated password back', async () => {
+  const v = await mk();
+  const id = await v.add(
+    { title: 'Example', username: 'ben', password: 'current', urls: ['https://example.com'] },
+    T0 + DAY,
+  );
+
+  // A stale export: taken before the rotation, imported after it.
+  const r = await v.importRecords(
+    [
+      {
+        title: 'Example',
+        username: 'ben',
+        password: 'pre-rotation',
+        urls: ['https://example.com'],
+        passwordChanged: T0,
+      },
+    ],
+    T0 + 2 * DAY,
+  );
+
+  assert.equal(r.stale, 1);
+  assert.equal(r.merged.length, 0);
+  assert.equal(r.added.length, 0);
+  assert.equal(v.get(id).password, 'current', 'a stale import rolled the password back');
+});
+
+test('an import will not write into an entry that names other sites', async () => {
+  // The same refusal capture makes, for the same reason: an entry matching on
+  // any of its addresses means writing here fills the imported password THERE
+  // too. The row is added beside it instead — a duplicate costs tidying, a
+  // password offered on the wrong site costs more.
+  const v = await mk();
+  const id = await v.add({
+    title: 'Both',
+    username: 'ben',
+    password: 'shared',
+    urls: ['https://example.com', 'https://other.example.net'],
+  });
+
+  const r = await v.importRecords([
+    {
+      title: 'Example',
+      username: 'ben',
+      password: 'different',
+      urls: ['https://example.com'],
+      passwordChanged: Date.now() + 1,
+    },
+  ]);
+
+  assert.equal(r.merged.length, 0);
+  assert.equal(r.added.length, 1);
+  assert.equal(v.get(id).password, 'shared', 'the wider entry was written into');
+  assert.equal(v.list().length, 2);
 });
 
 test('export returns everything import took', async () => {

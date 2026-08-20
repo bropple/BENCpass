@@ -10,107 +10,28 @@ limits.
 
 ---
 
-## Import adds; it never merges
+## Biometrics on Linux: roaming authenticators are out of scope
 
-`Vault.importRecords` (src/core/vault.js) mints a fresh uuid for every row and
-writes it as a new record. It never looks at what is already in the vault.
+Decided 2026-08, recorded in full beside the pin it concerns
+(`authenticatorSelection` in src/ext/webauthn.js). The short form: availability
+of a plugged-in FIDO2 key cannot be probed without prompting, so the interface
+would have to offer an unlock it cannot promise; PRF over a hardware key on
+Firefox's Linux CTAP2 stack has never been measured here, and everything in
+that file was measured before it shipped; and nothing is lost that the design
+does not cover — the master password works everywhere and the recovery code is
+the way back. Revisit only with a real key in hand, by extending
+tools/webauthn-probe.sh first.
 
-So importing the same Firefox export on two machines produces two independent
-records per login, with different ids — and sync treats different ids as
-different records, so both propagate to both machines. Every login ends up
-twice, and no conflict is raised, because from the vault's point of view nothing
-conflicted. The workaround today is to import once, on one machine, and let sync
-carry the rest; nothing in the interface says so.
+## Print on the recovery sheet: the tab path is assumed, not hand-verified
 
-**Done looks like:** an import that offers to merge a row into an existing entry
-matched on registrable domain and username, rather than always adding. Reuse
-`captureTarget`/`belongsOnlyTo` in src/core/match.js — the capture path already
-solves exactly this problem and refuses to overwrite an entry that names other
-sites. Duplicates should be the user's decision, not the default.
-
-## Import throws away the timestamps the file carried
-
-`fromCsv`/`fromJson` (src/core/transfer.js) build every record through
-`newRecord`, which stamps `created`, `updated` and `passwordChanged` with the
-import time. Firefox's CSV carries `timeCreated`, `timeLastUsed` and
-`timePasswordChanged`, and all three are dropped on the floor.
-
-That is worse than untidy. "Which copy is the newest" is the question this
-program exists to answer, and importing flattens the only evidence: two records
-imported from different machines both claim to have been changed today.
-
-**Done looks like:** parse the timestamp columns where the source has them, and
-let a record arrive with a past `passwordChanged`. `normalise` in
-src/core/model.js already clamps implausible timestamps, so the guard is
-written; it is the parser that never supplies them. Note the JSON path is
-partly here already — history now survives a round trip — so this is mostly CSV.
-
-## Biometrics on Linux: platform-only, by pin
-
-`src/ext/webauthn.js:116` pins `authenticatorAttachment: 'platform'`, and
-`available()` gates on `isUserVerifyingPlatformAuthenticatorAvailable()`.
-Firefox on Linux has no platform authenticator, so the feature is simply absent
-there. The copy was corrected to stop promising security keys; the capability
-was not added.
-
-**Done looks like:** either roaming authenticators (a plugged-in FIDO2 key) are
-supported and the copy says so again, or a decision is recorded here that they
-are deliberately out of scope. Note the awkward part: availability cannot be
-probed without prompting, so the interface has to offer something it may not be
-able to deliver.
-
-## Print on the recovery sheet does nothing
-
-Reported from real use. The button is wired — `$('kit-print')` calls
-`window.print()` (src/ui/manager.js:613) — and there is a `@media print` block
-in src/ui/style.css that strips the page to the code and its date. So this is
-not a missing handler.
-
-**Confirmed: it was pressed in the sidebar.** The manager runs both as a tab and
-in the sidebar, and `window.print()` from a sidebar panel does nothing at all —
-no dialog, no error. Whether it also fails in a tab is not known; that is the
-first thing to check, because it decides whether this is "make the sidebar do
-something else" or "the call is wrong everywhere".
-
-Worth taking seriously despite being one button: the recovery code is shown
-once and never stored, and printing it is the path the interface recommends. A
-person who presses Print, sees nothing happen, and closes the sheet has lost
-the code.
-
-**Done looks like:** check the tab case, then either make it work in the sidebar
-or say so there and offer something that does —
-opening the sheet in a tab for printing, or a copy-to-clipboard beside it.
-Whatever it becomes, pressing it must visibly do something, because the failure
-mode is silent and the cost is the whole recovery path.
-
-**Workaround meanwhile:** the code is on screen — write it down, or open the
-manager in a tab and use the browser's own print.
-
-## No way to tell the save prompt "never for this site"
-
-The toast offers Save and Dismiss. Dismiss is for this once — the next sign-in
-on the same site asks again. There is no way to say "stop asking about this
-one", which every other password manager has, and which matters most on the
-sites you sign into constantly and will never want stored: a bank that you
-deliberately keep out of a vault, a shared account, a throwaway login, a local
-development site that generates a new username every run.
-
-**Done looks like:** a third choice on the toast that adds the site to a list,
-and a visible, editable list of those sites in Settings so a decision made in a
-hurry can be undone. Store it beside the settings rather than in the vault: it
-is a preference about a site, not a secret, and keeping it out of the vault
-means it does not sync a personal choice to every machine unless that is
-deliberately wanted — decide which, and say why in the code.
-
-**The interaction to be careful about.** Generating a password now saves it
-immediately, before it reaches the page, precisely so it cannot be lost
-(src/core/provisional.js). "Never for this site" must not silently discard a
-password the person just generated and used — that would recreate the exact
-failure the provisional entry was built to prevent. Either the block applies
-only to captures of passwords typed by hand, or generating on a blocked site
-warns plainly that it will not be kept. The first is probably right; the second
-is at least honest. What must not happen is a generated password vanishing
-because of a preference set weeks earlier.
+The sidebar case is fixed: `window.print()` from a sidebar panel does nothing
+at all, so the button there now says so and points at Copy and the code on
+screen instead of failing silently (src/ui/manager.js, the kit-print handler —
+"do I have a tab" is the test, via `tabs.getCurrent()`). In a tab the call is
+the browser's own print dialog and the `@media print` block strips the page to
+the code; that is standard behaviour and there is no reason to expect it
+broken, but nobody has pressed it in a real tab since the change. Next time a
+recovery sheet is on screen in a tab, press Print once and delete this entry.
 
 ## Format 2 is load-bearing now, and there is no migration path
 
@@ -160,65 +81,42 @@ lost — is closed: `bencpass-rescue -devices` / `-forget` removes dead devices
 from a server store offline, backup first, so the server prints a fresh
 bootstrap code again.)
 
-## No Test button on the join gate
+## tools/testpage still lacks the appliance-settings shape
 
-The endpoint **Test** lives in Settings → Sync, which needs an unlocked vault.
-A machine that is joining has no vault yet, so the one moment a person most
-wants to check the address — typing it for the first time, on a second machine,
-with a code that expires in thirty minutes — is the moment they cannot.
+The "Save 14 for 10.0.0.214?" capture is fixed — bare-digit usernames are
+refused at capture time (`plausibleUsername` in src/core/fields.js, applied in
+background.js's handleCapture), and the observed shape is pinned in
+test/fields.test.js and test/background.test.js, including the interaction
+with generated passwords. What remains is the live-browser half: a
+"dynamically rendered form with numeric settings beside a password field" case
+in tools/testpage, which describes most appliance and self-hosting UIs and is
+worth having the selftest drive for real. It was not added because tools/ was
+owned by other work at the time; add the case and a selftest check that no
+save offer appears for it.
+## Observed, not yet diagnosed
 
-Get it wrong and the failure arrives after the master password and the code have
-been entered, as a join error rather than "that address is not answering". The
-code may also have been spent by then, which turns a typo into a trip back to
-the first machine to mint another.
+Field reports from real use that are not actionable yet: no reproduction, no
+established cause, and sometimes no certainty there is a bug at all. They sit
+apart from the list above so that list stays honest about its own size.
+Anything here needs a diagnosis before it needs a fix.
 
-**Done looks like:** the same Test beside the server field on the join gate,
-doing what it does in Settings — an unauthenticated GET of `/v1/health`,
-reporting the protocol mismatch case by name. It needs no key and no vault, so
-there is nothing stopping it existing there; it simply was not built.
+**One account, two valid identifiers.** American Airlines accepts either an
+AAdvantage number or an email address to sign in — one account, two things that
+work in the username box. A record holds one `username`, so today that means
+either two records for one account or the second identifier buried in notes
+where nothing can fill it. Neither is right, and the pattern is not unique to
+AA: airlines, banks, insurers and utilities routinely accept a member or
+account number alongside an email.
 
-Worth doing at the same time: the gate's server field could say what it will and
-will not take (a LAN address, `.local`, or an https Tailscale name — not a
-Tailscale IP over plain http), which is the other thing a person only discovers
-by being refused.
+Not obviously a feature request yet, because the shape matters more than the
+storage. A second username field is easy and probably wrong — it invites "which
+one does this site want", which is the question the person came here to stop
+asking. Worth thinking about whether the menu simply offers both for the same
+entry, and what that does to matching, to capture (a sign-in with the number
+must not create a second record), and to the conflict machinery.
 
-## A numeric field was captured as a username
-
-Seen in real use (screenshots/Screenshot 2026-08-20 000752.png): the save toast
-offered *"Save 14 for 10.0.0.214?"* on a LAN device's admin page. `14` is not a
-username — something numeric on that page was classified as one, and a password
-field was matched alongside it well enough to make an offer.
-
-The capture side is more forgiving than the fill side, and deliberately: a
-missed save loses a password the person just chose, while a wrong offer costs a
-click on Not now. But an offer with obvious rubbish in it teaches people to
-dismiss the toast without reading it, and a toast nobody reads is worse than one
-that appears less often — the day it is offering something real is the day the
-habit costs them.
-
-**The page was the TrueNAS SCALE web UI**, which narrows it usefully. That is an
-Angular single-page app: forms are built at runtime, fields frequently carry no
-`autocomplete` attribute worth reading, and its app-install and service pages
-routinely put numeric settings — ports, counts, sizes — in the same form as a
-password. `14` is far more likely one of those than anything a person would
-call a username.
-
-It is also a page shape worth being able to test against, because "dynamically
-rendered form with numeric settings beside a password field" describes most
-appliance and self-hosting UIs, not just this one. tools/testpage is where that
-case belongs.
-
-**Still not known:** which specific field it was. Establishing that decides
-whether the fix belongs in the classifier or in what counts as a capturable
-pair.
-
-**Done looks like:** a capture is not offered when the username-shaped value
-cannot plausibly be one — bare digits are the clear case, and there may be
-others — while still capturing a genuinely empty username, which is legitimate
-on a second-step sign-in and already handled. Whatever rule is chosen, the
-existing tests in test/fields.test.js and tools/testpage are where it gets
-pinned; add the observed shape as a case.
-
-Related: this is the strongest argument for the "never for this site" option
-above. A LAN appliance's admin page is exactly the thing somebody wants silenced
-for good, and no classifier will ever get every such page right.
+(An earlier note here reported AA's login not autofilling. That turned out to be
+a password *reset* page — four fields, only the password anchored, which is
+correct: the name and email fields are not login fields, and the password field
+is exactly where a generated password belongs. No bug; removed rather than left
+to look like one.)
