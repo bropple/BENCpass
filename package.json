@@ -1,6 +1,6 @@
 {
   "name": "bencpass",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Self-hosted, end-to-end encrypted password manager for Firefox/Zen",
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
