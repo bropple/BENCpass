@@ -133,3 +133,38 @@ only to captures of passwords typed by hand, or generating on a blocked site
 warns plainly that it will not be kept. The first is probably right; the second
 is at least honest. What must not happen is a generated password vanishing
 because of a preference set weeks earlier.
+
+## Format 2 is load-bearing now, and there is no migration path
+
+`Vault.load` refuses any vault whose format is not the current one
+(src/core/vault.js:197). It does not migrate; it says the vault "was written by
+an older BENCpass, and its weaker sealing is refused rather than read".
+
+That was the right call when it was made. The format-1 to format-2 change
+happened while nothing was installed anywhere, so there were no vaults to strand
+and a reader that accepted both would have been a downgrade path — an attacker
+who could present an envelope claiming the older format would get the weaker
+authentication back.
+
+**That justification has expired.** There are real vaults in format 2 now, with
+real passwords in them. The next format change cannot simply refuse what came
+before: it would strand the vault it was meant to protect, and the person
+holding it would have a master password that opens nothing.
+
+**So, before any future change to the envelope or header format:** write the
+migration first, not the refusal. Read the old format, re-seal into the new one,
+persist, and only then start refusing what is genuinely older than anything that
+can exist. Test it against a real vault of the previous format — commit a
+fixture of one, since after the change there is no other way to produce it.
+
+Note what makes this awkward and why it needs thought rather than a flag: a
+reader that accepts two formats is a downgrade path for as long as it exists.
+The answer is probably to migrate on load and write only the new format, so the
+old reader exists but its output never survives a save — but that is a design
+decision to make deliberately, with the security consequence stated, rather than
+discovered halfway through an upgrade.
+
+Related, and the reason this matters today rather than eventually: updating the
+extension keeps the vault (same extension id, same `storage.local`), but
+UNINSTALLING deletes it. Anyone treating uninstall-then-install as an upgrade
+loses everything. That belongs in the README where a person will meet it.
