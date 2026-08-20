@@ -929,22 +929,18 @@ test('parked conflicts evicted by the cap are counted, and the count survives', 
 });
 
 test('a stranger\'s header does not open an empty vault', async () => {
-  // NOTE ON WHAT THIS DOES AND DOES NOT COVER.
+  // Continuity is proved by requiring the adopted key to open records this
+  // vault already holds, and on an empty vault that proved nothing: the
+  // original guard read `envelopes.size && damaged.length === envelopes.size`,
+  // and the leading term short-circuited the whole check away when there was
+  // nothing to check. A header belonging to a different vault could then be
+  // adopted whole, and the machine would carry on writing under a key its own
+  // identity never chose.
   //
-  // The fix it was written for is in #adoptPendingHeader: continuity is proved
-  // by requiring the adopted key to open records this vault already holds, and
-  // on an empty vault that proved nothing, because `envelopes.size &&`
-  // short-circuited the guard away. A header belonging to a different vault
-  // could be adopted whole.
-  //
-  // This test does NOT reach that guard — it passes with the fix reverted,
-  // which was checked. The unlock refuses earlier, on the local wrap, so the
-  // adoption path is never entered by this route. It is kept because the
-  // property it states is worth stating, and it is labelled because a test
-  // that looks like it covers a fix and does not is worse than no test at all.
-  //
-  // Reaching the guard needs an unlock where the typed password opens the
-  // PENDING wrap and not the local one. That test is not written yet.
+  // This does reach that guard. unlock tries the local wrapping first and only
+  // calls #adoptPendingHeader when it refuses — which is exactly the shape
+  // here, because the stranger's password is not this vault's. Restore the
+  // `envelopes.size &&` and this test fails.
   const mine = await Vault.create({ password: 'pw', kdf: FAST });
   const stranger = await Vault.create({ password: 'pw', kdf: FAST });
   await stranger.add({ title: 'theirs', password: 'x' });
