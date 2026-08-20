@@ -40,6 +40,13 @@ browser.tabs.onRemoved.addListener(async () => {
     byReference: read(byReference),
     builtHere: read(builtHere),
   };
+  // Plaintext to loopback, and the rule that objects is right everywhere it
+  // could matter. This is a throwaway extension driven by tools/realm-probe.sh
+  // against a collector on this machine, reporting whether an object survived
+  // its page: no secret, no network, no shipped code. TLS to 127.0.0.1 would
+  // mean minting a certificate the probe would then have to be told to trust,
+  // which is a hole to build a harness rather than a harness.
+  // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request
   await fetch('http://127.0.0.1:8736/__result', {
     method: 'POST',
     body: JSON.stringify(report),
