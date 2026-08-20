@@ -234,11 +234,21 @@ dismiss the toast without reading it, and a toast nobody reads is worse than one
 that appears less often — the day it is offering something real is the day the
 habit costs them.
 
-**What is not known:** which field produced `14`. Without the page there is no
-way to tell a numeric `<input>` next to a password box from a two-factor code
-field, a port number, or a paginator that happened to sit in the same form.
-That is the first thing to establish, because it decides whether the fix is in
-the classifier or in what counts as a capturable pair.
+**The page was the TrueNAS SCALE web UI**, which narrows it usefully. That is an
+Angular single-page app: forms are built at runtime, fields frequently carry no
+`autocomplete` attribute worth reading, and its app-install and service pages
+routinely put numeric settings — ports, counts, sizes — in the same form as a
+password. `14` is far more likely one of those than anything a person would
+call a username.
+
+It is also a page shape worth being able to test against, because "dynamically
+rendered form with numeric settings beside a password field" describes most
+appliance and self-hosting UIs, not just this one. tools/testpage is where that
+case belongs.
+
+**Still not known:** which specific field it was. Establishing that decides
+whether the fix belongs in the classifier or in what counts as a capturable
+pair.
 
 **Done looks like:** a capture is not offered when the username-shaped value
 cannot plausibly be one — bare digits are the clear case, and there may be
