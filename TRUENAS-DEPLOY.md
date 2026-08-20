@@ -340,6 +340,48 @@ knowing on the day it happens rather than after.
 
 ---
 
+## If you lose every machine but still have the server
+
+The awkward case, and it is recoverable. Your data is not the problem — the
+store holds every record and the vault header, and `bencpass-rescue` opens
+`store.json` directly with your master password, so the passwords are readable
+whatever else happens.
+
+The problem is getting a NEW machine enrolled. Minting a code needs an enrolled
+machine to sign the request, and the server prints a bootstrap code only while
+**no** device is enrolled. Your lost machines are still listed, so it prints
+nothing and nothing can ask it for a code. The door is held shut by devices that
+no longer exist.
+
+Remove them by hand. Stop the app, then:
+
+```sh
+cp /mnt/tank/apps/bencpass/store.json /mnt/tank/apps/bencpass/store.json.bak
+python3 - <<'EOF'
+import json
+p = '/mnt/tank/apps/bencpass/store.json'
+d = json.load(open(p))
+print('devices before:', list(d.get('devices', {}).keys()))
+d['devices'] = {}
+json.dump(d, open(p, 'w'))
+print('devices cleared; records kept:', len(d.get('records', {})))
+EOF
+chown 568:568 /mnt/tank/apps/bencpass/store.json
+```
+
+Start the app and the log prints `no devices enrolled yet` with a fresh
+bootstrap code. Join from the new machine with that code and **the same master
+password** — the header and every record are still there, so it is the same
+vault, not a new one.
+
+Take the backup copy first. That file is the only thing standing between you and
+the loss, and a mistyped path is a worse day than the one you are already
+having.
+
+**This is device surgery, not a supported command.** It is written down because
+the alternative — deleting the data directory — destroys the header and the
+records with it. There is a note in TODO.md about giving this a proper tool.
+
 ## Revoking a device
 
 Gear → **Sync** → **Machines**. Every enrolled machine is listed, with the one

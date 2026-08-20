@@ -973,3 +973,59 @@ test('a generation has to be a number a publisher could have written', async () 
     assert.equal(v.stashHeader(forged), false, `a generation of ${JSON.stringify(gen)} was accepted`);
   }
 });
+
+// ---- ownership at the write boundary ----------------------------------------
+//
+// In the extension, add() and update() are called by manager DOCUMENTS on the
+// background's vault, and the objects they pass — the `urls` array off the
+// editor, `history` off an import — are owned by the calling page. Kept by
+// reference, they died with the page: Firefox nukes a closed document's
+// compartment, and the background's next read of a kept array threw "can't
+// access dead object". Node has no compartments to nuke, so these tests pin
+// the same property by the half they CAN see: what the vault keeps is its own
+// copy, unreachable through the caller's object. The realm half — that the
+// copy is made by the vault's own realm — only a browser can show.
+
+test('add() keeps its own copy of the fields, not the caller\'s objects', async () => {
+  const v = await mk();
+  const fields = {
+    title: 'BENCO',
+    password: 'hunter2',
+    urls: ['https://benco.example'],
+    history: [{ password: 'older', changed: T0 }],
+  };
+  const id = await v.add(fields);
+
+  // The caller scribbles on its own object after saving. None of it may show.
+  fields.urls.push('https://evil.example');
+  fields.history[0].password = 'rewritten';
+
+  assert.deepEqual(v.get(id).urls, ['https://benco.example']);
+  assert.equal(v.get(id).history[0].password, 'older');
+});
+
+test('update() keeps its own copy of the patch', async () => {
+  const v = await mk();
+  const id = await v.add({ title: 'BENCO', password: 'hunter2' });
+
+  const patch = { urls: ['https://benco.example'] };
+  await v.update(id, patch);
+  patch.urls.push('https://evil.example');
+
+  assert.deepEqual(v.get(id).urls, ['https://benco.example']);
+});
+
+test('adoptRecoveryWrap keeps its own copy of the wrap', async () => {
+  const { newRecoveryCode } = await import('../src/core/recovery.js');
+  const v = await mk();
+  const code = newRecoveryCode();
+  const wrap = await v.mintRecoveryWrap('hunter2', code);
+  v.adoptRecoveryWrap(wrap);
+
+  // The sheet's copy is damaged after adoption; the vault's must not be.
+  wrap.salt = toB64(randomBytes(16));
+
+  v.lock();
+  await v.unlockWithRecoveryCode(code);
+  assert.equal(v.locked, false);
+});

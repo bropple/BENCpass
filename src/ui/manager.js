@@ -45,6 +45,14 @@ async function makeVaultHost() {
   }
 
   if (bg?.bencpass) {
+    // The background reads its vault from storage asynchronously, and this
+    // page used to read bg.bencpass.vault while that read was still in
+    // flight: null came back, the gate took it for "no vault on this machine"
+    // and offered SETUP over a vault holding hundreds of records — one typed
+    // password from persisting an empty vault on top of them (the background
+    // now refuses that write too, but a wrong offer is a defect on its own).
+    // No gate is chosen before the answer exists.
+    await bg.bencpass.ready;
     return {
       shared: true,
       get vault() {
@@ -54,7 +62,22 @@ async function makeVaultHost() {
         return bg.bencpass.autolockAt;
       },
       bump: () => bg.bencpass.bump(),
-      setVault: (v) => bg.bencpass.setVault(v),
+      // Creation happens in the BACKGROUND's realm, never here. A Vault built
+      // in this document dies with this document — Firefox nukes the
+      // compartment of a closed page, and the background is left holding a
+      // dead-object wrapper that throws on every touch. Only the password
+      // crosses, as a string, down the same gated channel UNLOCK uses.
+      create: async (password) => {
+        const made = await askBackground(MSG.SETUP, { password });
+        if (!made?.ok) {
+          throw new Error(
+            made?.reason === 'already-a-vault'
+              ? 'There is already a vault on this machine. Reload this page and unlock it instead.'
+              : (made?.message ?? `Could not create the vault (${made?.reason ?? 'error'}).`),
+          );
+        }
+        return bg.bencpass.vault;
+      },
       persist: () => bg.bencpass.persistVault(),
       sync: () => bg.bencpass.sync(),
       lock: () => bg.bencpass.lock(),
@@ -76,8 +99,17 @@ async function makeVaultHost() {
     bump: () => {
       localAutolockAt = Date.now() + AUTOLOCK_MS;
     },
-    setVault: (v) => {
-      local = v;
+    // The same refusal the background makes, for the same reason: creating is
+    // only ever creating the FIRST vault, and the check goes to storage — the
+    // copy an overwrite would destroy — not to a variable that can be blank
+    // for other reasons.
+    create: async (password) => {
+      if (await store.read()) {
+        throw new Error('There is already a vault here. Reload this page and unlock it instead.');
+      }
+      local = await Vault.create({ password });
+      await store.write(local.toJSON());
+      return local;
     },
     persist: () => store.write(local.toJSON()),
     sync: async () => ({ ok: false, reason: 'not-configured' }),
@@ -734,9 +766,10 @@ $('gate-form').addEventListener('submit', async (e) => {
     if ($('gate').dataset.mode === 'setup') {
       if (pw !== $('gate-pw2').value) throw new Error('The two entries do not match.');
       if (pw.length < 8) throw new Error('Use at least 8 characters.');
-      state.vault = await Vault.create({ password: pw });
-      vaultHost.setVault(state.vault);
-      await persist();
+      // Created and persisted by the vault's owner — inside the extension
+      // that is the background, in its own realm, with its own refusal to
+      // overwrite a vault already in storage. See makeVaultHost.
+      state.vault = await vaultHost.create(pw);
       // Before the app, not after: this is the one moment the code exists in
       // memory and the person is still paying attention to setup.
       await showRecoverySheet(pw);

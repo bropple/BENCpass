@@ -51,6 +51,13 @@ export const MSG = Object.freeze({
   // manager -> background
   SETTINGS_GET: 'settings-get',
   SETTINGS_SET: 'settings-set',
+  // "create the first vault on this machine". The background builds it, never
+  // the page: a Vault constructed in a manager document lives in that
+  // document's realm, and when the document goes, Firefox nukes its
+  // compartment — the background is left holding a dead-object wrapper and
+  // every `vault.locked` after that throws. The password crosses as a string,
+  // exactly as UNLOCK's does.
+  SETUP: 'setup',
   JOIN: 'join', // "adopt the vault this server is already carrying"
   DEVICES: 'devices', // "which machines are enrolled?"
   MINT_CODE: 'mint-code', // "mint an enrolment code for the next machine"

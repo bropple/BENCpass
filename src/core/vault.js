@@ -669,9 +669,13 @@ export class Vault {
     };
   }
 
-  /** The moment the code becomes real. The caller persists. */
+  /** The moment the code becomes real. The caller persists. Cloned like
+   *  add()'s fields: this is a public entry point, the wrap travels through a
+   *  page on its way here, and a vault must own what it keeps — today's
+   *  caller happens to pass back the object mintRecoveryWrap made in this
+   *  realm, but the boundary should not depend on that staying true. */
   adoptRecoveryWrap(wrap) {
-    this.meta.wraps.recovery = wrap;
+    this.meta.wraps.recovery = structuredClone(wrap);
   }
 
   /** Is there a way back in without the master password? */
@@ -736,7 +740,16 @@ export class Vault {
   async add(fields, now = Date.now()) {
     const key = this.#require();
     const id = crypto.randomUUID();
-    const plain = newRecord(fields, now);
+    // Cloned before anything is kept, because `fields` belongs to the caller —
+    // and in the extension the caller can be another document. newRecord's
+    // shallow spread kept the manager page's own `urls` and `history` arrays
+    // inside this vault, and when that page closed, Firefox nuked its
+    // compartment: every later read of those arrays from the background — the
+    // URL match on the next form, for one — threw "can't access dead object".
+    // The clone is made by THIS module's realm, so the vault owns every object
+    // it keeps, whoever handed them over. It also means a caller mutating its
+    // own object afterwards cannot reach inside a record it already saved.
+    const plain = newRecord(structuredClone(fields), now);
     await this.#write(key, id, 1, plain);
     return id;
   }
@@ -746,7 +759,9 @@ export class Vault {
     const plain = this.#plain.get(id);
     if (!plain) throw new Error(`no such record: ${id}`);
     const env = this.envelopes.get(id);
-    await this.#write(key, id, env.rev + 1, applyPatch(plain, patch, now));
+    // The same clone as add(), for the same reason: applyPatch's spread keeps
+    // the patch's nested arrays, and they are the caller's.
+    await this.#write(key, id, env.rev + 1, applyPatch(plain, structuredClone(patch), now));
   }
 
   async touchUsed(id, now = Date.now()) {

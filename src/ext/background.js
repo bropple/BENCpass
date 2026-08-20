@@ -288,6 +288,17 @@ const CONTENT_CALLABLE = new Set([MSG.DESCRIBE, MSG.CANDIDATES, MSG.CAPTURE]);
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (!isMessage(msg)) return; // unknown shapes are dropped without reply
   if (!CONTENT_CALLABLE.has(msg.type) && !isExtensionPage(sender)) return;
+  // Nothing is answered before boot() has read storage. Answering early is
+  // answering from a `vault` that is still null while the read is in flight:
+  // the manager took that null for "no vault on this machine" and painted the
+  // setup gate over a vault holding 534 records — one typed password away from
+  // persisting an empty vault on top of them. handleSetup refuses that
+  // overwrite on its own (see there), but the wrong offer must not appear
+  // either, so every reply waits for the answer to exist.
+  return ready.then(() => dispatch(msg, sender));
+});
+
+function dispatch(msg, sender) {
   reapSessions();
 
   switch (msg.type) {
@@ -320,6 +331,8 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return handleSettingsGet();
     case MSG.SETTINGS_SET:
       return handleSettingsSet(msg);
+    case MSG.SETUP:
+      return handleSetup(msg, sender);
     case MSG.JOIN:
       return handleJoin(msg, sender);
     case MSG.DEVICES:
@@ -353,7 +366,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     default:
       return;
   }
-});
+}
 
 /**
  * What the content script is allowed to know about its frame.
@@ -1053,15 +1066,69 @@ async function deviceName() {
 }
 
 /**
+ * Is there already a vault on this machine? Asked of STORAGE, not of the
+ * in-memory `vault`, and the difference is the whole point: the memory is
+ * blank while boot()'s read is in flight, and blank again if that read ever
+ * fails — and both are exactly the moments a gate wrongly offering "create a
+ * vault" gets a password typed into it. An overwrite here is every record
+ * gone, so the one check that decides it goes to the copy that would be
+ * destroyed.
+ */
+const vaultOnDisk = async () => Boolean(vault || (await store.read()));
+
+/**
+ * Create the very first vault on this machine — in this realm, and refusing to
+ * be anything but the first.
+ *
+ * In this realm: the manager used to run Vault.create itself and hand the
+ * instance over. The background then held an object owned by the manager
+ * document, and the moment that document went away — tab closed, sidebar
+ * closed, a navigation — Firefox nuked its compartment and the very next
+ * `vault.locked` (the badge repaint on tabs.onRemoved, as it happened) threw
+ * "can't access dead object", permanently, until the background itself
+ * restarted. Built here, the vault lives exactly as long as the background
+ * does. Only the password crosses, as a string, and it lives here only for
+ * the length of this call — the same lifetime and the same callers as
+ * UNLOCK's, gated by the same isExtensionPage.
+ *
+ * Refusing to be anything but the first: see vaultOnDisk. Deliberately
+ * destroying a vault to start over is a real thing to want, and it still has
+ * no path (ARCHITECTURE.md §10) — this handler must never become one by
+ * accident.
+ */
+async function handleSetup(msg, sender) {
+  if (!isExtensionPage(sender)) return { ok: false, reason: 'error' };
+  if (await vaultOnDisk()) {
+    return { ok: false, reason: 'already-a-vault', message: 'There is already a vault on this machine.' };
+  }
+
+  const password = asString(msg.password, 1024);
+  if (!password) return { ok: false, reason: 'no-password', message: 'Enter a master password.' };
+
+  vault = await Vault.create({ password });
+  await persistVault();
+
+  // The same duties as an unlock, because a fresh vault is an unlocked one:
+  // the timer starts, the toolbar icon goes green, anchors already drawn on
+  // open pages hear about it, and the sync clock starts ticking.
+  bumpAutolock();
+  paintBadge();
+  broadcastLockState();
+  scheduleSync();
+  return { ok: true };
+}
+
+/**
  * Adopt the vault a configured server is already carrying.
  *
  * Only ever the first vault on a machine: replacing an existing one would throw
  * away whatever it holds, and no path in the interface asks for that. The
- * refusal is explicit rather than implied by an overwrite.
+ * refusal is explicit rather than implied by an overwrite — and it is asked of
+ * storage, not of memory, for the reason vaultOnDisk gives.
  */
 async function handleJoin(msg, sender) {
   if (!isExtensionPage(sender)) return { ok: false };
-  if (vault) {
+  if (await vaultOnDisk()) {
     return { ok: false, reason: 'already-a-vault', message: 'There is already a vault on this machine.' };
   }
 
@@ -1838,9 +1905,19 @@ window.bencpass = {
   get vault() {
     return vault;
   },
-  setVault(v) {
-    vault = v;
-    bumpAutolock();
+  // There is deliberately no setVault. There was one, and the manager used it
+  // to hand over a Vault it had built during first-run setup — an object owned
+  // by the manager document, which Firefox turned into a dead-object wrapper
+  // the moment that document closed. Every `vault.locked` after that threw,
+  // until the background itself was restarted. A vault enters this variable
+  // three ways — boot() from storage, handleSetup, handleJoin — and all three
+  // construct it in this realm. Keep it that way.
+  //
+  // Settled before any decision is read off it: boot()'s storage read is
+  // async, and a page that reads `vault` before it lands sees "no vault" on a
+  // machine that has one. The manager awaits this before it offers anything.
+  get ready() {
+    return ready;
   },
   // Auto-lock lives here and only here. Every manager page — the tab, the
   // sidebar, and any other copy open at the time — shares this one vault, so a
@@ -1869,4 +1946,10 @@ window.bencpass = {
   lock,
 };
 
-boot();
+// Held, not just called: `ready` is what the message dispatcher and the
+// manager wait on before believing anything about the vault. If boot fails,
+// every one of them fails with the real reason instead of proceeding on a
+// blank memory — a background that cannot read its own storage must not be
+// mistaken for a machine with no vault.
+const ready = boot();
+ready.catch((err) => console.error('BENCpass: boot failed', err));

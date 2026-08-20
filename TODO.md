@@ -168,3 +168,32 @@ Related, and the reason this matters today rather than eventually: updating the
 extension keeps the vault (same extension id, same `storage.local`), but
 UNINSTALLING deletes it. Anyone treating uninstall-then-install as an upgrade
 loses everything. That belongs in the README where a person will meet it.
+
+## Two gaps around devices
+
+**The revoke button is offered when it cannot work.** With one machine enrolled,
+the server refuses (`ErrLastDevice`, server/store.go:386) and the manager already
+has good copy explaining why. But the button is enabled, so the only way to find
+out is to press it. A control that can only fail should say so before it is
+pressed, not after — disable it with the reason visible.
+
+**No way in when no usable device is left.** Every device operation — list,
+rename, revoke, mint — is signed with an enrolled device's key, which is right:
+the server holds no key and should not be an admin surface. But it means that if
+every machine is lost or wiped, nothing can enrol a new one: minting needs an
+enrolled machine to ask, and the bootstrap code is printed only while no device
+is enrolled, so the dead machines hold the door shut.
+
+The data is never at risk — `bencpass-rescue` reads `store.json` directly — and
+the procedure is now documented in TRUENAS-DEPLOY.md ("If you lose every machine
+but still have the server"): stop the app, empty `devices` in `store.json`,
+restart, take the fresh bootstrap code. But that is hand-editing JSON on a NAS,
+which is a poor thing to ask of someone on the worst day of their week.
+
+**Done looks like:** an offline subcommand on the rescue tool — it already reads
+a server store, is read-only today, and is the thing a person already has for
+this kind of day. Something like `bencpass-rescue -devices <store.json>` to list
+them and `-forget <id>` to drop one, operating on the file with the server
+stopped. Deliberately NOT a new endpoint on the running server: the whole point
+is that it holds no key and answers only signed requests, and an admin path that
+did not need one would undo that.
