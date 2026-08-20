@@ -197,3 +197,25 @@ them and `-forget <id>` to drop one, operating on the file with the server
 stopped. Deliberately NOT a new endpoint on the running server: the whole point
 is that it holds no key and answers only signed requests, and an admin path that
 did not need one would undo that.
+
+## No Test button on the join gate
+
+The endpoint **Test** lives in Settings → Sync, which needs an unlocked vault.
+A machine that is joining has no vault yet, so the one moment a person most
+wants to check the address — typing it for the first time, on a second machine,
+with a code that expires in thirty minutes — is the moment they cannot.
+
+Get it wrong and the failure arrives after the master password and the code have
+been entered, as a join error rather than "that address is not answering". The
+code may also have been spent by then, which turns a typo into a trip back to
+the first machine to mint another.
+
+**Done looks like:** the same Test beside the server field on the join gate,
+doing what it does in Settings — an unauthenticated GET of `/v1/health`,
+reporting the protocol mismatch case by name. It needs no key and no vault, so
+there is nothing stopping it existing there; it simply was not built.
+
+Worth doing at the same time: the gate's server field could say what it will and
+will not take (a LAN address, `.local`, or an https Tailscale name — not a
+Tailscale IP over plain http), which is the other thing a person only discovers
+by being refused.
