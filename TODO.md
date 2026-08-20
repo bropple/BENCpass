@@ -219,3 +219,34 @@ Worth doing at the same time: the gate's server field could say what it will and
 will not take (a LAN address, `.local`, or an https Tailscale name — not a
 Tailscale IP over plain http), which is the other thing a person only discovers
 by being refused.
+
+## A numeric field was captured as a username
+
+Seen in real use (screenshots/Screenshot 2026-08-20 000752.png): the save toast
+offered *"Save 14 for 10.0.0.214?"* on a LAN device's admin page. `14` is not a
+username — something numeric on that page was classified as one, and a password
+field was matched alongside it well enough to make an offer.
+
+The capture side is more forgiving than the fill side, and deliberately: a
+missed save loses a password the person just chose, while a wrong offer costs a
+click on Not now. But an offer with obvious rubbish in it teaches people to
+dismiss the toast without reading it, and a toast nobody reads is worse than one
+that appears less often — the day it is offering something real is the day the
+habit costs them.
+
+**What is not known:** which field produced `14`. Without the page there is no
+way to tell a numeric `<input>` next to a password box from a two-factor code
+field, a port number, or a paginator that happened to sit in the same form.
+That is the first thing to establish, because it decides whether the fix is in
+the classifier or in what counts as a capturable pair.
+
+**Done looks like:** a capture is not offered when the username-shaped value
+cannot plausibly be one — bare digits are the clear case, and there may be
+others — while still capturing a genuinely empty username, which is legitimate
+on a second-step sign-in and already handled. Whatever rule is chosen, the
+existing tests in test/fields.test.js and tools/testpage are where it gets
+pinned; add the observed shape as a case.
+
+Related: this is the strongest argument for the "never for this site" option
+above. A LAN appliance's admin page is exactly the thing somebody wants silenced
+for good, and no classifier will ever get every such page right.
