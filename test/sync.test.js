@@ -1252,3 +1252,35 @@ test('a conflict met while locked is kept, and settles at the next unlocked sync
   assert.equal(fork?.password, 'from-a', 'the parked copy became a record after unlock');
   assert.equal(reloaded.parked.length, 0);
 });
+
+test('fetch is called on something the browser will accept', async () => {
+  // "'fetch' called on an object that does not implement interface Window".
+  //
+  // Storing fetch on the client and calling this.fetch(...) invokes it with
+  // the client as the receiver, which the browser refuses. It shipped, and it
+  // read as a routing failure — "no route to the server" — while the server
+  // was reachable the whole time. Enrolment worked, because that path calls
+  // the function bare, so a device could enrol and then nothing else worked.
+  //
+  // Every other test injects a plain function, which does not care what it is
+  // called on. This one does care, which is the only reason it can fail.
+  let receiver = 'never called';
+  function pickyFetch() {
+    receiver = this;
+    return Promise.resolve(new Response('{}', { status: 200, headers: { 'x-bencpass-seq': '0' } }));
+  }
+
+  const client = new SyncClient({
+    endpoint: 'http://10.0.0.9:8788',
+    deviceId: 'd',
+    deviceKey: Buffer.from(new Uint8Array(32).fill(7)).toString('base64'),
+    fetch: pickyFetch,
+  });
+
+  await client.health().catch(() => {});
+  assert.notEqual(receiver, 'never called', 'the client never called fetch at all');
+  assert.ok(
+    receiver === globalThis || receiver === undefined,
+    `fetch was called on ${receiver?.constructor?.name ?? typeof receiver}, which a browser refuses`,
+  );
+});

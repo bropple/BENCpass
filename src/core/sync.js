@@ -182,7 +182,20 @@ export class SyncClient {
     if (!this.endpoints.length) throw new SyncError('no endpoint configured', 'config');
     this.deviceId = deviceId;
     this.key = key;
-    this.fetch = f;
+    // Bound to the global, because it is about to be called as a method.
+    //
+    // `this.fetch(...)` invokes it with the SyncClient as the receiver, and the
+    // browser's fetch refuses any receiver that is not the window: Firefox
+    // says "'fetch' called on an object that does not implement interface
+    // Window", which reads like a routing problem and is not one. Enrolment
+    // escaped it only because that path calls the function bare, where the
+    // receiver is undefined and the browser lets it pass — so a device could
+    // enrol and then nothing else worked.
+    //
+    // Not caught by any test: they all inject a plain function, and a plain
+    // function does not care what it is called on. The test beside this one
+    // now checks the receiver.
+    this.fetch = typeof f === 'function' ? f.bind(globalThis) : f;
     this.probeTimeoutMs = probeTimeoutMs;
 
     // Which address answered last. Tried first, so the common case is one
