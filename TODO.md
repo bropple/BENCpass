@@ -88,18 +88,19 @@ Reported from real use. The button is wired — `$('kit-print')` calls
 in src/ui/style.css that strips the page to the code and its date. So this is
 not a missing handler.
 
-The likely cause is *where* it was pressed. The manager runs both as a tab and
-in the sidebar, and `window.print()` from a sidebar panel is a good candidate
-for failing silently; an extension page may also be restricted. Untested — do
-not fix it on this guess.
+**Confirmed: it was pressed in the sidebar.** The manager runs both as a tab and
+in the sidebar, and `window.print()` from a sidebar panel does nothing at all —
+no dialog, no error. Whether it also fails in a tab is not known; that is the
+first thing to check, because it decides whether this is "make the sidebar do
+something else" or "the call is wrong everywhere".
 
 Worth taking seriously despite being one button: the recovery code is shown
 once and never stored, and printing it is the path the interface recommends. A
 person who presses Print, sees nothing happen, and closes the sheet has lost
 the code.
 
-**Done looks like:** find out where it fails (sidebar, tab, or both), then
-either make it work in that context or say so and offer something that does —
+**Done looks like:** check the tab case, then either make it work in the sidebar
+or say so there and offer something that does —
 opening the sheet in a tab for printing, or a copy-to-clipboard beside it.
 Whatever it becomes, pressing it must visibly do something, because the failure
 mode is silent and the cost is the whole recovery path.
