@@ -42,12 +42,30 @@ browser=$BROWSER_BIN
 echo "browser: $browser"
 profile=$(mktemp -d)
 
+# web-ext copies the profile into $TMPDIR/copy-* and only removes it on a clean
+# shutdown, which the group kill below deliberately denies it — so every run
+# used to leave a dead 30 MB profile in /tmp. A per-run temp directory, removed
+# whole by the trap, and scoped to the web-ext command line so nothing else's
+# temp files are ours to delete. See selftest.sh, which had the same leak.
+webext_tmp=$(mktemp -d)
+
 BIND=127.0.0.1 RESULT_FILE="$result" node "$root/tools/serve.mjs" "$root" "$port" >/dev/null 2>&1 &
 server=$!
 cleanup() {
   kill $server 2>/dev/null || true
   kill -- -$webext 2>/dev/null || kill $webext 2>/dev/null || true
-  rm -rf "$profile"
+  # The kill is asynchronous, and removing the temp directories while the
+  # group is still dying loses a race: node rebuilds its compile cache under
+  # $webext_tmp as it exits, rm sees files appear behind itself, and the
+  # directory survives — observed, 2.3 MB of node-compile-cache left from one
+  # run. Reap web-ext, then wait (bounded) for the whole group to be gone.
+  wait $webext 2>/dev/null || true
+  i=0
+  while kill -0 -- -$webext 2>/dev/null && [ $i -lt 50 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  rm -rf "$profile" "$webext_tmp"
 }
 trap cleanup EXIT
 sleep 0.5
@@ -64,7 +82,7 @@ while IFS= read -r pref; do
   set -- "$@" --pref "$pref"
 done < "$root/tools/test-prefs.txt"
 
-npx web-ext run "$@" >"$webext_log" 2>&1 &
+TMPDIR=$webext_tmp npx web-ext run "$@" >"$webext_log" 2>&1 &
 webext=$!
 
 i=0

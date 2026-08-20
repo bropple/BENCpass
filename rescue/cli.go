@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/term"
 
+	"ropple.net/bencpass/rescue/internal/devices"
 	"ropple.net/bencpass/rescue/internal/export"
 	"ropple.net/bencpass/rescue/internal/vault"
 )
@@ -184,14 +185,34 @@ func show(v *vault.Vault, want string) error {
 	}
 
 	fmt.Fprintln(os.Stderr, "This prints secrets to your terminal, which keeps scrollback.")
-	r := hits[0]
+	printRecord(os.Stdout, hits[0])
+	return nil
+}
+
+// printRecord is the whole of one record, secrets included. Separate from show
+// so a test can point it at a buffer; show is the part that finds the record
+// and says what is about to happen.
+func printRecord(w io.Writer, r vault.Record) {
 	for _, k := range []string{"title", "username", "password", "totp", "notes"} {
 		if val := r.Str(k); val != "" {
-			fmt.Printf("%-10s %s\n", k, val)
+			fmt.Fprintf(w, "%-10s %s\n", k, val)
 		}
 	}
+	// Previous passwords, newest first, each with the date it was set — the
+	// same "set <date>" / "undated" the manager shows. They are printed
+	// because the older password is sometimes the one that is needed: a
+	// rotation that a site silently rejected leaves the site on the previous
+	// password, and on the day the browser will not start, this tool is the
+	// only place left to read it.
+	for _, h := range r.History() {
+		when := "undated"
+		if h.Changed > 0 {
+			when = "set " + time.UnixMilli(h.Changed).Format("2006-01-02")
+		}
+		fmt.Fprintf(w, "%-10s %s  (%s)\n", "previous", h.Password, when)
+	}
 	for _, u := range r.URLs() {
-		fmt.Printf("%-10s %s\n", "url", u)
+		fmt.Fprintf(w, "%-10s %s\n", "url", u)
 	}
 	if r.IsAddress() {
 		for k, val := range r.Fields {
@@ -199,10 +220,97 @@ func show(v *vault.Vault, want string) error {
 			if !ok || s == "" || k == "title" || k == "notes" || k == "type" {
 				continue
 			}
-			fmt.Printf("%-10s %s\n", k, s)
+			fmt.Fprintf(w, "%-10s %s\n", k, s)
 		}
 	}
+}
+
+// runDevices lists the devices enrolled on a sync server store, and — asked
+// twice, backed up first — removes one.
+//
+// This is the tool's one write, and it exists because the alternative was
+// documented in TRUENAS-DEPLOY.md as a python heredoc run by hand on the NAS:
+// when every machine is lost, the enrolled-but-dead devices stop the server
+// from ever printing another bootstrap code, and hand-editing the last copy of
+// the vault is a poor thing to ask of somebody on that day. See
+// internal/devices for what keeps the write contained.
+//
+// in and stdout are parameters so a test can drive the confirmation; prompts
+// and progress go to stderr like everywhere else in this file, so piped output
+// stays clean.
+func runDevices(path, forget string, in io.Reader, stdout io.Writer) error {
+	s, err := devices.Load(path)
+	if err != nil {
+		return err
+	}
+	list, err := s.List()
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "%d device(s) enrolled on %s:\n\n", len(list), s.Path)
+	for _, d := range list {
+		fmt.Fprintf(stdout, "  %s  %-12s %s\n",
+			time.UnixMilli(d.Created).Format("2006-01-02"), d.Name, d.ID)
+	}
+	if forget == "" {
+		if len(list) > 0 {
+			fmt.Fprintln(stdout, "\nTo remove one: -devices -forget <id>, with the server stopped.")
+		}
+		return nil
+	}
+
+	d, err := s.Forget(forget) // in memory only; nothing is written until Save
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, `
+About to remove  %s  %s  (enrolled %s)
+from             %s
+
+STOP THE SERVER FIRST. A running server keeps the whole store in memory and
+writes the old device list straight back over this change on its next save.
+This tool cannot tell whether it is running, so it has to be your word.
+
+A backup copy of the file is written beside it before anything changes.
+
+`, d.Name, d.ID, time.UnixMilli(d.Created).Format("2006-01-02"), s.Path)
+
+	answer, err := askLine(`Type "forget" to continue: `, in)
+	if err != nil {
+		return err
+	}
+	if answer != "forget" {
+		return errors.New("not confirmed — nothing was written")
+	}
+
+	backup, err := s.Save()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Backup written: %s\n", backup)
+	fmt.Fprintf(stdout, "\nRemoved %s (%s).\n", d.Name, d.ID)
+
+	remaining := len(list) - 1
+	if remaining == 0 {
+		fmt.Fprintln(stdout, "No devices remain. Start the server: it will print a fresh bootstrap")
+		fmt.Fprintln(stdout, "enrolment code, and joining with that code and the same master password")
+		fmt.Fprintln(stdout, "opens the same vault — the header and every record are untouched.")
+	} else {
+		fmt.Fprintf(stdout, "%d device(s) remain.\n", remaining)
+	}
 	return nil
+}
+
+// askLine reads one echoed line — a confirmation, not a secret.
+func askLine(prompt string, in io.Reader) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }
 
 func exportTo(v *vault.Vault, path string) error {

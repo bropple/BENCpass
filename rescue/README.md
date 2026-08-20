@@ -112,8 +112,37 @@ Exports are written `0600` and refuse to overwrite an existing file. `.json`
 keeps everything; `.csv` is logins only, in the shape other managers read, and
 both import straight back into BENCpass.
 
-`-list` does not print passwords. `-show` does, and says first that a terminal
-keeps scrollback.
+`-list` does not print passwords. `-show` does — the current one and every
+previous one the vault kept, each with the date it was set — and says first
+that a terminal keeps scrollback.
+
+### If every machine is lost: let a new one enrol
+
+A sync server prints a bootstrap enrolment code only while **no** device is
+enrolled, and minting a new code needs an enrolled machine to sign for it. So
+if every machine is gone, the dead ones hold the door shut: the server prints
+nothing, and nothing can ask it to. Your data is fine — this tool reads the
+store directly, see above — but a *new machine* cannot join until the dead
+devices are removed.
+
+With the **server stopped**:
+
+```sh
+bencpass-rescue -devices /mnt/tank/apps/bencpass          # list them
+bencpass-rescue -devices -forget <id> /mnt/tank/apps/bencpass
+```
+
+It shows the device, says what is about to happen, and asks you to type
+`forget`. A backup copy of `store.json` is written beside it before anything
+changes, the rewrite goes through a temporary file and a rename so an
+interruption leaves the original, and the file keeps its owner and mode so the
+server can still open it. Once no devices remain, start the server: it prints
+a fresh bootstrap code, and joining with that code and the same master
+password opens the same vault.
+
+The server must be stopped first because it keeps the store in memory and
+writes the old device list straight back on its next save. The tool cannot
+detect a running server through the file, so it says this and takes your word.
 
 ---
 
@@ -183,6 +212,12 @@ node rescue/internal/vault/testdata/gen.mjs
 It does not edit, and it does not write to your vault. If it could, then the
 program you reach for when everything is broken would also be the program that
 can finish the job.
+
+The one write it has is `-forget`, above, and that is device surgery on a sync
+server's store, not the vault: the code behind it never decrypts a record, and
+everything in the file it does not understand — the vault header, every sealed
+record, the other devices' keys — passes through byte for byte. It writes a
+backup of the whole file first, always, or refuses to start.
 
 It cannot recover a vault whose master password and recovery code are both
 gone. There is no back door, and adding one would make the recovery code

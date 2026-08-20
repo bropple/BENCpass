@@ -146,7 +146,11 @@ func (s *session) buildChooser(problem string) fyne.CanvasObject {
 
 	return container.NewBorder(
 		container.NewPadded(header("open a vault without a browser")),
-		container.NewPadded(dim("This program never writes to the file you give it, and never uses the network.")),
+		// "This window", not "this program", and the distinction is honest
+		// rather than pedantic: the CLI's -forget mode rewrites a server
+		// store's device list (backup first). Nothing reachable from here
+		// writes anything.
+		container.NewPadded(dim("This window never writes to the file you give it, and never uses the network.")),
 		nil, nil,
 		container.NewPadded(container.NewVBox(body, container.NewHBox(choose))),
 	)

@@ -373,9 +373,11 @@ func (s *Store) Devices() []DeviceInfo {
 //
 // The last one cannot be removed. A store with no devices is unreachable —
 // nothing could enrol, because minting a code needs a device to sign the
-// request, and nothing could read, because every route is signed. The only way
-// back would be deleting the file, which takes the vault header with it. So the
-// one machine still holding a key keeps it.
+// request, and nothing could read, because every route is signed. So the one
+// machine still holding a key keeps it. The deliberate exception is offline:
+// when every machine really is gone, the rescue tool's -forget empties the
+// device list with the server stopped, and the next start prints a bootstrap
+// code again.
 func (s *Store) Forget(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

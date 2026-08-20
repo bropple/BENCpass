@@ -33,6 +33,11 @@ echo "bencpass.ico"
 cp "$src" "$root/server/static/bencpass.svg"
 echo "server/static/bencpass.svg"
 
+# And the 512px PNG beside it, served at /favicon.png for the interfaces that
+# will not render SVG — TrueNAS's app-icon field is the one that matters.
+cp "$out/bencpass-512.png" "$root/server/static/bencpass.png"
+echo "server/static/bencpass.png"
+
 # The extension needs the PNGs inside its own root, since a manifest cannot
 # reference a path outside it.
 mkdir -p "$root/src/ext/icons"

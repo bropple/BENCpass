@@ -100,6 +100,22 @@ diagnostic surface.
 The entrypoint already passes `-addr 0.0.0.0:8788 -dir /data`; you do not need
 to supply them.
 
+### The icon
+
+Custom apps take their icon from TrueNAS's own app metadata, not from the image
+or the compose file, so a YAML install shows the generic placeholder. Where
+your TrueNAS version offers an icon URL on the custom app (the app's Edit form,
+beside the YAML), point it at the server itself:
+
+```
+http://10.0.0.20:8788/favicon.png
+```
+
+Use the `.png`, not the `.svg` — the server serves both, but app-catalog UIs
+routinely refuse to render SVG, which is why the PNG endpoint exists. One
+honest caveat: the icon is fetched from the app it decorates, so it only loads
+while the app is running — which is also the only time you are looking.
+
 ### The flags, if you want them
 
 | flag | default | what it does |
@@ -353,34 +369,32 @@ machine to sign the request, and the server prints a bootstrap code only while
 nothing and nothing can ask it for a code. The door is held shut by devices that
 no longer exist.
 
-Remove them by hand. Stop the app, then:
+Remove them with the rescue tool. **Stop the app first** — a running server
+keeps the store in memory and writes the old device list straight back on its
+next save — then, on the NAS shell:
 
 ```sh
-cp /mnt/tank/apps/bencpass/store.json /mnt/tank/apps/bencpass/store.json.bak
-python3 - <<'EOF'
-import json
-p = '/mnt/tank/apps/bencpass/store.json'
-d = json.load(open(p))
-print('devices before:', list(d.get('devices', {}).keys()))
-d['devices'] = {}
-json.dump(d, open(p, 'w'))
-print('devices cleared; records kept:', len(d.get('records', {})))
-EOF
-chown 568:568 /mnt/tank/apps/bencpass/store.json
+bencpass-rescue -devices /mnt/tank/apps/bencpass            # list them
+bencpass-rescue -devices -forget <id> /mnt/tank/apps/bencpass
 ```
+
+Run `-forget` once per dead device. Each run shows the device, asks you to type
+`forget`, and writes a timestamped backup copy of `store.json` beside it before
+changing anything. The file keeps its owner (568) and mode, so the server can
+still open it — the tool handles the `chown` that hand-editing used to need.
+Nothing else in the file is touched: the vault header, every record, and the
+enrolment codes pass through byte for byte.
 
 Start the app and the log prints `no devices enrolled yet` with a fresh
 bootstrap code. Join from the new machine with that code and **the same master
 password** — the header and every record are still there, so it is the same
 vault, not a new one.
 
-Take the backup copy first. That file is the only thing standing between you and
-the loss, and a mistyped path is a worse day than the one you are already
-having.
-
-**This is device surgery, not a supported command.** It is written down because
-the alternative — deleting the data directory — destroys the header and the
-records with it. There is a note in TODO.md about giving this a proper tool.
+If the rescue tool is not at hand, the store is JSON and the `devices` object
+can be emptied by hand with the app stopped — take a copy of the file first,
+and `chown 568:568` the result — but downloading the tool is the better ten
+minutes: a mistyped edit to that file is a worse day than the one you are
+already having.
 
 ## Revoking a device
 
@@ -398,5 +412,5 @@ the machine cannot come back without a new code.
 The last device cannot be revoked, and the server will refuse. A store with no
 devices cannot be reached at all — nothing could enrol, because minting a code
 needs a device to sign the request, and nothing could read, because every route
-is signed. The only way back would be deleting the data directory, which takes
-the vault header with it.
+is signed. The way back from that state is offline, with the app stopped:
+`bencpass-rescue -forget`, described under *If you lose every machine* above.

@@ -96,6 +96,7 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.status)
 	mux.HandleFunc("GET /favicon.svg", s.favicon)
+	mux.HandleFunc("GET /favicon.png", s.faviconPNG)
 	mux.HandleFunc("GET /v1/health", s.health)
 	mux.HandleFunc("POST /v1/enrol", s.enrol)
 	mux.HandleFunc("POST /v1/codes", s.auth(s.mintCode))

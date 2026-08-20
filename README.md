@@ -366,8 +366,10 @@ inside Firefox's IndexedDB.
 
 **[BENCpass Rescue](rescue/)**, a small program that opens that backup — or a
 sync server's `store.json` — with no browser involved. One file per platform,
-attached to every release, no runtime and nothing to install. It reads; it never
-writes to the vault you give it and never touches the network.
+attached to every release, no runtime and nothing to install. It reads; it
+never writes to the vault and never touches the network. Its one write is
+`-forget`, which removes a dead device from a server store — backup first — so
+that losing every machine cannot lock a new one out.
 
 Keep both with your recovery code. Together they are a complete way back that
 does not depend on this browser, this machine, or this software still working.

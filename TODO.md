@@ -45,16 +45,6 @@ src/core/model.js already clamps implausible timestamps, so the guard is
 written; it is the parser that never supplies them. Note the JSON path is
 partly here already — history now survives a round trip — so this is mostly CSV.
 
-## The rescue tool does not show password history
-
-`-show` prints title, username, password, totp and notes (rescue/cli.go:188).
-The JSON export keeps history, and the manager can display it, but the tool
-somebody reaches for when the browser will not start cannot show the older
-password that might be the one they need.
-
-**Done looks like:** `-show` prints previous passwords with their dates, behind
-the same "this prints secrets to a terminal" warning as the current one.
-
 ## Biometrics on Linux: platform-only, by pin
 
 `src/ext/webauthn.js:116` pins `authenticatorAttachment: 'platform'`, and
@@ -68,18 +58,6 @@ supported and the copy says so again, or a decision is recorded here that they
 are deliberately out of scope. Note the awkward part: availability cannot be
 probed without prompting, so the interface has to offer something it may not be
 able to deliver.
-
-## The TrueNAS app icon is a placeholder
-
-The server's own status page serves P. Gon as its favicon (`/favicon.svg`), but
-the TrueNAS Apps list shows a generic icon, because custom apps installed via
-YAML take their icon from TrueNAS's catalog metadata rather than from the image
-or the compose file.
-
-**Done looks like:** either a note in TRUENAS-DEPLOY.md pointing at
-`http://<nas>:8788/favicon.svg` for the icon field where the UI offers one, or a
-PNG endpoint beside the SVG for UIs that will not render SVG. The rescue tool
-already commits a 512px render to work from.
 
 ## Print on the recovery sheet does nothing
 
@@ -169,34 +147,18 @@ extension keeps the vault (same extension id, same `storage.local`), but
 UNINSTALLING deletes it. Anyone treating uninstall-then-install as an upgrade
 loses everything. That belongs in the README where a person will meet it.
 
-## Two gaps around devices
+## The revoke button is offered when it cannot work
 
-**The revoke button is offered when it cannot work.** With one machine enrolled,
-the server refuses (`ErrLastDevice`, server/store.go:386) and the manager already
-has good copy explaining why. But the button is enabled, so the only way to find
-out is to press it. A control that can only fail should say so before it is
-pressed, not after — disable it with the reason visible.
+With one machine enrolled, the server refuses (`ErrLastDevice`,
+server/store.go:386) and the manager already has good copy explaining why. But
+the button is enabled, so the only way to find out is to press it. A control
+that can only fail should say so before it is pressed, not after — disable it
+with the reason visible.
 
-**No way in when no usable device is left.** Every device operation — list,
-rename, revoke, mint — is signed with an enrolled device's key, which is right:
-the server holds no key and should not be an admin surface. But it means that if
-every machine is lost or wiped, nothing can enrol a new one: minting needs an
-enrolled machine to ask, and the bootstrap code is printed only while no device
-is enrolled, so the dead machines hold the door shut.
-
-The data is never at risk — `bencpass-rescue` reads `store.json` directly — and
-the procedure is now documented in TRUENAS-DEPLOY.md ("If you lose every machine
-but still have the server"): stop the app, empty `devices` in `store.json`,
-restart, take the fresh bootstrap code. But that is hand-editing JSON on a NAS,
-which is a poor thing to ask of someone on the worst day of their week.
-
-**Done looks like:** an offline subcommand on the rescue tool — it already reads
-a server store, is read-only today, and is the thing a person already has for
-this kind of day. Something like `bencpass-rescue -devices <store.json>` to list
-them and `-forget <id>` to drop one, operating on the file with the server
-stopped. Deliberately NOT a new endpoint on the running server: the whole point
-is that it holds no key and answers only signed requests, and an admin path that
-did not need one would undo that.
+(The other device gap that used to live here — no way in when every machine is
+lost — is closed: `bencpass-rescue -devices` / `-forget` removes dead devices
+from a server store offline, backup first, so the server prints a fresh
+bootstrap code again.)
 
 ## No Test button on the join gate
 

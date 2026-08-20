@@ -11,6 +11,12 @@
 // tool's exports are written elsewhere, to a path the user names. A tool people
 // reach for while frightened must not be able to damage the last copy.
 //
+// The tool's one write — removing a dead device from a server store, so the
+// server will print a bootstrap code again — lives in internal/devices, and
+// deliberately not here: that code never decrypts anything, never parses a
+// record, and carries every byte it does not understand verbatim, so this
+// package's guarantee is not thinned by sharing a file with it.
+//
 // What it cannot do: biometric unlock. That secret lives in an authenticator
 // and is released to a WebAuthn caller behind a fingerprint; there is no way to
 // reproduce it here, and pretending otherwise would be the wrong kind of
@@ -428,6 +434,38 @@ func (r Record) URLs() []string {
 		if s, ok := u.(string); ok {
 			out = append(out, s)
 		}
+	}
+	return out
+}
+
+// PastPassword is one entry of a login's password history: the password, and
+// when it was set. Changed is unix milliseconds, or 0 when the source did not
+// know — an imported file may carry undated history, and 0 is reported as
+// undated rather than rendered as 1970.
+type PastPassword struct {
+	Password string
+	Changed  int64
+}
+
+// History is the login's previous passwords, newest first — the order
+// src/core/model.js keeps them in when a rotation pushes the old password onto
+// the list. Entries without a password are dropped, as the extension's own
+// importer drops them: a history row with no password in it is nothing this
+// tool can hand back.
+func (r Record) History() []PastPassword {
+	raw, _ := r.Fields["history"].([]any)
+	out := make([]PastPassword, 0, len(raw))
+	for _, h := range raw {
+		m, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		pw, _ := m["password"].(string)
+		if pw == "" {
+			continue
+		}
+		changed, _ := m["changed"].(float64)
+		out = append(out, PastPassword{Password: pw, Changed: int64(changed)})
 	}
 	return out
 }

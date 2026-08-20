@@ -28,6 +28,15 @@ var version = "dev"
 //go:embed static/bencpass.svg
 var pgonSVG string
 
+// The same mark as a 512px PNG, for the interfaces that will not render an
+// SVG. The concrete customer is TrueNAS: a custom app's icon URL is fetched by
+// its catalog UI, which shows a generic placeholder when handed SVG, so
+// TRUENAS-DEPLOY.md points that field here. Rendered by tools/make-icons.sh
+// from the same source SVG, so the two cannot disagree.
+//
+//go:embed static/bencpass.png
+var pgonPNG []byte
+
 var statusPage = template.Must(template.New("status").Parse(`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -101,6 +110,12 @@ func (s *server) favicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	fmt.Fprint(w, pgonSVG)
+}
+
+func (s *server) faviconPNG(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(pgonPNG)
 }
 
 // innerSVG strips the outer <svg> wrapper so the artwork can be dropped inside
