@@ -107,3 +107,29 @@ mode is silent and the cost is the whole recovery path.
 
 **Workaround meanwhile:** the code is on screen — write it down, or open the
 manager in a tab and use the browser's own print.
+
+## No way to tell the save prompt "never for this site"
+
+The toast offers Save and Dismiss. Dismiss is for this once — the next sign-in
+on the same site asks again. There is no way to say "stop asking about this
+one", which every other password manager has, and which matters most on the
+sites you sign into constantly and will never want stored: a bank that you
+deliberately keep out of a vault, a shared account, a throwaway login, a local
+development site that generates a new username every run.
+
+**Done looks like:** a third choice on the toast that adds the site to a list,
+and a visible, editable list of those sites in Settings so a decision made in a
+hurry can be undone. Store it beside the settings rather than in the vault: it
+is a preference about a site, not a secret, and keeping it out of the vault
+means it does not sync a personal choice to every machine unless that is
+deliberately wanted — decide which, and say why in the code.
+
+**The interaction to be careful about.** Generating a password now saves it
+immediately, before it reaches the page, precisely so it cannot be lost
+(src/core/provisional.js). "Never for this site" must not silently discard a
+password the person just generated and used — that would recreate the exact
+failure the provisional entry was built to prevent. Either the block applies
+only to captures of passwords typed by hand, or generating on a blocked site
+warns plainly that it will not be kept. The first is probably right; the second
+is at least honest. What must not happen is a generated password vanishing
+because of a preference set weeks earlier.
