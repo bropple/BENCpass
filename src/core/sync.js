@@ -587,6 +587,16 @@ export function dumpSyncState(state) {
  * password, is where it is proven against the vault key's own seal and either
  * adopted or refused. See #adoptPendingHeader in vault.js for the checks.
  */
+/** Do two headers at the same generation actually say the same thing? */
+function headerDiffers(mine, theirs) {
+  return JSON.stringify(canonHeader(mine)) !== JSON.stringify(canonHeader(theirs));
+}
+
+/** The fields worth comparing: what a password change moves. */
+function canonHeader(h) {
+  return [h?.gen ?? 0, h?.kdf?.salt ?? '', h?.wraps?.password?.ct ?? '', h?.proof?.ct ?? ''];
+}
+
 async function syncHeader(vault, client) {
   const { meta, seq } = await client.getMeta();
 
@@ -596,7 +606,31 @@ async function syncHeader(vault, client) {
   if (meta && remoteGen > localGen) {
     return { headerPending: vault.stashHeader(meta) };
   }
-  if (meta && remoteGen === localGen) return { published: false };
+  if (meta && remoteGen === localGen) {
+    // Same generation, different header: two machines changed the master
+    // password from the same starting point, the server's compare-and-swap
+    // let one of them win, and the loser never heard about it. Nothing looked
+    // wrong afterwards — records kept syncing, because the vault key is
+    // unchanged by a re-wrap — right up until that machine was rebuilt from
+    // the server or a backup, at which point the password its owner had been
+    // typing for weeks opened nothing.
+    //
+    // A single counter cannot tell "your generation 1" from "mine", so this
+    // cannot be reconciled automatically. It can at least be said out loud.
+    // Only once this machine has actually changed its password. At generation
+    // zero a header that differs is far more likely a different vault
+    // altogether — pointing at the wrong server — and that already has its own
+    // clearer error further down, when the key opens none of the records.
+    if (localGen > 0 && headerDiffers(vault.portableMeta, meta)) {
+      throw new SyncError(
+        'the master password was changed on two machines at once, and this ' +
+          "machine's change did not reach the server — the other change is the " +
+          'one that counts, and this machine must adopt it',
+        'header-diverged',
+      );
+    }
+    return { published: false };
+  }
 
   // No header there, or ours is newer.
   //

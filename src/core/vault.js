@@ -340,7 +340,8 @@ export class Vault {
   async #adoptPendingHeader(password) {
     const p = this.pendingMeta;
     if (!p?.wraps?.password || !p.kdf?.salt) return false;
-    if (Number(p.gen ?? 0) <= Number(this.meta.gen ?? 0)) return false;
+    const gen = Vault.#realGen(p.gen);
+    if (gen === null || gen <= (Vault.#realGen(this.meta.gen) ?? 0)) return false;
 
     let vaultKeyBytes;
     try {
@@ -360,7 +361,23 @@ export class Vault {
     }
 
     await this.unlockWithVaultKey(vaultKeyBytes);
-    if (this.envelopes.size && this.damaged.length === this.envelopes.size) {
+
+    // With nothing to check against, there is no check.
+    //
+    // The guard below proves continuity by requiring the adopted key to open
+    // records this vault already holds. On an empty vault it proved nothing —
+    // `envelopes.size &&` short-circuited the whole thing — so a header
+    // belonging to an entirely different vault could be adopted outright, and
+    // the machine would carry on writing under a key its own identity never
+    // chose. A machine holding no records loses nothing by joining again,
+    // which re-establishes the relationship deliberately instead of inferring
+    // it from an absence.
+    if (this.envelopes.size === 0) {
+      this.lock();
+      return false;
+    }
+
+    if (this.damaged.length === this.envelopes.size) {
       // Not one existing record opens under this key: whatever vault that
       // header belongs to, it is not this one. Refuse the graft and re-lock.
       this.lock();
@@ -381,11 +398,26 @@ export class Vault {
    * everything): wrong format, no password wrapping, no proof, or a generation
    * not above ours. One slot; a newer stash replaces an older one.
    */
+  /**
+   * Is this a generation number a publisher could have written?
+   *
+   * The gate below compares numerically, and NaN fails every comparison — so
+   * `gen: "abc"`, `1.5` or `{}` all read as "newer than local". Harmless
+   * today, because the proof binds the exact value and no honest publisher
+   * emits one, but a monotonicity check that leans entirely on a signature
+   * elsewhere is one refactor away from not being a check.
+   */
+  static #realGen(v) {
+    const n = Number(v ?? 0);
+    return Number.isInteger(n) && n >= 0 ? n : null;
+  }
+
   stashHeader(meta) {
     const clean = Vault.adoptMeta(meta);
     if (clean?.format !== FORMAT) return false;
     if (!clean.wraps?.password || !clean.proof) return false;
-    if (Number(clean.gen ?? 0) <= Number(this.meta.gen ?? 0)) return false;
+    const gen = Vault.#realGen(clean.gen);
+    if (gen === null || gen <= (Vault.#realGen(this.meta.gen) ?? 0)) return false;
     this.pendingMeta = clean;
     return true;
   }

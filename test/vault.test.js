@@ -927,3 +927,53 @@ test('parked conflicts evicted by the cap are counted, and the count survives', 
   const back = Vault.load(JSON.parse(JSON.stringify(v.toJSON())));
   assert.equal(back.parkedDropped, over, 'the count must survive persistence');
 });
+
+test('a stranger\'s header does not open an empty vault', async () => {
+  // NOTE ON WHAT THIS DOES AND DOES NOT COVER.
+  //
+  // The fix it was written for is in #adoptPendingHeader: continuity is proved
+  // by requiring the adopted key to open records this vault already holds, and
+  // on an empty vault that proved nothing, because `envelopes.size &&`
+  // short-circuited the guard away. A header belonging to a different vault
+  // could be adopted whole.
+  //
+  // This test does NOT reach that guard — it passes with the fix reverted,
+  // which was checked. The unlock refuses earlier, on the local wrap, so the
+  // adoption path is never entered by this route. It is kept because the
+  // property it states is worth stating, and it is labelled because a test
+  // that looks like it covers a fix and does not is worse than no test at all.
+  //
+  // Reaching the guard needs an unlock where the typed password opens the
+  // PENDING wrap and not the local one. That test is not written yet.
+  const mine = await Vault.create({ password: 'pw', kdf: FAST });
+  const stranger = await Vault.create({ password: 'pw', kdf: FAST });
+  await stranger.add({ title: 'theirs', password: 'x' });
+  await stranger.changeMasterPassword('pw', 'shared');
+
+  assert.equal(mine.envelopes.size, 0, 'this test needs an empty vault');
+  assert.ok(mine.stashHeader(stranger.portableMeta), 'the stash gate is not what is under test');
+
+  mine.lock();
+  // Refused however it is spelled: the unlock does not succeed under the
+  // stranger's password, the vault stays shut, and the foreign header is not
+  // taken. Which of those the implementation reports first does not matter;
+  // that none of them happens does.
+  await assert.rejects(() => mine.unlock('shared'), "an empty vault adopted a stranger's header");
+  assert.ok(mine.locked, 'it should stay locked rather than carry on under a foreign key');
+  assert.equal(Number(mine.meta.gen ?? 0), 0, 'the foreign header was taken anyway');
+});
+
+test('a generation has to be a number a publisher could have written', async () => {
+  // The gate compares numerically, and NaN loses every comparison — so "abc",
+  // 1.5 and {} all read as newer than local. The proof binds the real value so
+  // nothing could be adopted, but a monotonicity check that leans entirely on
+  // a signature elsewhere is one refactor from not being a check.
+  const v = await Vault.create({ password: 'pw', kdf: FAST });
+  const other = await Vault.create({ password: 'pw', kdf: FAST });
+  await other.changeMasterPassword('pw', 'next');
+
+  for (const gen of ['abc', 1.5, {}, -1, NaN, null]) {
+    const forged = { ...JSON.parse(JSON.stringify(other.portableMeta)), gen };
+    assert.equal(v.stashHeader(forged), false, `a generation of ${JSON.stringify(gen)} was accepted`);
+  }
+});
