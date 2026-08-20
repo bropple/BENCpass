@@ -296,6 +296,42 @@ test('a bare-digit username is not offered for saving', async () => {
   assert.equal(pending.username, 'admin');
 });
 
+test('a password box full of mask characters is not offered, and cannot overwrite', async () => {
+  // The appliance-settings shape again, from the other side: the password
+  // field is pre-filled with asterisks meaning "unchanged". Stored, it looks
+  // exactly like a Reveal button that does not work.
+  const fake = fakeBrowser();
+  const bg = await loadBackground(fake);
+  await bg.send({ type: MSG.SETUP, password: 'correct horse' });
+
+  const id = await bg.bencpass.vault.add({
+    title: '10.0.0.214',
+    username: 'admin',
+    password: 'the real one',
+    urls: ['https://10.0.0.214'],
+  });
+
+  const refused = await bg.send(
+    { type: MSG.CAPTURE, username: 'admin', password: '********' },
+    PAGE('https://10.0.0.214/ui/apps'),
+  );
+  assert.equal(refused.ok, false);
+  assert.equal(bg.bencpass.takePending(5), undefined, 'an offer was made anyway');
+  assert.equal(
+    bg.bencpass.vault.get(id).password,
+    'the real one',
+    'a mask string was written over a real password',
+  );
+
+  // The control: the same form, a password someone actually typed.
+  const offered = await bg.send(
+    { type: MSG.CAPTURE, username: 'admin', password: 'a real password' },
+    PAGE('https://10.0.0.214/ui/apps'),
+  );
+  assert.equal(offered.ok, true);
+  assert.equal(bg.bencpass.takePending(5).password, 'a real password');
+});
+
 test('a generated password still completes its record when the username is rubbish', async () => {
   // The interaction that must not break: generating IS saving (the provisional
   // entry exists before the page ever sees the password), and the submit is

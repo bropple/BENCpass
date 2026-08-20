@@ -19,7 +19,7 @@ import {
   registrableDomain,
   normaliseHost,
 } from '../core/match.js';
-import { classifyGroups, plausibleUsername } from '../core/fields.js';
+import { classifyGroups, plausibleUsername, plausiblePassword } from '../core/fields.js';
 import {
   ADDRESS_TOKENS,
   valuesForTokens,
@@ -943,6 +943,20 @@ async function handleCapture(msg, sender) {
   const username = asString(msg.username, 256);
   const password = asString(msg.password, 1024);
   if (!password) return { ok: false };
+
+  // A password box holding nothing but mask characters — the "unchanged"
+  // placeholder appliance UIs pre-fill their password fields with. Stored, it
+  // becomes an entry that shows dots before Reveal and asterisks after, which
+  // reads as a broken button rather than as an empty password (see
+  // plausiblePassword).
+  //
+  // Above the provisional branch, unlike the username check below it, and the
+  // asymmetry is load-bearing: that branch is entered only when the page's
+  // password IS the one our generator produced, and the generator cannot
+  // produce a run of asterisks. So nothing generated is at risk here, while
+  // leaving the check until after it would let a mask string be written over
+  // a real record's password by the overwritable path.
+  if (!plausiblePassword(password)) return { ok: false };
 
   const { forHost, candidate, overwritable, provisional } = captureTarget(
     vault.list(),

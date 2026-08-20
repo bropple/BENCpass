@@ -9,6 +9,7 @@ import {
   autocompleteToken,
   autocompleteSection,
   plausibleUsername,
+  plausiblePassword,
 } from '../src/core/fields.js';
 
 // Descriptors, not elements — the classifier is pure so the awkward cases can
@@ -111,6 +112,30 @@ test('bare digits are not a plausible username; everything else still is', () =>
   assert.equal(plausibleUsername('ben@ropple.net'), true);
   assert.equal(plausibleUsername('user2'), true);
   assert.equal(plausibleUsername('+44 1234 567890'), true); // phone logins carry punctuation
+});
+
+test('a masked placeholder is not a plausible password', () => {
+  // The observed failure: a settings page pre-fills its password box with a
+  // run of asterisks meaning "unchanged". It is a real password field with a
+  // real value, so nothing upstream can tell it apart — only the value can.
+  assert.equal(plausiblePassword('********'), false);
+  assert.equal(plausiblePassword('\u2022\u2022\u2022\u2022\u2022\u2022'), false);
+  assert.equal(plausiblePassword('\u25CF\u25CF\u25CF\u25CF'), false);
+  assert.equal(plausiblePassword('  ****  '), false);
+  assert.equal(plausiblePassword('*'), false);
+
+  // A password is not refused for being weak, only for being a mask. Letters
+  // are outside the alphabet on purpose.
+  assert.equal(plausiblePassword('xxxxxxxx'), true);
+  assert.equal(plausiblePassword('........'), true);
+  assert.equal(plausiblePassword('correct horse'), true);
+  assert.equal(plausiblePassword('p*ssw*rd'), true, 'asterisks inside a real password');
+  assert.equal(plausiblePassword('**redacted**'), true);
+
+  // Not this rule's question: handleCapture returns before it on an empty
+  // password. Answered anyway, and answered the safe way.
+  assert.equal(plausiblePassword(''), false);
+  assert.equal(plausiblePassword(null), false);
 });
 
 test('a search box is not mistaken for a username', () => {
