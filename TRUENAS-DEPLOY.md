@@ -30,17 +30,17 @@ Manage Container Images → Add credential**.
 ### A note on tags
 
 `latest` and `main` move with every push to main, so pinning to either means a
-deployment that changes under you. Release tags do not move. `v0.11.0` is
+deployment that changes under you. Release tags do not move. `v0.12.0` is
 tagged; to cut a later one, tag it and push:
 
 ```sh
-git tag v0.12.0 && git push --tags
+git tag v0.13.0 && git push --tags
 ```
 
 The image tags CI publishes are the *semver* — the `v` is stripped by the
-`type=semver` rule in `server-image.yml`. So the `v0.11.0` git tag publishes
-`ghcr.io/bropple/bencpass-server:0.11.0` and `:0.11` (major.minor); there is no
-`:v0.11.0` image tag. Pin to `:0.11.0` rather than `latest`.
+`type=semver` rule in `server-image.yml`. So the `v0.12.0` git tag publishes
+`ghcr.io/bropple/bencpass-server:0.12.0` and `:0.12` (major.minor); there is no
+`:v0.12.0` image tag. Pin to `:0.12.0` rather than `latest`.
 
 ---
 
@@ -161,6 +161,19 @@ once and expires in 30 minutes, so mint another if it lapses. Treat it like a
 key while it lives — whoever redeems it first enrols a machine with full access
 to the vault.
 
+A minted code is longer than the one the server printed at first run, and has a
+full stop in it — something like `k3J9fJq2QxYz.M7C`. The part after the stop is
+a sequence floor: the lowest position in the server's history the joining
+machine will accept. It stops a server that has been rolled back — restored
+from an old snapshot, or lying — handing a brand new machine an old version of
+a record it has nothing to compare against. **Type the whole thing, including
+the stop and what follows it.** The server never sees that part; the extension
+peels it off before it asks for anything.
+
+A bare code without a stop still works, and means no floor. That is what the
+bootstrap code at first run is, and it is the right answer there: at that point
+the server has no history to be rolled back to.
+
 Then on the new machine, at the BENCpass gate, choose
 **"Already have a vault on a server? Join it"** and give it:
 
@@ -261,7 +274,27 @@ asked to store history it knows cannot be right, and refused the whole batch.
    the server disagree about history; suspect a dataset rolled back to an old
    snapshot on one side or the other.
 
-**7. `latest` moved under you.** Tag a release and pin to it.
+**7. Sync stops and names something you have not seen before.** Four refusals
+that mean the server, not you:
+
+  - *"the server served an older revision than it had already acknowledged"* —
+    a rollback. Restored from a snapshot, most likely. Same advice as the
+    sequence-rollback message above: if you did rebuild it, the **This server
+    was rebuilt** row is how you say so; if you did not, find out why before
+    pressing anything.
+  - *"answered 200 to a push … but does not serve them back — the write was
+    dropped"* — every push is read back, and the server did not have what it
+    said it stored. A full dataset, a crashed write, or a server that is
+    lying. Check the pool first. Nothing was marked as synced, so the same
+    records go up again next time.
+  - *"record(s) changed on two machines at once and cannot be settled while
+    this vault is locked"* — not a fault. Unlock and sync again; the losing
+    copy is kept and comes back as a "(conflict)" entry.
+  - *"the flag was tampered with in transit or on the server"* — an envelope
+    whose cleartext contradicts what is sealed inside it. No honest server
+    produces this.
+
+**8. `latest` moved under you.** Tag a release and pin to it.
 
 ---
 
