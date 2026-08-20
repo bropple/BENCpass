@@ -310,6 +310,50 @@ Get-ExecutionPolicy -List
 | `MachinePolicy` or `UserPolicy` | Group Policy. `-ExecutionPolicy` **cannot** override these; pipe the script through stdin instead, which the policy does not govern: `Get-Content -Raw tools\run-extension.ps1 \| powershell -NoProfile -Command -` |
 | Nothing restrictive, but it still complains | The file carries a mark-of-the-web from being downloaded rather than cloned: `Unblock-File tools\run-extension.ps1` |
 
+## Moving in from Firefox's own password manager
+
+Written from doing it, in the order that avoids the traps.
+
+**1. Set the vault up first, and take the safety net before the data.** Create
+the vault, enrol a recovery code when it is offered, and write it down
+somewhere physical. Then Settings → Your data → **Encrypted backup**. Doing
+this before the import means that if anything about the import goes wrong you
+have a clean state to come back to.
+
+**2. Export from Firefox.** `about:logins` → the three dots → **Export
+logins**. It writes a CSV in plain text; treat it accordingly and delete it
+when you are done.
+
+**3. Import on ONE machine only.** Settings → Your data → **Import**, then let
+sync carry it to the others. Importing the same file on two machines gives you
+every login twice on both: import mints a fresh id per row and never merges, so
+sync sees two unrelated records rather than a conflict and says nothing about
+it. This is a real limitation and it is written down in TODO.md; until it is
+fixed, import once.
+
+**4. Turn Firefox's own password manager off.** `about:preferences#privacy`,
+and uncheck:
+
+- **Autofill logins and passwords**
+- **Ask to save logins and passwords for websites**
+
+Not because Firefox's is dangerous — it fills only on an origin it stored
+itself — but because two password managers armed at once fight over the same
+fields. You will not know which one filled what, Firefox will keep offering to
+save passwords BENCpass just typed, and you end up with a shadow copy in the
+browser store that syncs nowhere and drifts from the real one. That is the
+exact problem this program exists to end, so do not create it on day one.
+
+**5. Leave the passwords in Firefox for now.** Unchecking those boxes stops it
+acting; it does not delete anything. Keep them until BENCpass has earned its
+place — a week of ordinary use is a reasonable bar. They are your fallback, and
+they cost nothing to keep.
+
+One thing worth knowing while both exist: BENCpass never fills without a click
+on the field's anchor and a choice from the menu. If a field populates on its
+own, that is Firefox, not this — which makes it easy to tell them apart while
+you are switching over.
+
 ## If it all goes wrong
 
 Two things exist for the day the extension cannot help.
