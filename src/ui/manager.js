@@ -10,7 +10,7 @@ import { pickStorage } from '../core/storage.js';
 import { generate, entropyBits } from '../core/generate.js';
 import { ADDRESS_SCHEMA, countryOptions, countryName, splitName } from '../core/address.js';
 import { toJson, toCsv, parse as parseTransfer, TransferError } from '../core/transfer.js';
-import { newRecoveryCode } from '../core/recovery.js';
+import { newRecoveryCode, normalise as normaliseRecoveryCode, CODE_LENGTH } from '../core/recovery.js';
 import { LOGIN } from '../core/model.js';
 import { PROTOCOL } from '../core/sync.js';
 import { MSG } from '../ext/protocol.js';
@@ -508,8 +508,10 @@ function setGate(mode) {
     : join
       ? 'The same master password as your other machine. This pulls that vault down rather than making a new one — a new one could never read its records.'
       : recover
-        ? 'The code printed when this vault was set up. It opens the vault; the master password stays what it was, and nothing here changes it. This build cannot change the master password, and it has no "start over" — the freshly-created-vault route an earlier version of this line described was never built.'
-        : '';
+        ? 'The code printed when this vault was set up. It opens the vault; the master password stays what it was. To actually change it, unlock with the code and use Settings → Master password — the code can prove that change too.'
+        : state.vault?.pendingMeta
+          ? 'The master password was changed on another machine. This one switches the first time you unlock it with the new password; until then the old password still opens it here.'
+          : '';
 
   // Offered only when there is no vault here. With one, "join" would mean
   // replacing it, which is not a thing to put behind a link on a lock screen.
@@ -745,6 +747,15 @@ $('gate-form').addEventListener('submit', async (e) => {
       $('gate-recovery').value = '';
     } else {
       await state.vault.unlock(pw);
+      // The unlock may have adopted a header parked by a background sync — a
+      // master password change made on another machine. It happened in memory
+      // and must land on disk, or a restart forgets it (and re-adopts next
+      // time, harmlessly, but the disk should say what the vault says).
+      if (state.vault.metaUpdated) {
+        state.vault.metaUpdated = false;
+        await persist();
+        say('This machine now uses the new master password.');
+      }
     }
     enterApp();
   } catch (ex) {
@@ -940,11 +951,66 @@ function render() {
 
   renderList();
   renderDetail();
+  renderHealth();
   const n = state.vault.list(state.section).length;
   const noun = state.section === 'address' ? 'address' : 'entry';
   const plural = state.section === 'address' ? 'addresses' : 'entries';
   $('foot-count').textContent = `${n} ${n === 1 ? noun : plural}`;
 }
+
+/**
+ * The vault's bad news, across the top of the list where it will be seen.
+ *
+ * Two facts land here, and each is a promise this project makes elsewhere:
+ * records that would not open at the last unlock are SKIPPED, never silently
+ * dropped — so the skipping has to be said, or a vault quietly holds less than
+ * it did yesterday; and parked conflict copies past the safety cap are
+ * DISCARDED oldest-first — so the discarding has to be said, or "kept" was a
+ * lie. The second is acknowledgeable, because it is a count of past events; the
+ * first stands as long as it is true.
+ */
+function renderHealth() {
+  const v = state.vault;
+  if (!v || v.locked) {
+    $('health').hidden = true;
+    return;
+  }
+  const bits = [];
+  const damaged = v.damaged?.length ?? 0;
+  const dropped = v.parkedDropped ?? 0;
+  if (damaged) {
+    bits.push(
+      `${damaged} ${damaged === 1 ? 'entry' : 'entries'} could not be opened at unlock — ` +
+        `the sealed data is damaged, or a server served something tampered. ` +
+        `${damaged === 1 ? 'It is' : 'They are'} skipped, not deleted: an honest server or ` +
+        `another machine still holds the real copy, and the next sync can heal it. ` +
+        `If this persists, the server is withholding or corrupting ` +
+        `${damaged === 1 ? 'that record' : 'those records'}.`,
+    );
+  }
+  if (dropped) {
+    bits.push(
+      `${dropped} parked conflict ${dropped === 1 ? 'copy was' : 'copies were'} discarded ` +
+        `unseen: more conflicts arrived while this vault was locked than the safety cap ` +
+        `(${Vault.PARKED_MAX}) can hold, and the oldest were dropped to bound the queue. ` +
+        `The newest were kept as "(conflict)" entries. That many conflicts is not normal — ` +
+        `if you did not cause it, distrust the server.`,
+    );
+  }
+  $('health').hidden = bits.length === 0;
+  $('health-text').textContent = bits.join(' ');
+  $('health-ack').hidden = dropped === 0;
+}
+
+// Dismissing acknowledges the eviction count — a tally of past events, told
+// once — and persists the acknowledgement. The damaged notice has no dismiss:
+// it re-derives at every unlock and stands exactly as long as it is true.
+$('health-ack').addEventListener('click', async () => {
+  if (!state.vault) return;
+  state.vault.parkedDropped = 0;
+  await persist();
+  renderHealth();
+});
 
 function renderList() {
   // A locked vault has nothing to list, and asking it throws. This runs from
@@ -1482,7 +1548,10 @@ $('s-mint-btn').addEventListener('click', async () => {
   const mins = reply.ttlSeconds ? Math.round(reply.ttlSeconds / 60) : null;
   $('s-mint-note').textContent =
     (mins ? `Good once, for ${mins} minutes.` : 'Good once; the server decides for how long.') +
-    ' It is not shown again — mint another if it lapses.';
+    ' It is not shown again — mint another if it lapses.' +
+    (reply.code.includes('.')
+      ? ' The part after the dot is this machine’s sync position: it lets the new machine refuse a rolled-back server, so carry the code over whole.'
+      : '');
 });
 
 $('s-mint-copy').addEventListener('click', async () => {
@@ -1537,6 +1606,90 @@ $('s-recovery-form').addEventListener('submit', async (e) => {
   $('s-recovery-error').textContent = '';
   renderRecoverySetting();
   say('Recovery code replaced.');
+});
+
+// ---- changing the master password ---------------------------------------------
+//
+// A re-wrap of the same vault key (core/vault.js has the crypto and the
+// fail-safe). The current secret is proven first, and it can be either the
+// master password or the recovery code — the second is what frees someone who
+// forgot the password and came in with the code from staying on it for ever.
+// Which one was typed is decided by trying: the password wrap first, and on
+// refusal the recovery wrap if the input has the shape of a code. Each try
+// costs one Argon2 derivation, which is the going rate for proving a secret.
+
+const cancelPwChange = () => {
+  $('s-pwchange-form').hidden = true;
+  $('s-pwchange-cur').value = '';
+  $('s-pwchange-new').value = '';
+  $('s-pwchange-new2').value = '';
+  $('s-pwchange-error').textContent = '';
+};
+
+$('s-pwchange-btn').addEventListener('click', () => {
+  $('s-pwchange-form').hidden = false;
+  $('s-pwchange-error').textContent = '';
+  $('s-pwchange-cur').focus();
+});
+
+$('s-pwchange-cancel').addEventListener('click', cancelPwChange);
+
+$('s-pwchange-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const cur = $('s-pwchange-cur').value;
+  const next = $('s-pwchange-new').value;
+  const err = (msg) => {
+    $('s-pwchange-error').textContent = msg;
+  };
+
+  if (!cur) return err('Enter the current master password, or your recovery code.');
+  if (next !== $('s-pwchange-new2').value) return err('The two new entries do not match.');
+  if (next.length < 8) return err('Use at least 8 characters.');
+  if (next === cur) return err('That is the password this vault already has.');
+
+  err('Deriving keys — this takes a moment…');
+  try {
+    try {
+      await state.vault.changeMasterPassword(cur, next);
+    } catch (ex) {
+      // Not the password. If what was typed reads as a recovery code and this
+      // vault has one, prove the change with that instead.
+      const looksLikeCode =
+        state.vault.hasRecovery && normaliseRecoveryCode(cur).length === CODE_LENGTH;
+      if (ex?.code === 'unwrap-failed' && looksLikeCode) {
+        await state.vault.changeMasterPasswordWithRecovery(cur, next);
+      } else {
+        throw ex;
+      }
+    }
+  } catch (ex) {
+    return err(
+      ex?.code === 'unwrap-failed'
+        ? 'That is not the current master password' +
+            (state.vault.hasRecovery ? ' or the recovery code.' : '.')
+        : String(ex?.message ?? ex),
+    );
+  }
+
+  state.vault.metaUpdated = false;
+  await persist();
+  cancelPwChange();
+
+  // Publish through the ordinary sync (the header rides the putMeta
+  // compare-and-swap), and say what actually happened either way: the change
+  // is real on this machine now, and other machines switch when they unlock
+  // with the new password — after this header has reached the server.
+  const synced = await vaultHost.sync();
+  say('Master password changed.');
+  $('s-pwchange-note').textContent = synced?.ok
+    ? 'Changed, and the new header is on the server. Other machines switch the first time you ' +
+      'unlock them with the new password; until then each still opens with the old one. Your ' +
+      'recovery code and fingerprint are untouched. Old exported backups still open with the ' +
+      'old password — a re-wrap does not rewrite history.'
+    : 'Changed on this machine. The server has not heard yet' +
+      (synced?.reason === 'not-configured' ? ' (no server is set)' : ` (${synced?.reason ?? 'sync failed'})`) +
+      ' — the new header goes up with the next successful sync, and other machines switch when ' +
+      'they unlock with the new password after that. This machine is fine either way.';
 });
 
 // ---- testing an endpoint ------------------------------------------------------
@@ -1850,6 +2003,15 @@ async function loadSettings() {
   // LAN is fine" and "the LAN is down and you have not noticed".
   const via = s.lastSyncVia ? ` via ${s.lastSyncVia}` : '';
   $('s-sync-note').textContent = s.endpoint ? ago(s.lastSync) + via : 'No server set.';
+  // A refusal the background sync met while nobody was looking — tampering, a
+  // rollback, a dropped write. Held by the background until a sync succeeds,
+  // and shown here because the panel is where sync status lives; the timer
+  // that found it reported to nobody.
+  if (s.syncProblem) {
+    $('s-sync-note').textContent =
+      `Sync is refusing: ${s.syncProblem.message} (since ${new Date(s.syncProblem.at).toLocaleTimeString()}).`;
+    $('s-rebuilt').hidden = s.syncProblem.reason !== 'rollback';
+  }
 
   const about = $('s-about');
   about.replaceChildren();
@@ -1993,7 +2155,14 @@ $('s-sync-btn').addEventListener('click', async () => {
     const conflicts = reply.conflicts
       ? ` ${reply.conflicts} conflict(s): both versions kept — look for "(conflict)" entries and delete the wrong one.`
       : '';
-    $('s-sync-note').textContent = `Synced.${conflicts}`;
+    // A header at a newer generation was parked: the master password changed
+    // on another machine. Nothing switches until it is proven — at the next
+    // unlock, with the new password in hand — and saying so here beats a
+    // password that mysteriously stops working at the next gate.
+    const header = reply.headerPending
+      ? ' The master password was changed on another machine — this one switches the next time you unlock it with the new password.'
+      : '';
+    $('s-sync-note').textContent = `Synced.${conflicts}${header}`;
     render();
   } else {
     // The message carries which addresses were tried and what each said, which
@@ -2005,7 +2174,13 @@ $('s-sync-btn').addEventListener('click', async () => {
           ? 'Sync is off: permission to send your data was withdrawn in about:addons.'
           : reply?.reason === 'rollback'
             ? 'The server is reporting fewer changes than this machine has already seen. See below.'
-            : `Failed: ${reply?.message ?? reply?.reason ?? 'error'}`;
+            : reply?.reason === 'tampered'
+              ? 'Refused: the server served a record whose deletion flag contradicts its sealed contents. No client writes that — the record was tampered with on the server or in transit. Nothing was adopted. If this repeats, stop trusting that server.'
+              : reply?.reason === 'dropped-push'
+                ? 'Refused: the server said it accepted this machine’s changes but does not serve them back. Nothing was marked as synced, so nothing is lost here — but that server is dropping writes, and the same sync will keep failing until it stops.'
+                : reply?.reason === 'conflict-locked'
+                  ? 'Some records changed on two machines at once, and that cannot be settled while the vault is locked. Unlock and sync again — both versions are kept.'
+                  : `Failed: ${reply?.message ?? reply?.reason ?? 'error'}`;
 
     // Offered only once a sync has genuinely been refused as a rollback, and
     // hidden again the moment one succeeds.

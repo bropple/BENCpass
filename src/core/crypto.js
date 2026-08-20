@@ -72,6 +72,7 @@ const aadWrap = (wrapper) => utf8(`bencpass:v${FORMAT}:wrap:${wrapper}`);
 // is a broken seal.
 const aadRecord = (id, rev, deleted) =>
   utf8(`bencpass:v${FORMAT}:rec:${id}:${rev}:${deleted ? 1 : 0}`);
+const aadHeader = () => utf8(`bencpass:v${FORMAT}:meta`);
 
 /**
  * Stretch a master password into a master key.
@@ -163,6 +164,65 @@ export async function unwrapVaultKey(blob, wrappingKeyBytes) {
     const err = new Error('cannot unwrap vault key: wrong secret or damaged vault');
     err.code = 'unwrap-failed';
     throw err;
+  }
+}
+
+// ---- the header proof --------------------------------------------------------
+//
+// A machine can only adopt a vault header it did not write — after a master
+// password change on another machine — if it can tell a header the vault key's
+// holder published from one the server invented or replayed. The server holds
+// no key, so the vault key itself is the authority: the publishing side seals
+// the header's canonical form (generation included) under the vault key, and
+// the adopting side, having unwrapped that key with the password the person
+// typed, opens the seal and compares. A replayed old header re-labelled with a
+// higher generation fails the comparison; a header the server composed fails
+// to open at all. What this deliberately does NOT protect is the very first
+// header a joining machine sees — a join is trust-on-first-use by nature, and
+// the enrolment code's sequence floor is that path's defence.
+
+/** One stable string per header content. Key order must not matter — a header
+ *  that has crossed JSON.parse can come back in any order — and the proof and
+ *  the biometric wrapping are excluded by construction: the first cannot cover
+ *  itself, the second never leaves the machine that made it. */
+const canonJson = (x) => {
+  if (Array.isArray(x)) return `[${x.map(canonJson).join(',')}]`;
+  if (x && typeof x === 'object') {
+    return `{${Object.keys(x)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonJson(x[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(x ?? null);
+};
+
+export function headerCanonical(meta) {
+  return canonJson({
+    format: meta.format,
+    created: meta.created ?? null,
+    gen: meta.gen ?? 0,
+    changedAt: meta.changedAt ?? null,
+    kdf: meta.kdf,
+    wraps: {
+      password: meta.wraps?.password ?? null,
+      recovery: meta.wraps?.recovery ?? null,
+    },
+  });
+}
+
+export async function sealHeaderProof(vaultKey, meta) {
+  return seal(vaultKey, utf8(headerCanonical(meta)), aadHeader());
+}
+
+/** True only if this header, exactly as it stands, was sealed by the holder of
+ *  this vault key. Never throws: a proof that will not open is simply false. */
+export async function verifyHeaderProof(vaultKey, meta) {
+  const proof = meta?.proof;
+  if (!proof?.ct || !proof?.n) return false;
+  try {
+    return fromUtf8(await open(vaultKey, proof, aadHeader())) === headerCanonical(meta);
+  } catch {
+    return false;
   }
 }
 

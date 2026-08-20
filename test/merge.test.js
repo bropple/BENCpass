@@ -109,6 +109,32 @@ test('divergent revisions with no recorded ancestor are treated as a conflict', 
   assert.equal(r.actions.get('a'), CONFLICT);
 });
 
+test('with no ancestor, a strictly newer live remote wins and the local copy is parked', () => {
+  // Ids are minted exactly once, so a HIGHER revision at our own id with no
+  // recorded ancestor can only descend from a push of ours whose 200 never
+  // landed (lost on the wire, or the read-back after it was refused). Keeping
+  // the local copy here and superseding it above the remote re-pushed a STALE
+  // version over a newer edit — on the other machine that arrived as a live
+  // password reverting to a value it had already moved past (B:revert, found
+  // by the hostile model). The remote must be adopted; the local copy must be
+  // parked, not dropped, and nothing pushed for this id.
+  const r = merge({ local: [env('a', 1)], remote: [env('a', 2)], syncedRev: {} });
+  assert.equal(r.actions.get('a'), CONFLICT);
+  assert.equal(r.envelopes.get('a').rev, 2, 'the newer remote must be adopted');
+  assert.equal(r.conflicts[0].parked.rev, 1, 'the local copy is parked for a person');
+  assert.equal(r.syncedRev.get('a'), 2, 'the adopted revision becomes the ancestor');
+  assert.deepEqual(r.toPush, [], 'nothing is pushed — pushing the stale copy was the bug');
+
+  // The tombstone guards are unmoved by this: a local deletion is never
+  // fast-forwarded away by a live remote, ancestor or no ancestor…
+  const tomb = merge({ local: [env('a', 1, true)], remote: [env('a', 2)], syncedRev: {} });
+  assert.equal(tomb.envelopes.get('a').deleted, true, 'the local tombstone must hold');
+  // …and a newer remote tombstone still wins with the local edit parked.
+  const del = merge({ local: [env('a', 1)], remote: [env('a', 2, true)], syncedRev: {} });
+  assert.equal(del.envelopes.get('a').deleted, true);
+  assert.equal(del.conflicts[0].parked.rev, 1, 'the losing edit is parked, not dropped');
+});
+
 test('a whole sync round settles', () => {
   const r = merge({
     local: [env('a', 2), env('b', 1), env('c', 9)],

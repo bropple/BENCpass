@@ -176,6 +176,16 @@
     <button class="btn" id="lock-btn">Lock</button>
   </header>
 
+  <!-- Vault health, said where a person will see it. Two facts land here:
+       records that would not open at the last unlock (damaged or served
+       tampered — they are skipped, never silently dropped), and parked
+       conflict copies the safety cap had to discard unseen. Both are the kind
+       of thing that is worse unsaid. -->
+  <div class="health" id="health" role="alert" hidden>
+    <span id="health-text"></span>
+    <button type="button" class="btn btn-sm" id="health-ack" hidden>Dismiss</button>
+  </div>
+
   <main class="split">
     <nav class="list-pane">
       <ol class="list" id="list"></ol>
@@ -484,6 +494,46 @@
           <button type="button" class="btn btn-sm" id="s-recovery-cancel">Cancel</button>
         </div>
         <p class="settings-note" id="s-recovery-error"></p>
+      </form>
+
+      <div class="setting">
+        <div class="setting-text">
+          <span class="setting-name">Master password</span>
+          <span class="setting-note" id="s-pwchange-note">
+            Re-wraps the vault key under a new password — no record is re-encrypted,
+            your recovery code and fingerprint keep working, and other machines
+            switch the first time you unlock them with the new password. Until a
+            machine switches, it still opens with the old one, and so does any old
+            backup file: changing the password does not rewrite history.
+          </span>
+        </div>
+        <div class="setting-actions">
+          <button type="button" class="btn btn-sm" id="s-pwchange-btn">Change</button>
+        </div>
+      </div>
+
+      <!-- Proving the current secret is not ceremony: the vault key is a
+           non-extractable CryptoKey once unlocked, so a new wrapping cannot be
+           made without deriving the key again — from the current password, or
+           from the recovery code for someone who came in that way and would
+           otherwise be stuck on it for ever. -->
+      <form class="bio-confirm" id="s-pwchange-form" hidden autocomplete="off">
+        <div class="input-row">
+          <input type="password" id="s-pwchange-cur"
+                 placeholder="Current master password, or your recovery code"
+                 autocomplete="current-password">
+        </div>
+        <div class="input-row">
+          <input type="password" id="s-pwchange-new" placeholder="New master password"
+                 autocomplete="new-password">
+        </div>
+        <div class="input-row">
+          <input type="password" id="s-pwchange-new2" placeholder="New master password, again"
+                 autocomplete="new-password">
+          <button type="submit" class="btn btn-sm">Change</button>
+          <button type="button" class="btn btn-sm" id="s-pwchange-cancel">Cancel</button>
+        </div>
+        <p class="settings-note" id="s-pwchange-error" role="status"></p>
       </form>
 
       <h3 class="settings-group">Your data</h3>

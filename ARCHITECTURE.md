@@ -388,6 +388,30 @@ that are otherwise identical.
 **Anti-rollback:** the client stores the highest `seq` it has ever seen and
 **refuses any response with a lower one**. Without this a LAN attacker can serve
 you last month's vault — including a password you have since rotated away from.
+A machine joining for the first time has seen nothing, so its floor arrives on
+the enrolment code instead: the minting machine appends its own high-water mark
+(`<code>.<floor>`, floor in the recovery-code alphabet), the joining machine
+peels it off before the code touches the network and adopts it as `highestSeq`,
+and a server rolled back below the mint moment is refused at the join (§10).
+
+**Read-back after every push:** a `200` to `PUT /v1/records` is a claim, and it
+is checked — one delta pull from just under the accepted sequence must serve
+the pushed envelopes back byte-identical (or already superseded by a higher
+revision). A server that said `200` while storing nothing fails the comparison
+and the sync is reported failed with nothing marked as synced, so the same
+envelopes go up again next round. What this does and does not prove is stated
+in §10: it catches a dropped write, not a server that echoes from memory and
+then discards.
+
+**The header has a generation.** `meta.gen` counts master-password changes, and
+the whole header is sealed under the vault key itself (`meta.proof`), which the
+server does not hold. A sync that finds the server at a higher generation parks
+the header unverified — a background sync may be locked and can prove nothing —
+and the next unlock, with a typed password in hand, unwraps it, checks the
+proof (a replayed old header re-labelled with a higher generation fails it),
+checks the key actually opens this vault's records, and only then adopts. This
+is how a password change made on one machine reaches the others without the
+server ever being trusted about it.
 
 **Server-side snapshots** on every write, keep N (default 50). This is the
 backstop for a client bug that pushes garbage, and it is cheap.
@@ -690,42 +714,68 @@ The point of this section is that a written limitation is not a surprise. Each
 item is something the code does not defend against, or defends against only
 partly. Format: what it is, what it costs, why it is not closed, and what would
 close it. The sync engine's positive defences — per-record revisions, causal
-merge, `guardRollback`, the per-record rollback report, the AAD-bound tombstone
-bit, brittle-unlock tolerance, the locked-conflict refusal on every merge path,
-and the flipped-flag reconciliation in `unlock`/`applyEnvelopes` — are covered
-elsewhere and by the model test (`test/model.test.js`) and the deterministic
-hostile tests (`test/hostile.test.js`). What follows is the residue.
+merge, `guardRollback`, the per-record rollback report, read-back verification
+of every push, the enrolment code's sequence floor, the AAD-bound tombstone
+bit, the vault-key-sealed header proof, brittle-unlock tolerance, the
+locked-conflict refusal on every merge path, and the flipped-flag
+reconciliation in `unlock`/`applyEnvelopes` — are covered elsewhere and by the
+model test (`test/model.test.js`), the deterministic hostile tests
+(`test/hostile.test.js`) and the integration tests (`test/sync.test.js`). What
+follows is the residue.
 
-**A dropped push the server claims it accepted.** A malicious or buggy server
-can return `200` to a `PUT /v1/records` while storing nothing, advancing its
-sequence so the next pull does not trip `guardRollback`. The write silently
-evaporates. *Cost:* a record or edit the user made reaches neither the server
-nor any other machine, while the origin machine believes it synced. *Why not
-closed:* the client trusts the server's `200`; end-to-end encryption means the
-server can always claim to hold ciphertext it discarded, and nothing it returns
-is signed by anything the client could check. Over TLS the transport
-authenticates the server, so the realistic actor is the server itself, which a
-self-hosted deployment trusts. *What would close it:* read-back verification
-(re-pull each pushed record and compare `ct`) at the cost of a round-trip per
-sync, or server-signed write receipts. The hardened hostile server exercises
-this (it drops ~15% of pushes while claiming success); invariants B and D still
-hold because a dropped push is pure absence, which is why only A — deliberately
-not required against such a server — is affected.
+Three entries that used to live here are closed and gone: a dropped push the
+server claimed it accepted (closed by read-back verification — what remains of
+it is the first entry below), the missing rollback floor on a freshly joined
+machine (closed by the sequence floor carried on the enrolment code — its
+remainder is the second entry), and the absence of a master-password change
+(built: re-derive, re-wrap the same vault key, republish through the `putMeta`
+compare-and-swap, adopt on other machines behind a vault-key-sealed header
+proof — its one inherent remainder is the third entry).
 
-**A freshly joined machine has no rollback floor.** `guardRollback` and the
-per-record rollback report both compare against state the machine accumulated —
-`highestSeq` and `syncedRev`. A machine joining for the first time has neither,
-so a hostile server can feed it an arbitrarily old but *authentic* version of a
-record, including a pre-rotation password, and it is accepted as current because
-there is nothing to compare it against. *Cost:* a new device can be seeded with
-stale data; invariant B still holds (it never reverts a value *that machine*
-moved past), and an honest server heals it on the next sync, but the join itself
-is trust-on-first-use. *Why not closed:* causal ordering has no absolute floor
-at join time — the first thing a machine sees is, by definition, its baseline.
-*What would close it:* a signed, monotonic high-water-mark the joining machine
-could trust — but the server holds no key and is the very party not trusted, so
-this needs an out-of-band channel (e.g. the enrolment code carrying a sequence
-floor).
+**Durable storage cannot be proven from here.** Every push is now read back —
+one delta pull from just under the accepted sequence — and a server that
+answered `200` while storing nothing fails the comparison and the sync is
+reported failed with nothing marked as synced. That closes the real failure
+class: a buggy handler, a full disk, a proxy that ate the body. What it cannot
+close: a server that keeps the pushed bytes just long enough to answer the
+read-back and then discards them passes the check. *Cost:* against that server
+this machine believes a write landed that later machines will never see.
+*Why not closed:* nothing the server returns is signed by anything the client
+can verify, so no client-side check can distinguish "stored" from "echoed";
+this is inherent to an untrusted store. *What would close it:* server-signed
+write receipts checkable by other devices — a trust root the design
+deliberately does not have. The backstop is unchanged: the next machine's pull
+comes up short, and what it is then served is refused by the guards above.
+
+**The rollback floor is only as fresh as the code that carried it.** An
+enrolment code minted by an enrolled machine now carries that machine's
+high-water mark (`<code>.<floor>`, floor in the recovery-code alphabet), and
+the joining machine adopts it as `highestSeq` before its first pull — a server
+rolled back below the mint moment is refused at the join. *Cost:* the window
+between the mint and the join is still open: a hostile server can serve the
+joining machine any state at or above the floor, so staleness is bounded by
+the floor, not eliminated. The server's own bootstrap code (printed while zero
+devices exist) carries no floor, because the machine that types it creates the
+vault rather than joining one. *Why not closed further:* the floor is minted
+from the minting machine's knowledge, and no machine knows the future; join
+remains trust-on-first-use above the floor. The vault header a joiner adopts
+is likewise TOFU — a wrong one merely fails to unwrap — and the header proof
+only protects machines that already hold a generation to compare against.
+
+**A master-password re-wrap does not rewrite history.** Changing the master
+password re-wraps the vault key; it deliberately does not rotate it, which is
+what keeps the change O(1) and strands nobody. *Cost:* every copy of the OLD
+header — an exported backup file, a machine that has not yet unlocked with the
+new password — still opens with the old password. A machine adopts the new
+header the first time it unlocks with the new password (proven against the
+vault-key-sealed header proof, so a replayed old header re-labelled with a
+higher generation is refused); until then the old password keeps opening that
+machine, and the UI says so. Two machines that change the password
+concurrently each keep their own generation and do not reconcile automatically
+— the next change, made on one machine, settles it. *Why not closed:* closing
+it means rotating the vault key and re-sealing every record on every machine,
+which is a different and far heavier feature; the copy in Settings states the
+actual behaviour instead of implying rotation.
 
 **The server learns metadata it cannot read.** Per-record envelopes expose the
 record count, each record's revision number, ciphertext sizes, and the timing
@@ -743,7 +793,10 @@ parameters and the wrapped vault key, because a joining machine needs them.
 the speed the Argon2id parameters allow. *Why not closed:* a second machine
 cannot bootstrap without the header. *What would close it:* nothing, short of
 not supporting multi-machine sync; the mitigation is master-password entropy and
-the KDF cost, both already in place and stated in the README.
+the KDF cost, both already in place and stated in the README. A password change
+republishes the header, so the target tracks the CURRENT password; old
+snapshots of the store remain attackable against old passwords, which is one
+more reason the re-wrap entry above is stated plainly.
 
 **Selective denial of a record to a joining machine.** A hostile server can
 serve a joining machine a `deleted`-flag-flipped or undecryptable envelope for a
@@ -752,20 +805,13 @@ files it as `damaged`, so the record never lands. *Cost:* availability — that
 one record is withheld from that machine for as long as the server misbehaves.
 Integrity and confidentiality are intact. *Why not closed:* the refusal is the
 right call; adopting a contradictory or unreadable envelope would be worse.
-Availability against a malicious server is out of scope. *What would close it:*
-nothing at the client; an honest server never does this.
-
-**No master-password change and no start-over.** The product cannot change the
-master password or wipe-and-restart a vault in place (the manager's gate copy
-now says so plainly, rather than pointing at a "freshly created vault" route
-that was never built). *Cost:* a user who wants a new master password must
-export, remove the extension's stored vault out of band, and set up fresh —
-there is no guided path, and the recovery-code unlock deliberately does not
-change the password. *Why not closed:* out of scope for this pass by decision.
-*What would close it:* a password-change flow that re-derives the master key,
-re-wraps the vault key, and republishes the header through the existing
-`putMeta` compare-and-swap — the sequence-checked path that exists for exactly
-this and is, today, the reason `putMeta` takes an `ifMatch`.
+Availability against a malicious server is out of scope. *Mitigated:* the
+person is now told rather than left counting — records that would not open at
+unlock are named in a banner across the manager ("skipped, not deleted", with
+what that means), and a sync refused for tampering or rollback is held by the
+background and shown wherever sync status is shown, instead of evaporating
+with the five-minute tick that found it. *What would close it:* nothing at the
+client; an honest server never does this.
 
 **Parked-conflict flood on a permanently locked vault.** A server that serves a
 freshly sealed conflicting envelope on every poll defeats the `id:rev:nonce`
@@ -773,10 +819,13 @@ dedup mark by construction. A vault that never unlocks parks each one; the
 `PARKED_MAX` (256) cap then discards the oldest. *Cost:* under a sustained
 attack on a vault that is never unlocked, the oldest parked conflicts are
 dropped before a person ever sees them. *Why not closed (fully):* the cap is the
-only thing bounding disk and memory here; something must give. *Mitigation:* the
-cap keeps the newest — most relevant — disagreements, and a single unlocked sync
-forks and clears the queue. The `lockStreak` operation in the model exercises
-the accumulation and dedup; the eviction itself is bounded by design.
+only thing bounding disk and memory here; something must give. *Mitigation:*
+the cap keeps the newest — most relevant — disagreements, and a single unlocked
+sync forks and clears the queue. Eviction is no longer silent: every discard is
+counted (`parkedDropped`, persisted), and the manager says how many conflict
+copies were dropped unseen until the person dismisses it. The `lockStreak`
+operation in the model exercises the accumulation and dedup; the eviction
+itself is bounded by design.
 
 ### Test-coverage gaps (not source defects)
 
@@ -787,14 +836,14 @@ per-call randomness, not as a stable per-device split. *What would close it:*
 wrap each machine's client so requests carry a device tag and let the hostile
 server branch on it.
 
-**Device mint/revoke and the post-first-publish meta path are covered in Go, not
-in the JS model.** The in-memory model server implements neither a device table
-nor a second header publish (`shareHeader` writes only when the server holds no
-header, and there is no password-change feature to call `putMeta` again). Those
-paths are exercised by the Go server tests (`server/api_test.go`) and the
-skip-gated integration tests in `test/sync.test.js`, not by the property model.
-*What would close it:* a device table and a header-republish operation in the
-model server.
+**Device mint/revoke and header republish are covered in Go and integration,
+not in the JS model.** The in-memory model server implements no device table,
+and its machines share one header generation, so the password-change republish
+and the pending-header adoption are exercised by the Go server tests
+(`server/api_test.go`), the skip-gated integration tests in `test/sync.test.js`
+(including a full change-adopt round trip through the real binary) and the
+deterministic vault tests, not by the property model. *What would close it:* a
+device table and a password-change operation in the model.
 
 **One merge guard rests on unit coverage alone.** The clause that stops a
 higher-revision *live* envelope fast-forwarding over a local tombstone

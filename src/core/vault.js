@@ -16,6 +16,8 @@ import {
   unwrapVaultKey,
   sealRecord,
   openRecord,
+  sealHeaderProof,
+  verifyHeaderProof,
 } from './crypto.js';
 import { normalise as normaliseCode, CODE_LENGTH } from './recovery.js';
 import { toB64, fromB64 } from './bytes.js';
@@ -119,6 +121,35 @@ export class Vault {
     // bytes twice. The nonce is fresh per seal, so id:rev:nonce names exactly
     // one envelope ever.
     this.forkedMarks = [];
+
+    /**
+     * How many parked envelopes the PARKED_MAX cap has ever discarded unseen.
+     *
+     * The cap is what bounds disk and memory against a server that mints a
+     * fresh conflicting envelope on every poll of a locked vault, and it is
+     * staying — but an eviction is a promise ("kept") being quietly broken,
+     * and this project does not do quiet. The count survives persistence and
+     * is shown to the person until they acknowledge it.
+     */
+    this.parkedDropped = 0;
+
+    /**
+     * A vault header from the server, waiting for a password that can prove
+     * it. After a master password change on another machine, the server holds
+     * a header this machine's password no longer matches; a background sync
+     * (which holds no key and can verify nothing) parks it HERE rather than
+     * adopting it, and the next unlock — the moment a person types a password
+     * — is when it is proven and adopted, or refused. Never trusted at rest:
+     * everything in it is checked at adoption time.
+     */
+    this.pendingMeta = null;
+
+    /**
+     * True when this vault's header changed outside the ordinary write paths
+     * (a password change, a pending-header adoption), so the caller knows to
+     * persist. Consumed by whoever checks it.
+     */
+    this.metaUpdated = false;
   }
 
   get locked() {
@@ -136,6 +167,12 @@ export class Vault {
     const meta = {
       format: FORMAT,
       created: now,
+      // Which header this is, counted from 0. Bumped by every master password
+      // change; a machine adopts a server header only when the server's gen is
+      // above its own AND the header's proof (below) verifies under the vault
+      // key. Without a counter there is no way to tell "newer wrapping" from
+      // "the old wrapping served late", which is the §4 stale-header attack.
+      gen: 0,
       kdf: { ...kdf, salt: toB64(salt) },
       wraps: {
         password: await wrapVaultKey(vaultKeyBytes, masterKey, 'password'),
@@ -147,6 +184,10 @@ export class Vault {
 
     const v = new Vault(meta);
     v.#key = await importKey(vaultKeyBytes, { extractable: false });
+    // The header sealed under the vault key itself, generation included, so a
+    // machine offered this header later can check the vault key's holder
+    // really published it. See crypto.js.
+    meta.proof = await sealHeaderProof(v.#key, meta);
     return v;
   }
 
@@ -174,6 +215,8 @@ export class Vault {
     );
     v.parked = Array.isArray(persisted.parked) ? persisted.parked : [];
     v.forkedMarks = Array.isArray(persisted.forkedMarks) ? persisted.forkedMarks : [];
+    v.parkedDropped = Number.isFinite(persisted.parkedDropped) ? persisted.parkedDropped : 0;
+    v.pendingMeta = persisted.pendingMeta ?? null;
     return v;
   }
 
@@ -184,6 +227,8 @@ export class Vault {
       syncedRev: Object.fromEntries(this.syncedRev),
       parked: this.parked,
       forkedMarks: this.forkedMarks,
+      parkedDropped: this.parkedDropped,
+      pendingMeta: this.pendingMeta,
     };
   }
 
@@ -231,8 +276,7 @@ export class Vault {
    * place would take this machine's own fingerprint unlock with it.
    */
   get portableMeta() {
-    const { wraps, ...rest } = this.meta;
-    return { ...rest, wraps: { ...wraps, biometric: null } };
+    return { ...this.meta, wraps: { ...this.meta.wraps, biometric: null } };
   }
 
   /**
@@ -255,8 +299,174 @@ export class Vault {
   async unlock(password) {
     const { kdf } = this.meta;
     const masterKey = await deriveMasterKey(password, fromB64(kdf.salt), kdf);
-    const vaultKeyBytes = await unwrapVaultKey(this.meta.wraps.password, masterKey);
+    let vaultKeyBytes;
+    try {
+      vaultKeyBytes = await unwrapVaultKey(this.meta.wraps.password, masterKey);
+    } catch (err) {
+      // The local wrapping refused this password. If a newer header is waiting
+      // (the master password was changed on another machine), the password the
+      // person just typed may be the NEW one — the only moment it can be
+      // proven is now, while it is in hand. Adoption does every check itself;
+      // if it declines, the honest answer is still the original refusal.
+      if (await this.#adoptPendingHeader(password)) return;
+      throw err;
+    }
     await this.unlockWithVaultKey(vaultKeyBytes);
+  }
+
+  /**
+   * Try to adopt the parked server header using the password just typed.
+   *
+   * Everything is verified here, none of it earlier, because a locked machine
+   * holds no key and a header at rest is just the server's claim:
+   *
+   *  1. the typed password must unwrap the pending header's password wrapping
+   *     (a wrong password and a fabricated header fail identically);
+   *  2. the header's generation must still be above this machine's — a change
+   *     made locally since the stash outranks it;
+   *  3. the header's proof must open under the unwrapped vault key and match
+   *     the header exactly as served (see crypto.js) — this is what stops a
+   *     replayed old header being re-labelled with a higher generation to
+   *     bring a rotated-away password back;
+   *  4. the key must actually open this vault's records — a header from some
+   *     OTHER vault, valid in itself, must not be grafted onto this one.
+   *
+   * Only then does the header land, keeping this machine's own biometric
+   * wrapping (it wraps the same vault key and never travels). The old
+   * password stops opening THIS machine at that moment — though any machine
+   * or backup still holding the old header opens with the old password until
+   * it adopts too, because a re-wrap does not rotate the vault key.
+   */
+  async #adoptPendingHeader(password) {
+    const p = this.pendingMeta;
+    if (!p?.wraps?.password || !p.kdf?.salt) return false;
+    if (Number(p.gen ?? 0) <= Number(this.meta.gen ?? 0)) return false;
+
+    let vaultKeyBytes;
+    try {
+      const masterKey = await deriveMasterKey(password, fromB64(p.kdf.salt), p.kdf);
+      vaultKeyBytes = await unwrapVaultKey(p.wraps.password, masterKey);
+    } catch {
+      return false;
+    }
+
+    const key = await importKey(vaultKeyBytes, { extractable: false });
+    if (!(await verifyHeaderProof(key, p))) {
+      // The wrap opened, but nobody holding the vault key sealed this header at
+      // this generation — a replay or a forgery. Dropped so it is not offered
+      // again; an honest newer header would be re-stashed by the next sync.
+      this.pendingMeta = null;
+      return false;
+    }
+
+    await this.unlockWithVaultKey(vaultKeyBytes);
+    if (this.envelopes.size && this.damaged.length === this.envelopes.size) {
+      // Not one existing record opens under this key: whatever vault that
+      // header belongs to, it is not this one. Refuse the graft and re-lock.
+      this.lock();
+      return false;
+    }
+
+    this.meta = { ...p, wraps: { ...p.wraps, biometric: this.meta.wraps?.biometric ?? null } };
+    this.pendingMeta = null;
+    this.metaUpdated = true;
+    return true;
+  }
+
+  /**
+   * Park a header the server holds at a higher generation than ours.
+   *
+   * Called from the sync path, which may be locked and so can verify nothing —
+   * hence "park", not "adopt". Refuses on shape alone (adoption re-checks
+   * everything): wrong format, no password wrapping, no proof, or a generation
+   * not above ours. One slot; a newer stash replaces an older one.
+   */
+  stashHeader(meta) {
+    const clean = Vault.adoptMeta(meta);
+    if (clean?.format !== FORMAT) return false;
+    if (!clean.wraps?.password || !clean.proof) return false;
+    if (Number(clean.gen ?? 0) <= Number(this.meta.gen ?? 0)) return false;
+    this.pendingMeta = clean;
+    return true;
+  }
+
+  /**
+   * Change the master password: re-derive, re-wrap the SAME vault key, bump
+   * the header generation, and seal the new header under the vault key.
+   *
+   * Nothing else moves. No record is re-sealed (the vault key is unchanged),
+   * the biometric wrapping still opens (same key), and the recovery code kept
+   * on this machine still opens (its wrapping is untouched). What a re-wrap
+   * deliberately does NOT do is rotate the vault key — an old header, wherever
+   * it survives (a backup, a machine that has not adopted yet), still opens
+   * with the old password. Say that where a person can read it.
+   *
+   * Fail-safe by construction: the new wrapping is built and read back BEFORE
+   * anything is replaced, and the header is then swapped in one assignment.
+   * There is no intermediate state in which neither password opens the vault.
+   *
+   * The caller persists, and publishes by syncing: the sync path pushes a
+   * header whose generation is above the server's through the putMeta
+   * compare-and-swap that exists for exactly this.
+   */
+  async changeMasterPassword(currentPassword, newPassword, now = Date.now()) {
+    if (!newPassword) throw new Error('a new master password is required');
+    const { kdf } = this.meta;
+    const masterKey = await deriveMasterKey(currentPassword, fromB64(kdf.salt), kdf);
+    const vaultKeyBytes = await unwrapVaultKey(this.meta.wraps.password, masterKey);
+    await this.#rewrapPassword(vaultKeyBytes, newPassword, now);
+  }
+
+  /**
+   * The same change, proven by the recovery code instead of the password.
+   *
+   * This is the way out of the trap the recovery flow used to leave: someone
+   * who forgot the master password could open the vault with the code but
+   * could never stop needing it. Producing the vault key is producing the
+   * vault key; which wrapping it came through does not change what the person
+   * has proven.
+   */
+  async changeMasterPasswordWithRecovery(code, newPassword, now = Date.now()) {
+    if (!newPassword) throw new Error('a new master password is required');
+    const wrap = this.meta.wraps?.recovery;
+    if (!wrap) throw new Error('this vault has no recovery wrapping');
+    const cleaned = normaliseCode(code);
+    const recoveryKey = await deriveMasterKey(cleaned, fromB64(wrap.salt), this.meta.kdf);
+    const vaultKeyBytes = await unwrapVaultKey(wrap, recoveryKey);
+    await this.#rewrapPassword(vaultKeyBytes, newPassword, now);
+  }
+
+  async #rewrapPassword(vaultKeyBytes, newPassword, now) {
+    // A fresh salt, not the old one: the KDF parameters carry over, but a salt
+    // reused across passwords lets one precomputation serve both.
+    const salt = newSalt();
+    const { name, memoryKiB, iterations, parallelism } = this.meta.kdf;
+    const params = { name, memoryKiB, iterations, parallelism };
+    const newMaster = await deriveMasterKey(newPassword, salt, params);
+    const wrap = await wrapVaultKey(vaultKeyBytes, newMaster, 'password');
+
+    // Read the new wrapping back before the old one is let go. A wrapping that
+    // cannot be opened again is a vault openable by neither password — the
+    // worst outcome this project has — so it is checked, not assumed.
+    const check = await unwrapVaultKey(wrap, newMaster);
+    if (check.length !== vaultKeyBytes.length || check.some((b, i) => b !== vaultKeyBytes[i])) {
+      throw new Error('the new wrapping failed its read-back check — nothing was changed');
+    }
+
+    const next = {
+      ...this.meta,
+      kdf: { ...params, salt: toB64(salt) },
+      gen: Number(this.meta.gen ?? 0) + 1,
+      changedAt: now,
+      wraps: { ...this.meta.wraps, password: wrap },
+    };
+    const key = await importKey(vaultKeyBytes, { extractable: false });
+    next.proof = await sealHeaderProof(key, next);
+
+    // One assignment: the vault is never part old header, part new.
+    this.meta = next;
+    this.pendingMeta = null;
+    this.metaUpdated = true;
   }
 
   /**
@@ -615,8 +825,11 @@ export class Vault {
       // construction, and a locked machine parks each one and persists the
       // queue: unbounded disk and memory for as long as the vault stays
       // locked. Oldest go first — the newest disagreement is the one still
-      // worth showing a person.
+      // worth showing a person. Counted, never silent: every envelope this
+      // line discards was promised as "kept", and the person is told the
+      // promise was broken rather than left to believe it held.
       if (this.parked.length > Vault.PARKED_MAX) {
+        this.parkedDropped += this.parked.length - Vault.PARKED_MAX;
         this.parked = this.parked.slice(-Vault.PARKED_MAX);
       }
     }

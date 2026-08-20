@@ -15,6 +15,10 @@ import {
   canonical,
   PROTOCOL,
   joinVault,
+  encodeFloor,
+  decodeFloor,
+  packEnrolCode,
+  splitEnrolCode,
 } from '../src/core/sync.js';
 
 // These run against the real Go binary rather than a stub. The point is to
@@ -868,6 +872,90 @@ test('joining a server with no vault on it says that, rather than failing to unl
   );
 });
 
+// ---- the enrolment code's sequence floor ------------------------------------
+//
+// A joining machine has no history, so trust-on-first-use used to be unbounded:
+// a rolled-back server could seed it with an arbitrarily old but authentic copy
+// of the vault. The floor rides on the enrolment code — the one channel the
+// server never touches — and becomes the join's highestSeq.
+
+test('a floor round-trips through the code, and a bare code means no floor', () => {
+  for (const n of [0, 1, 30, 31, 32, 961, 12345, 999999, 2 ** 40]) {
+    assert.equal(decodeFloor(encodeFloor(n)), n, `floor ${n} did not round-trip`);
+  }
+
+  const packed = packEnrolCode('k3J9fJq2QxYz', 12345);
+  assert.match(packed, /^k3J9fJq2QxYz\.[A-Z2-9]+$/, 'the suffix must use the recovery alphabet');
+  assert.deepEqual(splitEnrolCode(packed), { code: 'k3J9fJq2QxYz', floor: 12345 });
+
+  // A floor of zero is no floor: nothing to vouch for, nothing appended.
+  assert.equal(packEnrolCode('abc', 0), 'abc');
+  assert.deepEqual(splitEnrolCode('abc'), { code: 'abc', floor: 0 });
+
+  // Case slack on the suffix, because it is typed: the recovery alphabet is
+  // upper case, and a lower-cased paste should not read as a different floor.
+  assert.equal(splitEnrolCode(`abc.${encodeFloor(500).toLowerCase()}`).floor, 500);
+});
+
+test('a state seeded with the floor refuses a server below it on the first pull', async () => {
+  const rolledBack = {
+    getMeta: async () => ({ meta: null, seq: 3 }),
+    putMeta: async () => 4,
+    getRecords: async () => ({ seq: 3, records: [] }),
+    putRecords: async () => ({ status: 200, seq: 4 }),
+  };
+  const vault = await mkVault();
+  const state = emptySyncState(10); // the code vouched for at least 10
+  await assert.rejects(
+    () => syncOnce(vault, rolledBack, state),
+    (err) => err instanceof SyncError && err.code === 'rollback',
+    'a first pull below the floor must be refused as a rollback, not adopted as the baseline',
+  );
+});
+
+test('joining a server rolled back below the code floor is refused at the door', { ...skip }, async (t) => {
+  const { a: aClient, b: bClient } = await pair(t);
+
+  // Machine one syncs a vault; the server is at some small sequence.
+  const first = await mkVault();
+  await first.add({ title: 'Bank', password: 'hunter2' });
+  await syncOnce(first, aClient, emptySyncState());
+
+  // The code claims the vault history is far longer than this server holds —
+  // which is what a code minted before the server was rolled back looks like.
+  await assert.rejects(
+    () => joinVault({ client: bClient, password: 'hunter2', Vault, floor: 1000 }),
+    (err) => err instanceof SyncError && err.code === 'rollback',
+  );
+
+  // With an honest floor the join succeeds, and the floor rides into the state.
+  const second = await joinVault({ client: bClient, password: 'hunter2', Vault, floor: 2 });
+  assert.ok(second, 'an honest floor must not block the join');
+});
+
+test('a packed code enrols against the real server, floor and all', { ...skip }, async (t) => {
+  const { endpoint, code } = await startServer(t);
+  const one = await device(endpoint, 'machine-one', code);
+
+  // Machine one has seen the server at some sequence; the code it hands out
+  // carries that as a floor. The server only ever sees the bare part.
+  const minted = await one.mintCode();
+  const packed = packEnrolCode(minted.code, 7);
+  assert.ok(packed.includes('.'), 'a non-zero floor must be visible in the code');
+
+  const { deviceId, key, floor } = await SyncClient.enrol({
+    endpoint,
+    code: packed,
+    name: 'machine-two',
+  });
+  assert.equal(floor, 7, 'the joining side must recover the floor the minter wrote');
+
+  // And the credential is real: a signed request with it is accepted.
+  const two = new SyncClient({ endpoint, deviceId, key });
+  const { seq } = await two.getRecords(0);
+  assert.equal(typeof seq, 'number');
+});
+
 test('the header is published once and not overwritten afterwards', { ...skip }, async (t) => {
   const { a: aClient, b: bClient } = await pair(t);
 
@@ -888,6 +976,48 @@ test('the header is published once and not overwritten afterwards', { ...skip },
     published,
     'a local biometric enrolment was pushed to the server',
   );
+});
+
+test('a master password change reaches the other machine through the server', { ...skip }, async (t) => {
+  // Machine A changes the password. The next sync republishes the header
+  // through the putMeta compare-and-swap; machine B's next sync — locked or
+  // not, it cannot verify anything — parks the newer header, and B's first
+  // unlock with the NEW password proves and adopts it. The vault key never
+  // changes, so records need nothing.
+  const { a: aClient, b: bClient } = await pair(t);
+
+  const a = await mkVault();
+  const aState = emptySyncState();
+  const id = await a.add({ title: 'Bank', password: 'secret1' });
+  await syncOnce(a, aClient, aState);
+
+  const b = await joinVault({ client: bClient, password: 'hunter2', Vault });
+  const bState = emptySyncState();
+  await syncOnce(b, bClient, bState);
+
+  await a.changeMasterPassword('hunter2', 'correct horse');
+  await syncOnce(a, aClient, aState); // republishes the gen-1 header
+
+  const onServer = (await bClient.getMeta()).meta;
+  assert.equal(onServer.gen, 1, 'the server must hold the new header');
+
+  // B syncs locked — the exact state a background sync runs in.
+  b.lock();
+  const res = await syncOnce(b, bClient, bState);
+  assert.equal(res.headerPending, true, 'the sync must report the parked header');
+
+  // The new password opens B and switches it; the old one stops.
+  await b.unlock('correct horse');
+  assert.equal(b.meta.gen, 1);
+  assert.equal(b.get(id).password, 'secret1');
+  b.lock();
+  await assert.rejects(() => b.unlock('hunter2'), (err) => err.code === 'unwrap-failed');
+
+  // And a machine joining fresh from here on gets the new header directly.
+  const c = await joinVault({ client: bClient, password: 'correct horse', Vault });
+  const cState = emptySyncState();
+  await syncOnce(c, bClient, cState);
+  assert.equal(c.get(id).password, 'secret1');
 });
 
 test('two machines cannot both publish the first header', { ...skip }, async (t) => {

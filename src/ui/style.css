@@ -442,6 +442,22 @@ select { color: var(--text); font: inherit; }
   .setting-actions .btn { flex: 1; }
 }
 
+/* Vault health, across the top of the list where it cannot be missed: records
+   that would not open at the last unlock, and parked conflict copies the cap
+   had to discard. Warning colour, not error red — the vault is usable, and
+   the point is that a person knows, not that the room goes dark. */
+.health {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--warn);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.health span { flex: 1; }
+
 /* Says how an import or export went. Not an error style: it carries "42 added"
    as often as it carries a refusal, and it colours itself when it is the latter. */
 .settings-note { color: var(--text-dim); font-size: 13px; margin-top: 12px; min-height: 1.2em; }

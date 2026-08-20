@@ -715,3 +715,215 @@ test('a refused batch leaves the vault readable', async () => {
   assert.doesNotThrow(() => v.list());
   assert.equal(v.get(good), undefined, 'half the refused batch was applied anyway');
 });
+
+// ---- changing the master password --------------------------------------------
+//
+// A re-wrap of the same vault key: no record is re-sealed, the biometric and
+// recovery wrappings still open, and the header generation moves so other
+// machines can tell newer from replayed. Fail-safe is the binding requirement:
+// no reachable state may leave the vault openable by neither password.
+
+test('changing the master password: new opens, old refuses, records intact', async () => {
+  const v = await mk();
+  const id = await v.add({ title: 'BENCO', username: 'ben', password: 'secret1' });
+  const oldSalt = v.meta.kdf.salt;
+
+  await v.changeMasterPassword('hunter2', 'correct horse');
+  assert.equal(v.meta.gen, 1, 'the header generation must move');
+  assert.notEqual(v.meta.kdf.salt, oldSalt, 'a new password gets a new salt');
+
+  v.lock();
+  await assert.rejects(() => v.unlock('hunter2'), (e) => e.code === 'unwrap-failed');
+  await v.unlock('correct horse');
+  assert.equal(v.get(id).password, 'secret1', 'no record may be touched by a re-wrap');
+});
+
+test('a wrong current password changes nothing, and the vault still opens', async () => {
+  const v = await mk();
+  await v.add({ title: 'BENCO', password: 'secret1' });
+  const before = JSON.stringify(v.meta);
+
+  await assert.rejects(
+    () => v.changeMasterPassword('not the password', 'newpw'),
+    (e) => e.code === 'unwrap-failed',
+  );
+  assert.equal(JSON.stringify(v.meta), before, 'a refused change must leave the header untouched');
+
+  v.lock();
+  await v.unlock('hunter2'); // fail safe: the old password still works
+});
+
+test('the recovery code can prove a password change, and survives it', async () => {
+  const v = await mk();
+  const id = await v.add({ title: 'BENCO', password: 'secret1' });
+  const code = 'ABCDE-FGHJK-MNPQR-STUVW-XYZ23-45678';
+  await v.enrolRecovery('hunter2', code);
+
+  // The person who forgot the master password: in with the code, then a new
+  // password proven by the code alone.
+  await v.changeMasterPasswordWithRecovery(code, 'fresh start');
+
+  v.lock();
+  await v.unlock('fresh start');
+  assert.equal(v.get(id).password, 'secret1');
+
+  // The code itself keeps working — it wraps the same key, untouched.
+  v.lock();
+  await v.unlockWithRecoveryCode(code);
+  assert.equal(v.get(id).password, 'secret1');
+});
+
+test('the biometric wrapping survives a password change', async () => {
+  const v = await mk();
+  const secret = randomBytes(32);
+  await v.enrolBiometric('hunter2', secret);
+
+  await v.changeMasterPassword('hunter2', 'correct horse');
+  assert.ok(v.hasBiometric, 'the second wrapping must not be dropped');
+
+  v.lock();
+  await v.unlockWithBiometricSecret(secret); // same vault key, same secret
+  assert.equal(v.locked, false);
+});
+
+test('another machine adopts the new header at unlock, with the new password', async () => {
+  // Machine A changes the password; machine B holds the old header plus the
+  // new one parked by a (locked, unverifying) sync. B's unlock with the NEW
+  // password is the moment of proof and adoption.
+  const a = await mk();
+  const id = await a.add({ title: 'BENCO', password: 'secret1' });
+
+  const b = Vault.load(a.toJSON()); // same vault on the second machine
+  await a.changeMasterPassword('hunter2', 'correct horse');
+
+  assert.equal(b.stashHeader(a.portableMeta), true, 'the newer header must park');
+
+  // Round-trip through persistence: a parked header must survive a restart.
+  const b2 = Vault.load(JSON.parse(JSON.stringify(b.toJSON())));
+
+  await b2.unlock('correct horse');
+  assert.equal(b2.locked, false);
+  assert.equal(b2.get(id).password, 'secret1');
+  assert.equal(b2.meta.gen, 1, 'the adopted header must carry the new generation');
+  assert.equal(b2.metaUpdated, true, 'the caller must be told to persist');
+  assert.equal(b2.pendingMeta, null);
+
+  // And the old password now refuses on B too.
+  b2.lock();
+  await assert.rejects(() => b2.unlock('hunter2'), (e) => e.code === 'unwrap-failed');
+});
+
+test('until it adopts, the other machine still opens with the old password', async () => {
+  // Stated, not hidden: a re-wrap does not rotate the vault key, so a machine
+  // that has not adopted yet — and any backup of the old header — opens with
+  // the old password. The pending header waits; typing the old password must
+  // not adopt anything.
+  const a = await mk();
+  await a.add({ title: 'BENCO', password: 'secret1' });
+  const b = Vault.load(a.toJSON());
+
+  await a.changeMasterPassword('hunter2', 'correct horse');
+  b.stashHeader(a.portableMeta);
+
+  await b.unlock('hunter2'); // the old password, on the old local header
+  assert.equal(b.locked, false);
+  assert.equal(b.meta.gen ?? 0, 0, 'typing the old password must not adopt the new header');
+  assert.ok(b.pendingMeta, 'the pending header keeps waiting for the new password');
+});
+
+test('a replayed old header cannot be re-labelled with a higher generation', async () => {
+  // The §4 attack, attempted through the adoption channel: after a password
+  // change, a hostile server re-serves the OLD header with its generation
+  // bumped, hoping a machine adopts it and the rotated-away password comes
+  // back. The proof is sealed over the generation, so the re-label breaks it.
+  const a = await mk();
+  const id = await a.add({ title: 'BENCO', password: 'secret1' });
+  const oldHeader = JSON.parse(JSON.stringify(a.portableMeta)); // gen 0, captured
+
+  await a.changeMasterPassword('hunter2', 'correct horse'); // gen 1
+
+  const b = Vault.load({ ...a.toJSON() }); // b is on gen 1 already
+  const forged = { ...oldHeader, gen: 2 }; // the server's lie
+  assert.equal(b.stashHeader(forged), true, 'the stash cannot verify and must accept the shape');
+
+  // The person mistypes the OLD password. It fails the local (gen 1) wrap,
+  // unwraps the forged header — and the proof refuses the re-label.
+  await assert.rejects(() => b.unlock('hunter2'), (e) => e.code === 'unwrap-failed');
+  assert.equal(b.meta.gen, 1, 'the forged header must not land');
+  assert.equal(b.pendingMeta, null, 'a header caught lying is dropped, not retried');
+
+  // Nothing was harmed: the real password still opens, records intact.
+  await b.unlock('correct horse');
+  assert.equal(b.get(id).password, 'secret1');
+});
+
+test('a header from a different vault is refused even when the password matches', async () => {
+  // The attacker runs their own vault whose password they set to a guess of
+  // the user's. If the guess is right the wrap unwraps and the proof verifies
+  // (it is their header, their key) — but their key opens none of THIS vault's
+  // records, and the graft is refused rather than the vault quietly re-keyed.
+  const a = await mk(); // password hunter2
+  await a.add({ title: 'BENCO', password: 'secret1' });
+
+  const foreign = await Vault.create({ password: 'stolen guess', kdf: FAST });
+  const foreignHeader = { ...foreign.portableMeta, gen: 5 };
+  // Re-seal the proof at the claimed generation so it verifies under the
+  // foreign key — the attacker holds that key and can do this.
+  const { sealHeaderProof, importKey } = await import('../src/core/crypto.js');
+  const masterKey = await deriveMasterKey(
+    'stolen guess',
+    fromB64(foreign.meta.kdf.salt),
+    foreign.meta.kdf,
+  );
+  const foreignKeyBytes = await unwrapVaultKey(foreign.meta.wraps.password, masterKey);
+  foreignHeader.proof = await sealHeaderProof(await importKey(foreignKeyBytes), foreignHeader);
+
+  a.lock();
+  assert.equal(a.stashHeader(foreignHeader), true);
+  await assert.rejects(() => a.unlock('stolen guess'), (e) => e.code === 'unwrap-failed');
+  assert.equal(a.locked, true, 'the vault must not come up under a foreign key');
+  assert.equal(a.meta.gen ?? 0, 0, 'the foreign header must not land');
+
+  await a.unlock('hunter2');
+  assert.equal(a.list()[0].password, 'secret1');
+});
+
+test('a fail-safe read-back guards the new wrapping before the old one is dropped', async () => {
+  // The worst outcome in this project is a half-applied change that leaves the
+  // vault openable by neither password. The change path builds and verifies
+  // the new wrapping BEFORE replacing anything and swaps the header in one
+  // assignment — so after any outcome, exactly one of the two passwords opens.
+  const v = await mk();
+  await v.add({ title: 'BENCO', password: 'secret1' });
+
+  await v.changeMasterPassword('hunter2', 'correct horse');
+  const persisted = JSON.parse(JSON.stringify(v.toJSON()));
+
+  // Whatever survives persistence opens with the new password.
+  const back = Vault.load(persisted);
+  await back.unlock('correct horse');
+  assert.equal(back.list()[0].password, 'secret1');
+});
+
+// ---- parked-conflict eviction is counted --------------------------------------
+
+test('parked conflicts evicted by the cap are counted, and the count survives', async () => {
+  const v = await mk();
+  const over = 10;
+  const junk = (i) => ({
+    id: `id-${i}`,
+    rev: 1,
+    deleted: false,
+    n: toB64(randomBytes(12)),
+    ct: toB64(randomBytes(32)),
+  });
+  const batch = [];
+  for (let i = 0; i < Vault.PARKED_MAX + over; i++) batch.push(junk(i));
+  v.park(batch);
+
+  assert.equal(v.parked.length, Vault.PARKED_MAX, 'the cap must hold');
+  assert.equal(v.parkedDropped, over, 'every eviction must be counted');
+
+  const back = Vault.load(JSON.parse(JSON.stringify(v.toJSON())));
+  assert.equal(back.parkedDropped, over, 'the count must survive persistence');
+});

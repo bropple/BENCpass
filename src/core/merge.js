@@ -164,6 +164,31 @@ export function merge({ local, remote, syncedRev }) {
     // Both sides moved since the ancestor — or there is no ancestor and the
     // revisions disagree, which means one was recorded and the other was not.
     // Either way this is a real divergence and is never resolved silently.
+
+    // No ancestor, remote strictly ahead, both live: ids are minted exactly
+    // once, so a higher revision at OUR id can only descend from a push of
+    // ours whose acknowledgement never landed — a 200 lost on the wire, or a
+    // read-back refused after an accepted push. The remote is therefore later
+    // in this record's own lineage than anything we can vouch for. Keeping
+    // the local copy here — the old behaviour — re-pushed a STALE version
+    // superseded above the remote, which re-served an old password to every
+    // other machine: the hostile model caught it as a live password on
+    // machine B reverting to a value B had already moved past, the moment
+    // read-back verification made "accepted but unconfirmed" reachable. So
+    // the remote is adopted, and the local copy is PARKED, not dropped — it
+    // may hold an unpushed edit, and a person decides, exactly as with any
+    // other conflict. (A local tombstone is excluded: a deletion is never
+    // fast-forwarded away, no ancestor or not — the block below keeps it and
+    // parks the live remote instead. A remote tombstone likewise settles
+    // below, where tombstones win and the survivor is parked.)
+    if (b === undefined && !l.deleted && !r.deleted && r.rev > l.rev) {
+      envelopes.set(id, r);
+      nextSynced.set(id, r.rev);
+      conflicts.push({ id, kind: 'edit', local: l, remote: r, parked: l });
+      actions.set(id, CONFLICT);
+      continue;
+    }
+
     if (l.deleted || r.deleted) {
       // A tombstone wins, so a deletion is not undone by an edit racing it.
       // The surviving edit is parked rather than dropped, so the entry can

@@ -239,6 +239,145 @@ test('an undecryptable envelope adopted while locked becomes damaged, never a lo
   assert.ok(b.damaged.includes(id), 'the undecryptable record must be reported as damaged');
 });
 
+test('a push the server claims it accepted but did not store is caught by read-back', async () => {
+  // The server answers 200 and advances its sequence — exactly what an accepted
+  // write looks like — while storing nothing. Before read-back verification the
+  // client marked the record as agreed and the write evaporated silently; now
+  // the read-back finds it missing, the sync fails loudly, and nothing is
+  // marked as synced, so the same envelope is pushed again next round.
+  const server = new MemServer();
+  const { a, b } = await twoMachines();
+  const sa = emptySyncState();
+  const sb = emptySyncState();
+
+  await a.add({ title: 'Bank', password: 'precious' });
+
+  let drop = true;
+  const lying = {
+    getMeta: () => server.getMeta(),
+    putMeta: (m, i) => server.putMeta(m, i),
+    getRecords: (s) => server.getRecords(s),
+    putRecords: async (records, ifMatch) => {
+      if (drop) {
+        drop = false;
+        server.seq++; // the sequence moves exactly as an accepted write would
+        return { status: 200, seq: server.seq };
+      }
+      return server.putRecords(records, ifMatch);
+    },
+  };
+
+  await assert.rejects(
+    () => syncOnce(a, lying, sa),
+    (err) => err instanceof SyncError && err.code === 'dropped-push',
+  );
+
+  // Fail-safe: the ancestor map must not have advanced, so an honest round
+  // afterwards re-pushes the record and it genuinely lands.
+  const res = await syncOnce(a, server, sa);
+  assert.ok(res.pushed >= 1, 'the dropped record must be pushed again, not marked as agreed');
+  await syncOnce(b, server, sb);
+  assert.ok(
+    b.list().some((r) => r.password === 'precious'),
+    'the record reaches the second machine once the server is honest',
+  );
+});
+
+test('an accepted push whose read-back was refused must not later steamroll a newer edit', async () => {
+  // The B:revert the hostile model found once read-back existed. A's push is
+  // ACCEPTED and stored, but the read-back after it is refused (a lowered
+  // sequence), so the sync throws and A never confirms the ancestor. B then
+  // builds rev 2 on top of A's stored rev 1. When A next syncs it holds rev 1
+  // with no recorded ancestor against a rev-2 remote — and the old merge kept
+  // A's stale copy and superseded it ABOVE rev 2, reverting B's newer password
+  // on every machine. The remote must win; A's copy is parked, not pushed.
+  const server = new MemServer();
+  const { a, b } = await twoMachines();
+  const sa = emptySyncState();
+  const sb = emptySyncState();
+
+  const id = await a.add({ title: 'Bank', password: 'v1' });
+
+  let refuseReadBack = true;
+  const flaky = {
+    getMeta: () => server.getMeta(),
+    putMeta: (m, i) => server.putMeta(m, i),
+    putRecords: (r, m) => server.putRecords(r, m), // the push itself lands
+    getRecords: async (s) => {
+      if (refuseReadBack && server.records.has(id)) {
+        // The pull straight after the accepted push: serve a lowered sequence,
+        // which guardRollback refuses — the 200 has landed, the ancestor has not.
+        refuseReadBack = false;
+        return { seq: 0, records: [] };
+      }
+      return server.getRecords(s);
+    },
+  };
+
+  await assert.rejects(
+    () => syncOnce(a, flaky, sa),
+    (err) => err instanceof SyncError && err.code === 'rollback',
+  );
+  assert.ok(server.records.get(id), 'the push must genuinely have been stored');
+
+  // B builds on A's stored rev 1.
+  await syncOnce(b, server, sb);
+  await b.update(id, { password: 'v2' });
+  await syncOnce(b, server, sb);
+
+  // A syncs against the now-honest server. Its rev 1 has no ancestor; the
+  // rev-2 remote must be adopted, and v1 survives only as a parked fork.
+  await syncOnce(a, server, sa);
+  assert.equal(a.get(id).password, 'v2', "A must adopt B's newer edit, not steamroll it");
+
+  await syncOnce(a, server, sa);
+  await syncOnce(b, server, sb);
+  assert.equal(b.get(id).password, 'v2', "B's edit must never revert to v1");
+  assert.ok(
+    a.list().some((r) => r.conflictOf === id && r.password === 'v1'),
+    "A's own copy is kept as a visible conflict fork, not dropped",
+  );
+});
+
+test('a read-back finding the record already superseded is not a false alarm', async () => {
+  // Between this machine's push and its read-back another machine can write a
+  // newer revision of the same record. The pushed bytes are then absent from
+  // the read-back — legitimately. That is not a dropped write, and screaming
+  // about it would make every busy vault cry wolf; the next ordinary pull
+  // settles the newer revision the usual way.
+  const server = new MemServer();
+  const { a, b } = await twoMachines();
+  const sa = emptySyncState();
+  const sb = emptySyncState();
+
+  const id = await a.add({ title: 'Bank', password: 'v1' });
+  await syncOnce(a, server, sa);
+  await syncOnce(b, server, sb);
+
+  await a.update(id, { password: 'v2' });
+
+  const racing = {
+    getMeta: () => server.getMeta(),
+    putMeta: (m, i) => server.putMeta(m, i),
+    getRecords: (s) => server.getRecords(s),
+    putRecords: async (records, ifMatch) => {
+      const out = await server.putRecords(records, ifMatch);
+      if (out.status === 200 && !racing.done) {
+        racing.done = true;
+        // b pulls a's rev 2, edits it to rev 3 and pushes — all in the gap
+        // between a's accepted push and a's read-back.
+        await syncOnce(b, server, sb);
+        await b.update(id, { password: 'v3' });
+        await syncOnce(b, server, sb);
+      }
+      return out;
+    },
+  };
+
+  const res = await syncOnce(a, racing, sa);
+  assert.ok(res.pushed >= 1, 'the sync must complete — a superseded push is not a dropped push');
+});
+
 test('a 409 between pull and push is retried and the sync still completes', async () => {
   // Real machines on one network hit the compare-and-swap retry constantly:
   // another device writes between this one's pull and its push. The honest

@@ -28,7 +28,15 @@ import {
 } from '../core/address.js';
 import { generate } from '../core/generate.js';
 import { keepGenerated, completeGenerated } from '../core/provisional.js';
-import { SyncClient, syncOnce, joinVault, loadSyncState, dumpSyncState, PROTOCOL } from '../core/sync.js';
+import {
+  SyncClient,
+  syncOnce,
+  joinVault,
+  loadSyncState,
+  dumpSyncState,
+  packEnrolCode,
+  PROTOCOL,
+} from '../core/sync.js';
 import { MSG, publicCandidate, publicAddress, isMessage, asString, asId } from './protocol.js';
 
 const AUTOLOCK_MS = 15 * 60 * 1000;
@@ -49,12 +57,26 @@ let settings = {
   webauthnCredentialId: '', // which credential derives this vault's device secret
   syncPreferred: '', // the server address that answered last
   syncPreferredAt: 0, // and when, so the preference can go stale
+  // The sequence floor off the enrolment code this machine last redeemed. It
+  // arrived by hand — minted by an already-enrolled machine, carried by a
+  // person — which is the one channel the server cannot rewrite, and it is
+  // what a joining machine starts its rollback defence from. 0 means the code
+  // carried none (the server's own bootstrap code, or an older build's).
+  enrolFloor: 0,
 };
 let syncState = loadSyncState(null);
 let autolockTimer = null;
 let autolockAt = 0; // when the vault will shut, for anything that wants to show it
 let lastSyncAt = 0; // when a sync last succeeded, for the settings panel
 let lastSyncVia = ''; // which of the server's addresses answered
+
+// The last sync refusal worth a person's attention, kept until a sync
+// succeeds. The periodic background sync swallows its errors by design — there
+// is nobody to show them to at 3am — but a refusal that names tampering, a
+// rollback or a dropped write must not evaporate with the tick that found it:
+// it is held here and shown wherever sync status is shown.
+let lastSyncProblem = null; // { reason, message, at } | null
+const LOUD_REASONS = new Set(['tampered', 'rollback', 'dropped-push', 'key-mismatch']);
 
 /** Menus currently on screen, keyed by an unguessable id. */
 const sessions = new Map();
@@ -1057,18 +1079,24 @@ async function handleJoin(msg, sender) {
 
   let joined;
   try {
-    joined = await joinVault({ client: c, password, Vault });
+    joined = await joinVault({ client: c, password, Vault, floor: settings.enrolFloor ?? 0 });
   } catch (err) {
     // joinVault tells "no vault there" apart from "that password does not open
-    // it", and both are worth more than a bare failure.
+    // it" apart from "this server has been rolled back below what the
+    // enrolment code vouches for", and all three are worth more than a bare
+    // failure.
     return { ok: false, reason: err?.code ?? 'error', message: String(err?.message ?? err) };
   }
 
   vault = joined;
   // A joined vault starts from nothing and pulls everything, so its sync state
-  // has to start from nothing too: an inherited high-water mark would refuse
-  // the very first pull as a rollback.
+  // starts from nothing too — an inherited high-water mark from some earlier
+  // configuration would refuse the very first pull as a rollback. The one
+  // exception is deliberate: the floor off the enrolment code IS the join's
+  // high-water mark, minted by an already-enrolled machine and carried here by
+  // hand, and refusing a server below it is exactly what it is for.
   syncState = loadSyncState(null);
+  syncState.highestSeq = Math.max(0, Math.floor(Number(settings.enrolFloor) || 0));
   await persistVault();
   await persistSettings();
 
@@ -1146,7 +1174,12 @@ async function handleMintCode(sender) {
 
   try {
     const { code, ttlSeconds } = await c.mintCode();
-    return { ok: true, code, ttlSeconds };
+    // The code the server minted, plus this machine's own high-water mark. The
+    // suffix is what gives the joining machine a rollback floor before it has
+    // any history of its own — the server cannot write it (the code travels by
+    // hand) and cannot strip it (it never sees the pasted whole). A machine
+    // that has never synced has no floor to vouch for, and appends none.
+    return { ok: true, code: packEnrolCode(code, syncState.highestSeq), ttlSeconds };
   } catch (err) {
     if (err?.code === 'unauthorised') {
       // A 401 is what a revoked key returns, and it is also what a protocol
@@ -1242,6 +1275,10 @@ async function handleSettingsGet() {
     deviceId: settings.deviceId,
     enrolled: Boolean(settings.deviceId && settings.deviceKey),
     lastSync: lastSyncAt,
+    // The last refusal a person needs to know about — tampering, a rollback, a
+    // dropped write — held until a sync succeeds, because the background timer
+    // that usually finds these reports to nobody.
+    syncProblem: lastSyncProblem,
     version: browser.runtime.getManifest().version,
     records: vault && !vault.locked ? vault.list().length : null,
   };
@@ -1314,13 +1351,19 @@ async function handleSettingsSet(msg) {
       const fallback = patch.fallbackEndpoint ?? settings.fallbackEndpoint;
       if (!endpoint && !fallback) return { ok: false, reason: 'no-endpoint-for-code' };
       try {
-        const { deviceId, key } = await SyncClient.enrol({
+        const { deviceId, key, floor } = await SyncClient.enrol({
           endpoints: [endpoint, fallback].filter(Boolean),
           code: parts[0],
           name: await deviceName(),
         });
         patch.deviceId = deviceId;
         patch.deviceKey = btoa(String.fromCharCode(...key));
+        // The floor the minting machine wrote into the code, kept for the join
+        // (which resets sync state and needs it back) and adopted immediately:
+        // never lowered, because a floor is a fact about the vault's history,
+        // not a preference.
+        patch.enrolFloor = floor;
+        syncState.highestSeq = Math.max(syncState.highestSeq, floor);
       } catch (err) {
         return { ok: false, reason: err?.code === 'unreachable' ? 'unreachable' : 'bad-code' };
       }
@@ -1572,6 +1615,14 @@ async function handleUnlock(msg, sender) {
   if (!vault) return { ok: false, reason: 'no-vault' };
   try {
     await vault.unlock(asString(msg.password, 1024));
+    // The unlock may have adopted a header parked by an earlier sync — a
+    // master password change made on another machine. Adoption happened in
+    // memory; it must land on disk or a restart re-runs it (harmlessly, but
+    // the disk should say what the vault says).
+    if (vault.metaUpdated) {
+      vault.metaUpdated = false;
+      await persistVault();
+    }
     bumpAutolock();
     paintBadge();
     broadcastLockState();
@@ -1667,12 +1718,21 @@ async function handleSync() {
     const result = await syncOnce(vault, c, syncState);
     lastSyncAt = Date.now();
     lastSyncVia = c.endpoint;
+    lastSyncProblem = null;
     settings.syncPreferred = c.endpoint;
     settings.syncPreferredAt = lastSyncAt;
     await persistVault();
     await persistSettings();
     return { ok: true, ...result, conflicts: result.conflicts.length };
   } catch (err) {
+    // A refusal that names an attack or a lost write outlives this call: the
+    // background timer is usually the caller, and it reports to nobody.
+    if (LOUD_REASONS.has(err.code)) {
+      lastSyncProblem = { reason: err.code, message: err.message, at: Date.now() };
+    }
+    // A sync that stashed a header before failing still learned something a
+    // restart must not forget; parked state lives in the vault JSON.
+    await persistVault().catch(() => {});
     return { ok: false, reason: err.code ?? 'error', message: err.message };
   }
 }

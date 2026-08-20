@@ -6,6 +6,7 @@
 
 import { toB64, fromB64, utf8, toHex } from './bytes.js';
 import { merge, confirmPushed } from './merge.js';
+import { ALPHABET as FLOOR_ALPHABET } from './recovery.js';
 
 export class SyncError extends Error {
   constructor(message, code) {
@@ -75,6 +76,82 @@ async function hmacB64(keyBytes, message) {
     ['sign'],
   );
   return toB64(new Uint8Array(await crypto.subtle.sign('HMAC', key, utf8(message))));
+}
+
+// ---- the enrolment code's sequence floor -------------------------------------
+//
+// A machine joining a vault has no history to compare against: guardRollback
+// and the per-record report both measure the server against what THIS machine
+// has already seen, and a machine seeing everything for the first time has, by
+// definition, no floor. A hostile server could therefore feed a joining
+// machine an arbitrarily old but authentic copy of the vault — pre-rotation
+// passwords included — and be believed, because trust-on-first-use trusted
+// everything.
+//
+// The one channel the server cannot touch is the enrolment code itself: it is
+// carried by a person, from an already-enrolled machine to the new one. So the
+// minting machine appends its own high-water mark to the code it displays —
+// `<server-code>.<floor>` — and the joining machine peels the floor off before
+// the code ever goes near the server, adopting it as the `highestSeq` it
+// starts from. A server that has been rolled back below that floor is then
+// refused at the join, exactly as it would be refused by a machine that had
+// seen the history itself.
+//
+// The floor is written in the recovery-code alphabet (no 0/O, no 1/I/l, upper
+// case), because this string is read off one screen and typed into another and
+// that alphabet exists for exactly that walk. A vault's sequence is the count
+// of writes it has ever taken, so the suffix runs two to four characters for
+// any realistic vault — a code like `k3J9fJq2QxYz.M7C`.
+//
+// What a typo costs, honestly: a floor garbled UPWARD makes the join refuse an
+// honest server as a rollback (recoverable — mint a fresh code); garbled
+// DOWNWARD it is a weaker floor, never weaker than the zero it replaced. The
+// server never sees the suffix and cannot mint one that means anything — a
+// floor is only as trustworthy as the machine that wrote it, which is the
+// point.
+
+const FLOOR_SEP = '.';
+
+/** A non-negative integer in the recovery-code alphabet, most significant first. */
+export function encodeFloor(n) {
+  let v = Math.max(0, Math.floor(Number(n) || 0));
+  const base = FLOOR_ALPHABET.length;
+  let out = '';
+  do {
+    out = FLOOR_ALPHABET[v % base] + out;
+    v = Math.floor(v / base);
+  } while (v > 0);
+  return out;
+}
+
+/** The inverse of encodeFloor. Anything unparseable reads as 0 — no floor. */
+export function decodeFloor(s) {
+  let v = 0;
+  for (const c of String(s ?? '').toUpperCase()) {
+    const at = FLOOR_ALPHABET.indexOf(c);
+    if (at === -1) return 0;
+    v = v * FLOOR_ALPHABET.length + at;
+  }
+  return v;
+}
+
+/** What the minting machine displays: the server's code plus this machine's floor. */
+export function packEnrolCode(code, floor) {
+  const f = Math.max(0, Math.floor(Number(floor) || 0));
+  return f > 0 ? `${code}${FLOOR_SEP}${encodeFloor(f)}` : code;
+}
+
+/**
+ * What was pasted, taken apart: the server's part and the floor, if one rode
+ * along. A bare code — the server's own bootstrap print, or one minted by a
+ * build that predates the floor — is a floor of 0, which is what such a code
+ * always meant.
+ */
+export function splitEnrolCode(raw) {
+  const s = String(raw ?? '').trim();
+  const at = s.lastIndexOf(FLOOR_SEP);
+  if (at === -1) return { code: s, floor: 0 };
+  return { code: s.slice(0, at), floor: decodeFloor(s.slice(at + 1)) };
 }
 
 // ---- client ----------------------------------------------------------------
@@ -173,8 +250,16 @@ export class SyncClient {
   /**
    * Redeem a one-time enrolment code. Unauthenticated by necessity — this is
    * where a device acquires the credential everything else is signed with.
+   *
+   * The pasted code may carry a sequence floor after a dot — appended by the
+   * machine that minted it, see packEnrolCode above. The floor is peeled off
+   * HERE, before anything touches the network: it is the one fact about the
+   * vault's history that arrives by a channel the server cannot rewrite, and
+   * sending it along would hand it to exactly the party it is a check on. The
+   * caller adopts the returned `floor` as the highestSeq it starts from.
    */
   static async enrol({ endpoint, endpoints, code, name, fetch: f = globalThis.fetch }) {
+    const { code: bare, floor } = splitEnrolCode(code);
     // The same failover as any other request: a device enrolling from the sofa
     // should not have to be told which of its two addresses is reachable today.
     const bases = (endpoints ?? [endpoint]).filter(Boolean).map((e) => String(e).replace(/\/+$/, ''));
@@ -185,7 +270,7 @@ export class SyncClient {
         resp = await f(`${base}/v1/enrol`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code, name }),
+          body: JSON.stringify({ code: bare, name }),
         });
         break;
       } catch (err) {
@@ -195,7 +280,7 @@ export class SyncClient {
     if (!resp) throw new SyncError(`no route to the server — ${failures.join('; ')}`, 'unreachable');
     if (!resp.ok) throw new SyncError('enrolment refused: unknown or expired code', 'enrol');
     const out = await resp.json();
-    return { deviceId: out.deviceId, key: fromB64(out.key) };
+    return { deviceId: out.deviceId, key: fromB64(out.key), floor };
   }
 
   async request(method, path, body = null, headers = {}) {
@@ -400,8 +485,23 @@ export class SyncClient {
  * to a person whose password is right sends them looking in the wrong place.
  * The caller is told which it cannot distinguish.
  */
-export async function joinVault({ client, password, Vault }) {
-  const { meta } = await client.getMeta();
+export async function joinVault({ client, password, Vault, floor = 0 }) {
+  const { meta, seq } = await client.getMeta();
+
+  // The floor off the enrolment code, checked at the door. A joining machine
+  // has no history of its own, so this — the minting machine's high-water
+  // mark, carried by a person — is the only rollback defence the join has. A
+  // server below it has less history than the code says it must, which is a
+  // rollback (or the wrong server) and is refused before anything is adopted.
+  if (Number(seq ?? 0) < floor) {
+    throw new SyncError(
+      `this server reports sequence ${seq}, but the enrolment code was minted when the vault ` +
+        `was already at ${floor} — the server has been rolled back, or this is not the same vault. ` +
+        `Refusing to join it.`,
+      'rollback',
+    );
+  }
+
   if (!meta) {
     throw new SyncError(
       'that server is not carrying a vault yet — set one up on your first machine and let it sync once',
@@ -428,7 +528,17 @@ export async function joinVault({ client, password, Vault }) {
   return vault;
 }
 
-export const emptySyncState = () => ({ seq: 0, highestSeq: 0, syncedRev: {} });
+/**
+ * A fresh sync state. `floor` seeds `highestSeq` for a machine that has never
+ * synced but knows, from its enrolment code, how much history the server must
+ * hold — everything below that is refused as a rollback from the first pull.
+ * `seq` stays 0 regardless: the first pull is still a full pull.
+ */
+export const emptySyncState = (floor = 0) => ({
+  seq: 0,
+  highestSeq: Math.max(0, Math.floor(Number(floor) || 0)),
+  syncedRev: {},
+});
 
 export function loadSyncState(raw) {
   const s = { ...emptySyncState(), ...(raw ?? {}) };
@@ -460,25 +570,43 @@ export function dumpSyncState(state) {
  * with its own random key, and the two would never be able to read each other's
  * records — which is what happened, because nothing ever pushed it.
  *
- * Published only when the server has none. A server that already holds a header
- * is left alone, and deliberately: the local copy diverges legitimately the
- * moment a fingerprint is enrolled (that adds a second wrapping and is local by
- * design), so treating every difference as something to upload would push one
- * machine's private business to every other. The compare-and-swap is passed the
- * sequence that was read, so two machines racing to be first cannot both win.
+ * Published when the server has none, and re-published when this machine's
+ * header GENERATION is above the server's — which happens exactly once per
+ * master password change, made here or still owed from a change made offline.
+ * A server that holds the same generation is left alone, and deliberately: the
+ * local copy diverges legitimately the moment a fingerprint is enrolled (that
+ * adds a second wrapping and is local by design), so treating every difference
+ * as something to upload would push one machine's private business to every
+ * other. The compare-and-swap is passed the sequence that was read, so two
+ * machines racing cannot both win.
+ *
+ * The other direction: a server holding a HIGHER generation than ours means
+ * the master password changed on another machine. This code may be running on
+ * a locked vault with no way to verify anything, so the header is parked
+ * (vault.stashHeader), never adopted — the next unlock, when a person types a
+ * password, is where it is proven against the vault key's own seal and either
+ * adopted or refused. See #adoptPendingHeader in vault.js for the checks.
  */
-async function shareHeader(vault, client) {
+async function syncHeader(vault, client) {
   const { meta, seq } = await client.getMeta();
-  if (meta) return { published: false };
 
-  // The sequence that was just read, including zero.
+  const localGen = Number(vault.meta.gen ?? 0);
+  const remoteGen = Number(meta?.gen ?? 0);
+
+  if (meta && remoteGen > localGen) {
+    return { headerPending: vault.stashHeader(meta) };
+  }
+  if (meta && remoteGen === localGen) return { published: false };
+
+  // No header there, or ours is newer.
   //
-  // Not `seq === 0 ? null : seq`: null omits If-Match, which the server treats
-  // as "not checking" and permits only while the store is empty — so on a fresh
-  // server, the one case the comment above is about, the compare-and-swap was
-  // switched off and two machines could both publish, last one winning. Passing
-  // 0 instead makes the check-and-increment atomic under the store's own lock,
-  // and the loser gets a 409.
+  // The If-Match is the sequence that was just read, including zero. Not
+  // `seq === 0 ? null : seq`: null omits If-Match, which the server treats as
+  // "not checking" and permits only while the store is empty — so on a fresh
+  // server the compare-and-swap was switched off and two machines could both
+  // publish, last one winning. Passing 0 instead makes the check-and-increment
+  // atomic under the store's own lock, and the loser gets a 409.
+  //
   // portableMeta, not meta: the header goes to a machine the user runs but does
   // not carry, and a fingerprint wrapping on it is a way into the vault for
   // whoever can present that credential. Nothing can use it there in any case —
@@ -596,7 +724,7 @@ function refuseLockedConflict(vault, result) {
 export async function syncOnce(vault, client, state) {
   // Before the records, because a machine that joins later needs this to exist
   // and the cost when it already does is one unauthenticated-shaped GET.
-  await shareHeader(vault, client);
+  const header = await syncHeader(vault, client);
 
   const pulled = await client.getRecords(state.seq);
   guardRollback(pulled.seq, state);
@@ -617,7 +745,13 @@ export async function syncOnce(vault, client, state) {
   state.syncedRev = result.syncedRev;
 
   if (result.toPush.length === 0) {
-    return { pulled: pulled.records.length, pushed: 0, conflicts: result.conflicts, seq: state.seq };
+    return {
+      pulled: pulled.records.length,
+      pushed: 0,
+      conflicts: result.conflicts,
+      seq: state.seq,
+      headerPending: Boolean(header.headerPending),
+    };
   }
 
   let push = await client.putRecords(result.toPush, state.seq === 0 ? null : state.seq);
@@ -680,6 +814,13 @@ export async function syncOnce(vault, client, state) {
     throw new SyncError(`push failed (${push.status}: ${push.error ?? 'unknown'})`, 'push');
   }
 
+  // The 200 is a claim, not a fact: read the push back before believing it.
+  // This runs BEFORE the ancestor map advances, so a push the server did not
+  // actually keep is re-pushed next round instead of being marked as agreed —
+  // the failure mode this closes is a write that evaporates while the client
+  // reports a successful sync.
+  await verifyPush(client, push.seq, result.toPush, state);
+
   // The ancestor advances only now, on the server's word. Advancing it at merge
   // time would make a push that failed look agreed, and the next round would
   // treat an unsent edit as already shared.
@@ -692,7 +833,68 @@ export async function syncOnce(vault, client, state) {
     pushed: result.toPush.length,
     conflicts: result.conflicts,
     seq: state.seq,
+    headerPending: Boolean(header.headerPending),
   };
+}
+
+/**
+ * Read a push back and refuse to call the sync successful if it is not there.
+ *
+ * A malicious or buggy server can answer 200 to a PUT while storing nothing,
+ * advancing its sequence so the next pull never trips guardRollback — the
+ * write silently evaporates while this machine believes it synced. The server
+ * stamps every record in an accepted batch with the batch's sequence, so one
+ * delta pull from just below it (`since = seq - 1`) must return the batch:
+ * each pushed envelope has to come back byte-identical, or already superseded
+ * by a HIGHER revision (another machine wrote in the gap between the push and
+ * this read — the ordinary pull path settles that). Absent, or served at a
+ * lower revision, or served as different bytes at the same revision, means
+ * the server did not keep what it claimed, and that is surfaced as a failed
+ * sync rather than healed quietly.
+ *
+ * Be precise about what this proves. It proves the server could reproduce the
+ * pushed ciphertext when asked, one round-trip later — which catches the real
+ * failure class: a write dropped on the floor by a bug, a full disk behind a
+ * cheerful handler, a proxy that swallowed the body. It does NOT prove
+ * durable storage: a server that answers the read-back from memory and then
+ * discards everything passes this check, and no client-side check can do
+ * better, because nothing the server returns is signed by anything the client
+ * could verify. Against that server the defence is the same as ever — the
+ * next machine's pull comes up short, and invariants elsewhere refuse what it
+ * is then served.
+ *
+ * The caller runs this BEFORE confirmPushed, so a failure leaves the ancestor
+ * map untouched and the same envelopes are pushed again next round (the
+ * server accepts an equal-revision write precisely so a retry is safe).
+ */
+async function verifyPush(client, pushSeq, pushed, state) {
+  const from = Number.isFinite(Number(pushSeq)) ? Number(pushSeq) - 1 : 0;
+  const back = await client.getRecords(Math.max(0, from));
+  guardRollback(back.seq, state);
+
+  const served = new Map(fromWire(back.records).map((e) => [e.id, e]));
+  const missing = [];
+  for (const e of pushed) {
+    const r = served.get(e.id);
+    if (r && r.rev > e.rev) continue; // superseded in flight; the write is moot, not missing
+    if (
+      r &&
+      r.rev === e.rev &&
+      r.ct === e.ct &&
+      r.n === e.n &&
+      Boolean(r.deleted) === Boolean(e.deleted)
+    ) {
+      continue;
+    }
+    missing.push(e.id);
+  }
+  if (missing.length) {
+    throw new SyncError(
+      `the server answered 200 to a push of ${pushed.length} record(s) but does not serve ` +
+        `${missing.length} of them back — the write was dropped, and nothing has been marked as synced`,
+      'dropped-push',
+    );
+  }
 }
 
 /**

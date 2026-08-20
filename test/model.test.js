@@ -1092,3 +1092,39 @@ test('model regression: a locked conflict reached on a retry must refuse, not co
     `${r.violation?.message}\n\n${(r.trace ?? []).join('\n')}`,
   );
 });
+
+// THE UNCONFIRMED ACCEPTED PUSH (found by the hostile model at
+// MODEL_SEED=1964435005, case seed 2624214738, once read-back verification
+// existed). A's push of R1 rev 1 is ACCEPTED and stored, but the hostile
+// server refuses the read-back after it (a lowered sequence), so the sync
+// throws with the ancestor unrecorded. B then edits R1 to rev 2 on top of A's
+// stored rev 1. A's next merge held rev 1 with no ancestor against a rev-2
+// remote, kept its stale copy, and superseded it ABOVE rev 2 — B's live
+// password then reverted to a value B had already moved past (B:revert). The
+// fix: with no ancestor and a strictly newer live remote at our own id, the
+// remote wins and the local copy is parked. test/hostile.test.js pins the
+// mechanism deterministically; this replays the sequence the model found.
+test('model regression: an accepted push whose read-back is refused must not revert a newer edit', async () => {
+  const r = await run(
+    {
+      seed: 2624214738,
+      machines: 2,
+      hostile: true,
+      ops: [
+        { op: 'add', m: 0 },
+        { op: 'sync', m: 0 },
+        { op: 'sync', m: 1 },
+        { op: 'edit', m: 1, pick: 0 },
+        { op: 'sync', m: 1 },
+        { op: 'sync', m: 0 },
+        { op: 'sync2', m: 1 },
+      ],
+    },
+    new Set(['E:delete', 'E:edit', 'A:vanished']),
+  );
+  assert.equal(
+    r.ok,
+    true,
+    `${r.violation?.message}\n\n${(r.trace ?? []).join('\n')}`,
+  );
+});
