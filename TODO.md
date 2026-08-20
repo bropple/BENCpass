@@ -80,3 +80,29 @@ or the compose file.
 `http://<nas>:8788/favicon.svg` for the icon field where the UI offers one, or a
 PNG endpoint beside the SVG for UIs that will not render SVG. The rescue tool
 already commits a 512px render to work from.
+
+## Print on the recovery sheet does nothing
+
+Reported from real use. The button is wired — `$('kit-print')` calls
+`window.print()` (src/ui/manager.js:613) — and there is a `@media print` block
+in src/ui/style.css that strips the page to the code and its date. So this is
+not a missing handler.
+
+The likely cause is *where* it was pressed. The manager runs both as a tab and
+in the sidebar, and `window.print()` from a sidebar panel is a good candidate
+for failing silently; an extension page may also be restricted. Untested — do
+not fix it on this guess.
+
+Worth taking seriously despite being one button: the recovery code is shown
+once and never stored, and printing it is the path the interface recommends. A
+person who presses Print, sees nothing happen, and closes the sheet has lost
+the code.
+
+**Done looks like:** find out where it fails (sidebar, tab, or both), then
+either make it work in that context or say so and offer something that does —
+opening the sheet in a tab for printing, or a copy-to-clipboard beside it.
+Whatever it becomes, pressing it must visibly do something, because the failure
+mode is silent and the cost is the whole recovery path.
+
+**Workaround meanwhile:** the code is on screen — write it down, or open the
+manager in a tab and use the browser's own print.
