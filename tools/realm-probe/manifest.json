@@ -1,0 +1,8 @@
+{
+  "manifest_version": 2,
+  "name": "BENCpass realm probe",
+  "version": "1.0",
+  "description": "Not BENCpass. Proves the compartment behaviour BENCpass's design leans on.",
+  "background": { "page": "background.html" },
+  "permissions": ["tabs", "<all_urls>"]
+}

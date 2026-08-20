@@ -547,6 +547,40 @@ it. The id is now handed over by `postMessage` to the frame's cross-origin
 is narrowed to the two frames that must be page-embeddable — `overlay.html` and
 `toast.html` — and nothing else.
 
+### The background owns every object it keeps
+
+Extension pages and the background page are separate JavaScript realms, and
+Firefox nukes a closed page's compartment: anything another realm still holds
+from it becomes a dead-object wrapper that throws on every touch. This was
+learned in production. First-run setup once built the `Vault` in the manager
+document and handed the instance to the background; the first tab closed after
+setup hit `vault.locked` in the badge repaint and the extension threw "can't
+access dead object" on everything until the background restarted.
+
+So the rule, enforced at both ends:
+
+- **No instance crosses into the background.** The vault is built three ways —
+  boot from storage, `SETUP`, `JOIN` — and all three construct it in the
+  background's realm. Setup sends the password as a string down the same gated
+  channel `UNLOCK` uses; `window.bencpass` deliberately has no `setVault`.
+- **The vault clones at its write boundary.** `add()` and `update()` are called
+  by manager documents with the page's own `urls` and `history` arrays inside;
+  kept by reference they die with the page, so they are structured-cloned by
+  the vault's own realm before anything is kept.
+
+Node cannot observe any of this — it has no compartments to nuke — so the
+mechanism is pinned by `tools/realm-probe.sh`, which loads a two-line extension
+into a real browser and confirms both halves: a reference dies with its page,
+and an object the background built itself survives.
+
+Two rules ride along from the same incident, because the boot window is when
+the hand-off happened: no message is answered before `boot()` has read storage
+(a blank in-memory `vault` reads as "no vault" and painted a setup gate over
+hundreds of stored records), and creating or joining consults **storage**, not
+memory, before agreeing to be the first vault on the machine — an overwrite
+there is every record gone, so the refusal goes to the copy that would be
+destroyed.
+
 ### What a page-embedded extension frame cannot do
 
 Measured against Firefox, not assumed, after three attempts to be cleverer:

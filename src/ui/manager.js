@@ -14,6 +14,7 @@ import { newRecoveryCode, normalise as normaliseRecoveryCode, CODE_LENGTH } from
 import { LOGIN } from '../core/model.js';
 import { PROTOCOL } from '../core/sync.js';
 import { MSG } from '../ext/protocol.js';
+import { syncConsent } from '../ext/consent.js';
 import * as webauthn from '../ext/webauthn.js';
 
 const $ = (id) => document.getElementById(id);
@@ -680,8 +681,14 @@ async function joinExisting(password) {
 
   // Consent first: this is the moment the machine agrees to send anything
   // anywhere, and asking after the vault is open would be asking too late.
-  if (!(await consentToSync())) {
-    throw new Error('Joining needs permission to send your passwords and addresses to that server.');
+  const consent = await consentToSync();
+  if (!consent.ok) {
+    throw new Error(
+      consentProblem(
+        consent,
+        'Joining needs permission to send your passwords and addresses to that server.',
+      ),
+    );
   }
 
   // Redeem the code only if this machine has not already used one.
@@ -723,36 +730,30 @@ $('gate-form').addEventListener('submit', async (e) => {
   const label = btn.textContent;
   // Argon2 at 128 MiB blocks this thread for ~400 ms. Say so rather than
   // letting the button look dead — but say it flatly.
-  // Ask before yielding, not after. permissions.request() is only granted from
-  // a live user gesture, and awaiting anything spends it — Mozilla says so and
-  // the comment beside consentToSync says so, and this handler awaited a
-  // setTimeout for a repaint before ever reaching the join path. The prompt
-  // never appeared, the request was refused, and every attempt to join a
-  // second machine failed with a message about a permission the person was
-  // never offered. Joining is the whole point of the second machine.
-  // Asked here, before the yield below, and nowhere else.
   //
-  // permissions.request() is granted only from a live user gesture, and
-  // awaiting anything spends it — Mozilla says so and the comment beside
-  // consentToSync says so. This handler awaited a setTimeout for a repaint
-  // before it ever reached the join path, so by the time joinExisting asked,
-  // the gesture was gone: the prompt never appeared, the request was refused,
-  // and joining a second machine failed every time with a message about a
-  // permission nobody was offered. Joining is the entire point of the second
-  // machine.
+  // Ask before yielding, not after. permissions.request() is granted only from
+  // a live user gesture, and awaiting anything spends it — Mozilla says so and
+  // the comment beside consentToSync says so. This handler awaited a
+  // setTimeout for a repaint before it ever reached the join path, so by the
+  // time joinExisting asked, the gesture was gone: the prompt never appeared,
+  // the request was refused, and joining a second machine failed every time
+  // with a message about a permission nobody was offered. Joining is the
+  // entire point of the second machine. Asked here, before the yield below.
   //
   // joinExisting still asks, and must: it is reached from other callers, and a
-  // second request costs nothing once the permission is held.
+  // permission already held answers without needing a gesture at all.
   if ($('gate').dataset.mode === 'join' && $('gate-server').value.trim()) {
-    let granted = false;
+    let consent;
     try {
-      granted = await consentToSync();
+      consent = await consentToSync();
     } catch {
-      granted = false;
+      consent = { ok: false, reason: 'refused' };
     }
-    if (!granted) {
-      $('gate-error').textContent =
-        'Joining needs permission to send your passwords and addresses to that server.';
+    if (!consent.ok) {
+      $('gate-error').textContent = consentProblem(
+        consent,
+        'Joining needs permission to send your passwords and addresses to that server.',
+      );
       $('gate-error').hidden = false;
       return;
     }
@@ -2100,20 +2101,12 @@ $('s-autolock').addEventListener('change', () =>
 );
 // ---- consent for what sync sends -------------------------------------------
 //
-// The manifest declares `authenticationInfo` and `personallyIdentifyingInfo` as
-// *optional* data collection, which is accurate: nothing leaves the machine
-// until a server is configured. But optional data-collection permissions are
-// real permissions in Firefox's model — off until granted, listed in
-// about:addons under Permissions and Data, and revocable there.
+// The decision itself lives in ext/consent.js, where it can be tested; the
+// rationale lives there with it. What stays here is the wiring: which
+// permissions to ask for, and what to tell a person when the answer was not
+// yes. It has to run inside the event handler — `permissions.request` needs a
+// user gesture, and awaiting anything first spends it.
 //
-// Declaring them and never asking would mean about:addons showing both switched
-// off while the vault syncs, which contradicts the extension's own declaration
-// and the requirement that a person affirmatively consents before personal data
-// is transmitted. So the ask happens where the decision is made: at the moment
-// somebody puts an address in the box.
-//
-// It has to run inside the event handler. `permissions.request` needs a user
-// gesture, and awaiting anything first spends it.
 // Read from the manifest rather than written twice. A hand-copied list can
 // drift from what is declared, and the drift is silent in the worst direction:
 // the request would ask for less than sync actually sends.
@@ -2121,24 +2114,22 @@ const SYNC_DATA =
   globalThis.browser?.runtime?.getManifest?.()?.browser_specific_settings?.gecko
     ?.data_collection_permissions?.optional ?? [];
 
-async function consentToSync() {
-  const api = globalThis.browser?.permissions;
-  if (!api?.request || !SYNC_DATA.length) return true;
-  try {
-    return await api.request({ data_collection: SYNC_DATA });
-  } catch (err) {
-    // A rejection is a refusal, not a formality.
-    //
-    // This used to return true, on the reasoning that a browser too old to know
-    // `data_collection` would throw rather than answer. No such browser can
-    // install this: strict_min_version is 142 and the key shipped in 139. So the
-    // only rejections reachable here are real ones — a spent user gesture above
-    // all — and swallowing them saved the address with no consent recorded at
-    // all, which is precisely the state this function exists to prevent.
-    console.warn('BENCpass: the data-collection prompt failed', err);
-    return false;
-  }
-}
+const consentToSync = () => syncConsent(globalThis.browser?.permissions, SYNC_DATA);
+
+/**
+ * The words for a consent verdict that was not "yes".
+ *
+ * Two different "no"s, two different next steps — and the distinction was
+ * earned the hard way: a machine whose permissions were already granted had
+ * request() failing for its own reasons, and the old single message sent the
+ * person to about:addons, where every toggle was already on. A prompt failure
+ * is reported as itself.
+ */
+const consentProblem = (verdict, refusedText) =>
+  verdict.reason === 'error'
+    ? `The permission prompt itself failed (${verdict.message}) — nothing was refused. ` +
+      'Try once more; if it keeps failing, this is a bug worth reporting.'
+    : refusedText;
 
 /** Save an address, having first asked to send anything to it. */
 async function saveEndpoint(field, key) {
@@ -2146,7 +2137,8 @@ async function saveEndpoint(field, key) {
   const value = $(field).value.trim();
 
   // Clearing the box is switching sync off. Nothing to consent to.
-  if (value && !(await consentToSync())) {
+  const consent = value ? await consentToSync() : { ok: true };
+  if (!consent.ok) {
     // The box is put back to what is actually stored rather than blanked. A
     // blank box beside a still-configured endpoint says sync is off when it is
     // not, and the refusal above did not turn anything off — it declined to
@@ -2154,7 +2146,10 @@ async function saveEndpoint(field, key) {
     await loadSettings();
     endpointStatus(
       which,
-      'Not saved: syncing needs permission to send your passwords and addresses to that server.',
+      consentProblem(
+        consent,
+        'Not saved: syncing needs permission to send your passwords and addresses to that server.',
+      ),
       'bad',
     );
     return;
