@@ -944,11 +944,10 @@ async function handleCapture(msg, sender) {
   const password = asString(msg.password, 1024);
   if (!password) return { ok: false };
 
-  // A password box holding nothing but mask characters — the "unchanged"
-  // placeholder appliance UIs pre-fill their password fields with. Stored, it
-  // becomes an entry that shows dots before Reveal and asterisks after, which
-  // reads as a broken button rather than as an empty password (see
-  // plausiblePassword).
+  // A password box holding nothing but mask characters — the placeholder a
+  // site shows for a value already set. Stored, it becomes an entry that shows
+  // dots before Reveal and asterisks after, which reads as a broken button
+  // rather than as an empty password (see plausiblePassword).
   //
   // Above the provisional branch, unlike the username check below it, and the
   // asymmetry is load-bearing: that branch is entered only when the page's

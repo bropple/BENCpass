@@ -115,15 +115,22 @@ const MASKED = /^[*\u2022\u25CF\u25CB\u25E6\u2219\u00B7\u2027\u2043\u25AA\u25A0]
 /**
  * Could this captured value actually be a password?
  *
- * The other half of the appliance-settings problem, and the one that got all
- * the way into a vault: a settings page whose password box is pre-filled with
- * a run of asterisks standing in for "unchanged". Nothing on the page says so
- * — the field is a real <input type="password"> holding a real value — so the
- * capture is offered, accepted, and stored. What it looks like afterwards is
- * an entry that shows dots until Reveal is pressed and asterisks after, which
- * reads as a broken Reveal button rather than as a password that was never
- * there. Refusing the value at capture is the only place the two can be told
- * apart: by the time it is in the vault it is just a password made of `*`.
+ * A password box pre-filled with a run of asterisks standing in for a value
+ * already set — what a site shows instead of leaving the box empty. Nothing
+ * on the page says so: the field is a real <input type="password"> holding a
+ * real value, so the capture is offered, accepted, and stored. What it looks
+ * like afterwards is an entry that shows dots until Reveal is pressed and
+ * asterisks after, which reads as a broken Reveal button rather than as a
+ * password that was never there.
+ *
+ * Found in a vault, not in a capture: an entry a decade old, saved by another
+ * manager, carried by it ever since, and imported here faithfully. That is
+ * the point rather than a footnote — the value survives every hop because by
+ * the time anything downstream sees it, it is just a password made of `*`.
+ * Capture is the one place with enough context left to refuse it, so it is
+ * the place that does. Import deliberately does not: a file the person asked
+ * to bring in is data, and dropping rows out of it silently is a worse habit
+ * than keeping one dud they can delete.
  *
  * The cost is a refused offer for a password that really is nothing but mask
  * characters. That password cannot be typed into the site it came from any

@@ -115,8 +115,8 @@ test('bare digits are not a plausible username; everything else still is', () =>
 });
 
 test('a masked placeholder is not a plausible password', () => {
-  // The observed failure: a settings page pre-fills its password box with a
-  // run of asterisks meaning "unchanged". It is a real password field with a
+  // The observed failure: a password box pre-filled with a run of asterisks
+  // standing in for a value already set. It is a real password field with a
   // real value, so nothing upstream can tell it apart — only the value can.
   assert.equal(plausiblePassword('********'), false);
   assert.equal(plausiblePassword('\u2022\u2022\u2022\u2022\u2022\u2022'), false);

@@ -297,9 +297,10 @@ test('a bare-digit username is not offered for saving', async () => {
 });
 
 test('a password box full of mask characters is not offered, and cannot overwrite', async () => {
-  // The appliance-settings shape again, from the other side: the password
-  // field is pre-filled with asterisks meaning "unchanged". Stored, it looks
-  // exactly like a Reveal button that does not work.
+  // A password field pre-filled with asterisks standing in for a value already
+  // set. Stored, it looks exactly like a Reveal button that does not work —
+  // and one of these, saved by another manager a decade ago, rode an import
+  // into a real vault. Capture is where this one can still be refused.
   const fake = fakeBrowser();
   const bg = await loadBackground(fake);
   await bg.send({ type: MSG.SETUP, password: 'correct horse' });
