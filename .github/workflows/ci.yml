@@ -32,7 +32,7 @@ jobs:
       # and gates the published image on it. `cache: false` because the server
       # has no dependencies and so no go.sum for setup-go to key a cache on;
       # without this the step fails looking for one.
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.6'
           cache: false
