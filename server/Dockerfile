@@ -13,7 +13,7 @@
 # advisories -- crypto/tls, net/http, html/template, encoding/asn1 -- all fixed
 # in 1.26.6, and a floating `golang:1.26-alpine` had been quietly building the
 # published image against a toolchain that carried them.
-FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
 ARG TARGETOS TARGETARCH VERSION=dev
 WORKDIR /src
 
