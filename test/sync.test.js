@@ -122,6 +122,45 @@ async function follower(source) {
 
 const mkVault = () => Vault.create({ password: 'hunter2', kdf: FAST });
 
+test('a machine that joins gets the dates, not the day it joined', { ...skip }, async (t) => {
+  // Reported from a real second machine: every entry on it said it was created
+  // today, while the machine it synced from said August. A record's dates live
+  // inside the sealed body and the server only ever holds {id, rev, deleted,
+  // n, ct}, so there is no route by which joining can restamp them — but that
+  // was an argument, and an argument is what this replaces.
+  const OLD = Date.parse('2019-03-04');
+  const { endpoint, code } = await startServer(t);
+
+  const first = await mkVault();
+  await first.importRecords([
+    {
+      type: 'login',
+      title: 'Example',
+      username: 'ben',
+      password: 'secret',
+      urls: ['https://example.com'],
+      created: OLD,
+      updated: OLD,
+      passwordChanged: OLD,
+      lastUsed: OLD,
+    },
+  ]);
+  const firstClient = await device(endpoint, 'machine-one', code);
+  await syncOnce(first, firstClient, emptySyncState());
+
+  // The join as handleJoin runs it: joinVault for the header, then the
+  // ordinary sync for the records, so there is one route rather than two.
+  const secondClient = await device(endpoint, 'machine-two', (await firstClient.mintCode()).code);
+  const second = await joinVault({ client: secondClient, password: 'hunter2', Vault, floor: 0 });
+  await syncOnce(second, secondClient, emptySyncState());
+
+  const [got] = second.list();
+  assert.ok(got, 'the joining machine got no records at all');
+  assert.equal(got.created, OLD, 'created was restamped by the join');
+  assert.equal(got.passwordChanged, OLD, 'passwordChanged was restamped by the join');
+  assert.equal(got.lastUsed, OLD, 'lastUsed was restamped by the join');
+});
+
 test('the server is reachable and starts empty', { ...skip }, async (t) => {
   const { endpoint } = await startServer(t);
   const health = await (await fetch(`${endpoint}/v1/health`)).json();
