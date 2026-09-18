@@ -1143,3 +1143,73 @@ test('adoptRecoveryWrap keeps its own copy of the wrap', async () => {
   await v.unlockWithRecoveryCode(code);
   assert.equal(v.locked, false);
 });
+
+test('importing the same export again takes the dates the vault never had', async () => {
+  // The state 534 real entries were in: imported when import stamped
+  // everything with the clock, so a password chosen in 2019 read as chosen the
+  // day it arrived. Re-importing the same file is the obvious repair, and it
+  // did nothing at all — every password matched, and matching meant skip.
+  const v = await mk();
+  const IMPORTED = Date.parse('2026-08-20');
+  const REAL = Date.parse('2019-03-04');
+
+  await v.importRecords([
+    {
+      type: 'login', title: 'Old account', username: 'ben', password: 'unchanged-since-2019',
+      urls: ['https://example.com'],
+      created: IMPORTED, updated: IMPORTED, passwordChanged: IMPORTED,
+    },
+  ]);
+  const [before] = v.list();
+  assert.equal(before.passwordChanged, IMPORTED);
+
+  // The same entry, from a file that knows when it was really set.
+  const result = await v.importRecords([
+    {
+      type: 'login', title: 'Old account', username: 'ben', password: 'unchanged-since-2019',
+      urls: ['https://example.com'],
+      created: REAL, updated: REAL, passwordChanged: REAL, lastUsed: Date.parse('2026-09-01'),
+    },
+  ]);
+
+  assert.equal(result.redated, 1, 'the dates were not taken from the file');
+  assert.equal(result.unchanged, 0);
+  assert.equal(v.list().length, 1, 'a duplicate was made');
+
+  const [after] = v.list();
+  assert.equal(after.created, REAL, 'created was not corrected');
+  assert.equal(after.passwordChanged, REAL, 'passwordChanged was not corrected');
+  assert.equal(after.lastUsed, Date.parse('2026-09-01'), 'lastUsed was not taken');
+  assert.equal(after.password, 'unchanged-since-2019', 'the password was touched');
+});
+
+test('a file with worse dates cannot make a password look fresher than it is', async () => {
+  // The direction that would matter: "password set" is what the age warning is
+  // computed from, so a later date from a file must never overwrite an earlier
+  // one. Nor may re-importing cost a write when it has nothing to add.
+  const v = await mk();
+  const REAL = Date.parse('2019-03-04');
+
+  await v.importRecords([
+    {
+      type: 'login', title: 'Old account', username: 'ben', password: 'same',
+      urls: ['https://example.com'],
+      created: REAL, updated: REAL, passwordChanged: REAL,
+    },
+  ]);
+  const revBefore = [...v.envelopes.values()][0].rev;
+
+  const result = await v.importRecords([
+    {
+      type: 'login', title: 'Old account', username: 'ben', password: 'same',
+      urls: ['https://example.com'],
+      created: Date.parse('2026-08-20'),
+      passwordChanged: Date.parse('2026-08-20'),
+    },
+  ]);
+
+  assert.equal(result.redated, 0);
+  assert.equal(result.unchanged, 1);
+  assert.equal(v.list()[0].passwordChanged, REAL, 'an older password was made to look fresh');
+  assert.equal([...v.envelopes.values()][0].rev, revBefore, 'a pointless revision was pushed');
+});

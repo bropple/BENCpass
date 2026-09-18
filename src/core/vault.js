@@ -85,6 +85,40 @@ function sameContent(a, b) {
  * key to check it with — would persist an envelope that fails every unlock for
  * ever: a tampering the design already survives, upgraded into a lockout.
  */
+/**
+ * Take the dates a file knows and this vault does not, for a password that is
+ * the same in both.
+ *
+ * Returns a patched copy, or null when the vault already knows as much or more
+ * — which is the common case and must not cost a write, a revision bump, or a
+ * push to every other machine.
+ *
+ * Only ever moves `created` and `passwordChanged` EARLIER and `lastUsed`
+ * LATER. That asymmetry is the whole rule: for two copies of one password, the
+ * earliest date it is known to have existed is the truest thing anybody has,
+ * and the most recent use likewise. Nothing here can invent a date, and
+ * nothing here can make a password look fresher than it is — which is the
+ * direction that would matter, because "password set" is what the age warning
+ * is computed from.
+ */
+function adoptDates(current, incoming) {
+  const earlier = (a, b) => (isWhen(b) && (!isWhen(a) || b < a) ? b : null);
+  const later = (a, b) => (isWhen(b) && (!isWhen(a) || b > a) ? b : null);
+
+  const created = earlier(current.created, incoming.created);
+  const changed = earlier(current.passwordChanged, incoming.passwordChanged);
+  const used = later(current.lastUsed, incoming.lastUsed);
+  if (created === null && changed === null && used === null) return null;
+
+  const next = { ...current };
+  if (created !== null) next.created = created;
+  if (changed !== null) next.passwordChanged = changed;
+  if (used !== null) next.lastUsed = used;
+  return next;
+}
+
+const isWhen = (v) => Number.isFinite(v) && v > 0;
+
 async function openEnvelope(key, e) {
   try {
     return await openRecord(key, e.id, e.rev, e);
@@ -1198,6 +1232,7 @@ export class Vault {
     const merged = [];
     let unchanged = 0;
     let stale = 0;
+    let redated = 0;
 
     for (const input of records) {
       // Cloned for the same reason add() clones: the rows belong to the caller,
@@ -1210,7 +1245,27 @@ export class Vault {
         if (match) {
           const { id, current, host } = match;
           if (current.password === body.password) {
-            unchanged++;
+            // The same password — but the file may know when it was set, and
+            // this vault may not.
+            //
+            // The case that forced this: 534 entries imported when import
+            // stamped everything with the clock, so a password chosen in 2019
+            // reads as chosen the day it arrived. Re-importing the same export
+            // is the obvious repair and did nothing at all, because every
+            // password matched and matching meant skip.
+            //
+            // For an IDENTICAL password the earlier date is the true one. A
+            // later stamp cannot be when it was chosen — the file proves it
+            // already existed before that — so it can only be an artefact of
+            // copying the entry around. lastUsed goes the other way for the
+            // same reason: whichever copy saw it more recently is right.
+            const dated = adoptDates(current, body);
+            if (dated) {
+              await this.#write(key, id, this.envelopes.get(id).rev + 1, dated);
+              redated++;
+            } else {
+              unchanged++;
+            }
             continue;
           }
           if (belongsOnlyTo(current, host)) {
@@ -1258,7 +1313,7 @@ export class Vault {
       await this.#write(key, id, 1, body);
       added.push(id);
     }
-    return { added, merged, unchanged, stale };
+    return { added, merged, unchanged, stale, redated };
   }
 
   /**

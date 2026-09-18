@@ -2056,13 +2056,16 @@ $('s-import-file').addEventListener('change', async (e) => {
 
   render();
   const bits = [];
-  const { added, merged, unchanged, stale } = result;
+  const { added, merged, unchanged, stale, redated } = result;
   if (added.length) bits.push(`added ${added.length}`);
   if (merged.length)
     bits.push(
       `updated ${merged.length} from the file (each entry's old password is kept in its history)`,
     );
   if (unchanged) bits.push(`${unchanged} already in the vault`);
+  // Said separately from "already in the vault", because it is the difference
+  // between a file that did nothing and a file that corrected the record.
+  if (redated) bits.push(`dated ${redated} from the file`);
   if (stale) bits.push(`left ${stale} alone — the vault's copy is newer than the file's`);
   const summary = bits.length ? bits.join(', ') : 'nothing to import';
   transferStatus(summary[0].toUpperCase() + summary.slice(1) + '.', 'good');
