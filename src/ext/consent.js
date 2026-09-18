@@ -13,15 +13,27 @@
 // needs a user gesture, and awaiting anything first spends it.
 
 /**
- * Is the permission held, and if not, will the person grant it?
+ * Will the person grant this, or have they already?
  *
- * `contains` is consulted before anything is requested. It did not use to be,
- * and the miss was a machine that could not join at all: the permission was
- * already granted — every toggle on in about:addons — but request() failed
- * anyway (it can, for reasons that have nothing to do with consent), and the
- * failure was reported as "joining needs permission" to a person looking at
- * the permission, granted, on their own screen. Already held means already
- * answered; nothing needs a gesture and nothing can fail.
+ * `request` goes first and `contains` is the fallback, and that order is the
+ * whole of this function. It was the other way round for one release, for a
+ * good reason — a machine with every toggle on in about:addons could not join,
+ * because request() failed for reasons of its own and the failure read as a
+ * refusal — and consulting `contains` first fixed that case by breaking the
+ * commoner one. Awaiting any async extension API ends the user-input handler,
+ * so the question spent the gesture that the answer needed:
+ *
+ *   permissions.request may only be called from a user input handler
+ *
+ * on every machine where the permission was NOT already held, which is every
+ * fresh install. The first machine never saw it, because it had granted the
+ * permission months earlier and never reached the request at all.
+ *
+ * Asking first costs nothing: request() on a permission already held resolves
+ * true without drawing a prompt. And when it throws — a spent gesture, or
+ * whatever broke it on that first machine — `contains` is exactly the right
+ * question to ask afterwards, because by then there is no gesture left to
+ * spend. Both failures are covered, and neither can cause the other.
  *
  * The verdict says which of the two "no"s happened, because they send a person
  * to different places: `refused` is the person declining the prompt, and the
@@ -37,24 +49,27 @@ export async function syncConsent(api, wanted) {
   if (!api?.request || !wanted?.length) return { ok: true };
 
   try {
-    if (await api.contains?.({ data_collection: wanted })) return { ok: true };
-  } catch {
-    // contains() failing must not become a denial — the request below is
-    // still a perfectly good way to find out, and it is the authority anyway.
-  }
-
-  try {
+    // Nothing is awaited above this line, and nothing may be: the caller's
+    // gesture has to still be alive when this call is made.
     const granted = await api.request({ data_collection: wanted });
     return granted ? { ok: true } : { ok: false, reason: 'refused' };
   } catch (err) {
-    // A rejection is a refusal, not a formality.
-    //
-    // This used to return true, on the reasoning that a browser too old to know
-    // `data_collection` would throw rather than answer. No such browser can
-    // install this: strict_min_version is 142 and the key shipped in 139. So the
-    // only rejections reachable here are real ones — a spent user gesture above
-    // all — and swallowing them saved the address with no consent recorded at
-    // all, which is precisely the state this function exists to prevent.
+    // Now — and only now, with the gesture already spent either way — ask
+    // whether it was held all along. This is the machine whose toggles are on
+    // and whose request() broke anyway.
+    try {
+      if (await api.contains?.({ data_collection: wanted })) return { ok: true };
+    } catch {
+      // contains() failing tells us nothing, so it decides nothing; fall
+      // through to the error below, which is what actually happened.
+    }
+
+    // A rejection that survives the check above is a real failure, not a
+    // formality. This used to return true, on the reasoning that a browser too
+    // old to know `data_collection` would throw rather than answer. No such
+    // browser can install this: strict_min_version is 142 and the key shipped
+    // in 139. Swallowing it saved the address with no consent recorded at all,
+    // which is precisely the state this function exists to prevent.
     console.warn('BENCpass: the data-collection prompt failed', err);
     return { ok: false, reason: 'error', message: String(err?.message ?? err) };
   }
