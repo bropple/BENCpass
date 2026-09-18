@@ -49,6 +49,17 @@ func main() {
 		}
 		log.Printf("no devices enrolled yet")
 		log.Printf("bootstrap enrolment code (valid 30 minutes): %s", code)
+	} else if code, err := bootstrapCode(store, *dir, 30*time.Minute); err != nil {
+		// Asked for and not delivered. Not fatal — the server is still worth
+		// running for the machines that can still reach it — but it must be
+		// said loudly, because the person who created that file is watching
+		// this log for a code and would otherwise see nothing and conclude the
+		// feature does not work.
+		log.Printf("BOOTSTRAP REQUEST FAILED: %v", err)
+	} else if code != "" {
+		log.Printf("bootstrap code requested via %s, which has been consumed", BootstrapFile)
+		log.Printf("bootstrap enrolment code (valid 30 minutes): %s", code)
+		log.Printf("the machines already enrolled keep their keys; revoke any you have lost")
 	}
 
 	s := &server{store: store}
