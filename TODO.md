@@ -120,3 +120,31 @@ a password *reset* page — four fields, only the password anchored, which is
 correct: the name and email fields are not login fields, and the password field
 is exactly where a generated password belongs. No bug; removed rather than left
 to look like one.)
+
+## The rescue tool cannot run on the machine that needs it most
+
+`-devices` and `-forget` are headless — no window, no display, stdout and a
+confirmation prompt. They are also the only way back when every enrolled
+machine is gone, and the place they have to run is a NAS.
+
+The released Linux binary cannot start there. Fyne is compiled in whatever
+flags are passed, so the dynamic linker resolves its toolkit at load time,
+before `main` and long before anything checks whether a window was asked for:
+
+    ldd bencpass-rescue
+      libGL.so.1, libGLX.so.0, libGLdispatch.so.0, libX11.so.6,
+      libwayland-client.so.0
+
+A headless server has none of those, so the binary dies with "error while
+loading shared libraries" and the one command that exists for that day cannot
+be run on that day. Verified against the v0.12.2 release artifact.
+
+Done looks like a second artifact per platform — `bencpass-rescue-cli`, built
+with a `nogui` tag, with runGUI stubbed to an error — carrying `-info`,
+`-list`, `-show`, `-export`, `-devices` and `-forget` and linking nothing but
+libc. Same release, same SHA256SUMS. The GUI build stays exactly as it is; this
+is packaging, not a rewrite.
+
+Until then the way through on a NAS is to stop the server and empty the
+`devices` map in `store.json` by hand, which is what the rescue tool was
+written to replace — see TRUENAS-DEPLOY.md.
