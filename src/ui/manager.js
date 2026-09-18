@@ -13,6 +13,7 @@ import { toJson, toCsv, parse as parseTransfer, TransferError } from '../core/tr
 import { newRecoveryCode, normalise as normaliseRecoveryCode, CODE_LENGTH } from '../core/recovery.js';
 import { LOGIN } from '../core/model.js';
 import { PROTOCOL } from '../core/sync.js';
+import { ORDER, byTitle, reuseGroups } from '../core/listing.js';
 import { MSG } from '../ext/protocol.js';
 import { syncConsent } from '../ext/consent.js';
 import * as webauthn from '../ext/webauthn.js';
@@ -147,6 +148,12 @@ const state = {
   editingType: 'login',
   selected: null,
   editing: null, // null | 'new' | <id>
+  // How the list is ordered, and whether it is narrowed to reused passwords.
+  // Per session rather than stored: both are a way of looking at the vault for
+  // a minute, not a preference, and a list that came back sorted by password
+  // age a week later would be a puzzle rather than a convenience.
+  sort: 'title',
+  onlyReused: false,
   revealed: false, // the detail view's password
   editRevealed: false, // the editor's password field
 };
@@ -1082,16 +1089,23 @@ function renderList() {
     return;
   }
 
-  const items = state.vault
-    .search($('search').value, state.section)
-    .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+  // Counted over the WHOLE vault, not over what the search left behind: a
+  // password shared with an entry that the current filter hides is still
+  // shared, and saying "used once" there would be a lie told by the filter.
+  const reused = reuseGroups(state.vault.list());
+
+  let items = state.vault.search($('search').value, state.section);
+  if (state.onlyReused) items = items.filter((r) => reused.has(r.id));
+  items = items.sort(ORDER[state.sort] ?? byTitle);
 
   $('list-empty').hidden = items.length > 0;
-  $('list-empty').textContent = $('search').value.trim()
-    ? 'Nothing matches.'
-    : state.section === 'address'
-      ? 'No addresses.'
-      : 'No entries.';
+  $('list-empty').textContent = state.onlyReused
+    ? 'No password is on more than one entry.'
+    : $('search').value.trim()
+      ? 'Nothing matches.'
+      : state.section === 'address'
+        ? 'No addresses.'
+        : 'No entries.';
 
   $('list').replaceChildren(
     ...items.map((r) => {
@@ -1111,6 +1125,19 @@ function renderList() {
           : r.username || host(r.urls?.[0]) || '—';
 
       li.append(title, sub);
+
+      // Shown whether or not the filter is on, because the fact is worth
+      // meeting by accident. The count, never the password: the list is the
+      // one surface in the manager that is readable over a shoulder.
+      const shared = reused.get(r.id);
+      if (shared) {
+        const flag = document.createElement('span');
+        flag.className = 'li-flag';
+        flag.textContent = `on ${shared.length + 1}`;
+        flag.title = `This password is on ${shared.length + 1} entries`;
+        li.append(flag);
+      }
+
       li.addEventListener('click', () => select(r.id));
       li.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(r.id); }
@@ -1283,10 +1310,11 @@ function renderMeta(r) {
   }
 
   // Reuse is checked across the whole vault, not against a breach list — no
-  // network call, and nothing leaves the machine to find it out.
-  const shared = state.vault
-    .list()
-    .filter((o) => o.id !== r.id && o.password && o.password === r.password);
+  // network call, and nothing leaves the machine to find it out. The same
+  // reuseGroups the list flags rows with, so the two can never disagree about
+  // what counts: this pane used to run its own scan, which included addresses
+  // where the list did not.
+  const shared = reuseGroups(state.vault.list()).get(r.id) ?? [];
   if (shared.length) {
     const warn = document.createElement('span');
     warn.className = 'age-warn';
@@ -1363,6 +1391,20 @@ function host(url) {
 // ---- search ----------------------------------------------------------------
 
 $('search').addEventListener('input', renderList);
+
+$('sort').addEventListener('change', () => {
+  state.sort = $('sort').value;
+  renderList();
+});
+
+// A filter rather than a view of its own: the search box, the section tabs and
+// the ordering all still apply inside it, because "the reused ones, oldest
+// first" is the actual question and two separate screens cannot answer it.
+$('reused-btn').addEventListener('click', () => {
+  state.onlyReused = !state.onlyReused;
+  $('reused-btn').setAttribute('aria-pressed', String(state.onlyReused));
+  renderList();
+});
 
 for (const btn of document.querySelectorAll('.seg-btn')) {
   btn.addEventListener('click', () => {

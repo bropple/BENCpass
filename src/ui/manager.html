@@ -170,6 +170,25 @@
 
     <input type="search" id="search" class="search" placeholder="Search" autocomplete="off">
 
+    <!-- Ordering, and the reason it is not just alphabetical any more: a vault
+         that arrived by import is 534 rows in one alphabetical wall, and the
+         questions somebody actually has about it are "what did I just add" and
+         "what have I not touched in four years". -->
+    <select id="sort" class="sort" aria-label="Sort by">
+      <option value="title">A–Z</option>
+      <option value="added">Newest added</option>
+      <option value="oldest">Oldest added</option>
+      <option value="stale">Oldest password</option>
+      <option value="used">Recently used</option>
+    </select>
+
+    <!-- Reuse is a property of a PAIR of entries, so it cannot be seen by
+         reading one of them. This is the only view in the program that can
+         answer "where else did I use this", and it never shows the password
+         itself to do it. -->
+    <button type="button" class="btn" id="reused-btn" aria-pressed="false"
+            title="Show only passwords used on more than one entry">Reused</button>
+
     <span class="bar-spacer"></span>
     <span class="bar-status" id="status" aria-live="polite"></span>
     <button class="btn" id="new-btn">New</button>

@@ -243,6 +243,8 @@ select { color: var(--text); font: inherit; }
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
+  /* The reuse flag is positioned against this. */
+  position: relative;
 }
 .list li:hover { background: var(--bg-2); }
 .list li[aria-selected=true] {
@@ -610,3 +612,28 @@ select { color: var(--text); font: inherit; }
    them nothing to go on. */
 .devices .dev-mine { color: var(--accent); font-size: 12px; white-space: nowrap; }
 .devices .dev-actions { display: flex; gap: 6px; flex: none; }
+
+/* The list's ordering control and the reuse filter. The select is styled to
+   match the search box beside it rather than left as the platform's, which in
+   a dark panel is a white slab. */
+/* The shared control rule above sets `width: 100%`, which in a flex bar means
+   this swallows every pixel the search box does not — the same reason .search
+   carries a max-width. A dropdown of five fixed words wants to be as wide as
+   its words and no wider. */
+.sort { width: auto; flex: 0 0 auto; }
+
+/* Pressed is a real state here, not a hover: the list stays filtered until it
+   is pressed again, and a button that looks idle while hiding most of the
+   vault is how somebody concludes their entries are gone. */
+#reused-btn[aria-pressed='true'] {
+  background: var(--accent); color: var(--bg); border-color: var(--accent);
+}
+
+/* The count of entries sharing one password. Never the password.
+   Out of the text flow so it cannot push a long title into wrapping, and
+   right-aligned where the eye is already scanning down the edge. */
+.li-flag {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  font-size: 11px; color: var(--warn); white-space: nowrap;
+  padding-left: 8px; background: inherit;
+}
