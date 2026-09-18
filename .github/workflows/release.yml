@@ -106,10 +106,17 @@ jobs:
       - name: It opens a vault
         shell: bash
         run: |
+          # Captured, not piped into grep.
+          #
+          # `grep -q` exits the moment it matches and closes the pipe under the
+          # program still writing to it, which is a SIGPIPE, which under
+          # pipefail is a failed step — exit 141, on the machine that happened
+          # to be slowest, for a binary that worked perfectly. Whether it trips
+          # is a race between two processes and nothing to do with the vault.
           for exe in "${{ matrix.binary }}" "${{ matrix.cli }}"; do
-            printf '%s' 'correct horse battery staple' \
-              | ./build/"$exe" -list internal/vault/testdata/backup.json \
-              | grep -qE '[1-9][0-9]* record\(s\)'
+            out=$(printf '%s' 'correct horse battery staple' \
+              | ./build/"$exe" -list internal/vault/testdata/backup.json)
+            printf '%s\n' "$out" | grep -qE '[1-9][0-9]* record\(s\)'
             echo "$exe opened it"
           done
         working-directory: rescue
