@@ -77,7 +77,29 @@ export function toJson(records, now = Date.now()) {
   )}\n`;
 }
 
-const CSV_COLUMNS = ['name', 'url', 'username', 'password', 'note'];
+// The date columns are the three this file's own importer already reads, under
+// the names Firefox writes them (see the alias table below). They were absent
+// for one release, and the cost showed up the first time somebody moved a vault
+// between two machines with an export instead of a sync: every entry arrived
+// stamped with the day it was imported, because nothing in the file said
+// otherwise. A format this program writes and this program reads had no reason
+// to lose that.
+//
+// Extra columns are ignored by every manager that reads this shape, so the
+// round trip through Firefox, Chrome or 1Password is unchanged.
+const CSV_COLUMNS = [
+  'name',
+  'url',
+  'username',
+  'password',
+  'note',
+  'timeCreated',
+  'timeLastUsed',
+  'timePasswordChanged',
+];
+
+// Epoch milliseconds, as the importer's epochMs expects to read them back.
+const csvTime = (ms) => (Number.isFinite(ms) && ms > 0 ? String(Math.floor(ms)) : '');
 
 /**
  * Logins as CSV, in the shape the other managers read.
@@ -90,7 +112,16 @@ const CSV_COLUMNS = ['name', 'url', 'username', 'password', 'note'];
 export function toCsv(records) {
   const rows = records
     .filter((r) => r.type === LOGIN)
-    .map((r) => [r.title ?? '', (r.urls ?? [])[0] ?? '', r.username ?? '', r.password ?? '', r.notes ?? '']);
+    .map((r) => [
+      r.title ?? '',
+      (r.urls ?? [])[0] ?? '',
+      r.username ?? '',
+      r.password ?? '',
+      r.notes ?? '',
+      csvTime(r.created),
+      csvTime(r.lastUsed),
+      csvTime(r.passwordChanged),
+    ]);
   return [CSV_COLUMNS, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 

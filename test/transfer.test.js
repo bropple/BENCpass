@@ -493,3 +493,39 @@ test('an encrypted backup is refused by name, with the way through', () => {
       /Rescue/.test(err.message),
   );
 });
+
+test('a CSV round trip keeps the dates it left with', async () => {
+  // The cost of the missing columns, as it was actually met: a vault moved
+  // between two machines by export rather than by sync arrived with every
+  // entry stamped the day it was imported, because the file said nothing else.
+  // This program writes this file and reads it; losing the dates in between
+  // was a choice nothing was making on purpose.
+  const rec = {
+    type: 'login',
+    title: 'Example',
+    urls: ['https://example.com'],
+    username: 'ben',
+    password: 'pw',
+    notes: '',
+    created: Date.parse('2019-03-04'),
+    lastUsed: Date.parse('2024-06-01'),
+    passwordChanged: Date.parse('2021-08-09'),
+  };
+
+  const csv = toCsv([rec]);
+  assert.match(csv.split('\r\n')[0], /timeCreated,timeLastUsed,timePasswordChanged$/);
+
+  const [back] = fromCsv(csv);
+  assert.equal(back.created, rec.created, 'created did not survive the round trip');
+  assert.equal(back.passwordChanged, rec.passwordChanged, 'passwordChanged did not survive');
+  assert.equal(back.lastUsed, rec.lastUsed, 'lastUsed did not survive');
+});
+
+test('a login with no dates still exports and imports', async () => {
+  // Nothing is invented for a record that has no dates: empty cells, and the
+  // importer falls back to its own clock as it always did.
+  const csv = toCsv([{ type: 'login', title: 'Bare', urls: [], username: '', password: 'x', notes: '' }]);
+  assert.match(csv.split('\r\n')[1], /,,,$/, 'something was written into the date columns');
+  const [back] = fromCsv(csv, Date.parse('2026-01-01'));
+  assert.equal(back.created, Date.parse('2026-01-01'));
+});
