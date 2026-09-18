@@ -39,14 +39,17 @@ jobs:
           - os: ubuntu-latest
             name: Linux
             binary: bencpass-rescue
+            cli: bencpass-rescue-cli
             archive: tar
           - os: macos-latest
             name: macOS
             binary: bencpass-rescue
+            cli: bencpass-rescue-cli
             archive: tar
           - os: windows-latest
             name: Windows
             binary: bencpass-rescue.exe
+            cli: bencpass-rescue-cli.exe
             archive: zip
     runs-on: ${{ matrix.os }}
     steps:
@@ -69,6 +72,20 @@ jobs:
             flags="$flags -H=windowsgui"
           fi
           go build -trimpath -ldflags "$flags" -o "build/${{ matrix.binary }}" .
+
+          # And the same program without the toolkit.
+          #
+          # Fyne is resolved by the dynamic linker at load time whatever flags
+          # are passed to it, so the GUI build needs libGL, libX11 and a
+          # Wayland client present just to reach main(). A headless server has
+          # none of them — and -devices and -forget, the way back when every
+          # enrolled machine is gone, are exactly the modes that have to run
+          # there. The nogui build links nothing and carries every headless
+          # mode; the GUI build is unchanged beside it.
+          #
+          # No -H=windowsgui on this one: a console program is the point.
+          go build -trimpath -tags nogui -ldflags "-s -w -X main.Version=${version}" \
+            -o "build/${{ matrix.cli }}" .
         working-directory: rescue
 
       # The version it reports has to be the tag being released. A binary that
@@ -76,20 +93,25 @@ jobs:
       - name: It reports the release version
         shell: bash
         run: |
-          got=$(./build/${{ matrix.binary }} -version)
-          echo "$got"
-          case "$got" in
-            *"${GITHUB_REF_NAME#v}"*) ;;
-            *) echo "::error::built binary reports: $got"; exit 1 ;;
-          esac
+          for exe in "${{ matrix.binary }}" "${{ matrix.cli }}"; do
+            got=$(./build/"$exe" -version)
+            echo "$exe: $got"
+            case "$got" in
+              *"${GITHUB_REF_NAME#v}"*) ;;
+              *) echo "::error::$exe reports: $got"; exit 1 ;;
+            esac
+          done
         working-directory: rescue
 
       - name: It opens a vault
         shell: bash
         run: |
-          printf '%s' 'correct horse battery staple' \
-            | ./build/${{ matrix.binary }} -list internal/vault/testdata/backup.json \
-            | grep -qE '[1-9][0-9]* record\(s\)'
+          for exe in "${{ matrix.binary }}" "${{ matrix.cli }}"; do
+            printf '%s' 'correct horse battery staple' \
+              | ./build/"$exe" -list internal/vault/testdata/backup.json \
+              | grep -qE '[1-9][0-9]* record\(s\)'
+            echo "$exe opened it"
+          done
         working-directory: rescue
 
       - name: Package
@@ -98,9 +120,9 @@ jobs:
           cd rescue/build
           name="bencpass-rescue-${GITHUB_REF_NAME}-${{ matrix.name }}"
           if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z a "${name}.zip" "${{ matrix.binary }}"
+            7z a "${name}.zip" "${{ matrix.binary }}" "${{ matrix.cli }}"
           else
-            tar czf "${name}.tar.gz" "${{ matrix.binary }}"
+            tar czf "${name}.tar.gz" "${{ matrix.binary }}" "${{ matrix.cli }}"
           fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

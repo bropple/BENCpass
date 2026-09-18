@@ -79,6 +79,22 @@ jobs:
       # Windows job below.
       - name: The Windows console code type-checks
         run: GOOS=windows go vet ./internal/winconsole
+
+      # The build that ships beside the GUI one and does the headless work.
+      # Checked here rather than only at a release, because the failure it
+      # guards against is silent: an import of the toolkit anywhere reachable
+      # from main puts libGL back on the link line, and nothing says so until
+      # somebody runs it on a server and it dies before main().
+      - name: The toolkit-free build still builds, and links nothing
+        run: |
+          go vet -tags nogui ./...
+          go build -tags nogui -o /tmp/rescue-cli .
+          if ldd /tmp/rescue-cli 2>&1 | grep -qv 'not a dynamic executable'; then
+            echo "::error::the nogui build links shared libraries:"
+            ldd /tmp/rescue-cli
+            exit 1
+          fi
+        working-directory: rescue
         working-directory: rescue
 
   build:
