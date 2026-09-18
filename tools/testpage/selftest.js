@@ -101,6 +101,34 @@ async function run() {
     check('menu opens on click', Boolean(overlay()));
     await sleep(2000);
     check('menu still open two seconds later', Boolean(overlay()));
+
+    // The menu must not take the caret. Focus moving into an iframe shows up
+    // here as the frame becoming activeElement, and what it costs the person
+    // is every keystroke after the click that opened the menu.
+    //
+    // The menu has to be SHUT first and opened by this click. Checking focus
+    // against a menu that was already up proves nothing: the focus() this
+    // guards against runs once, when the frame renders, so a test that takes
+    // the caret back afterwards passes whether or not the bug is there. It
+    // did, until the mutant walked through it.
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await sleep(400);
+    const field = fieldUnder(first);
+    field?.focus();
+    field?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await sleep(2000);
+    check('menu reopens from the field', Boolean(overlay()));
+    check(
+      'the field keeps focus when the menu opens',
+      Boolean(field) && document.activeElement === field,
+      document.activeElement?.tagName + (document.activeElement?.id ? '#' + document.activeElement.id : ''),
+    );
+
+    // Typing goes on working with the menu up — the keys the menu steers with
+    // are taken, and every other key still reaches the field.
+    field.value = '';
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    check('the menu survives typing', Boolean(overlay()));
   } else {
     check('menu opens on click', false, 'no anchors to click');
   }

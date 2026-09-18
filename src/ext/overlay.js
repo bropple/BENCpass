@@ -49,6 +49,7 @@ async function render() {
   const reply = await browser.runtime.sendMessage({ type: MSG.SESSION, sessionId });
   const list = $('list');
   list.replaceChildren();
+  highlight = -1; // the rows below are new ones
 
   const candidates = reply?.candidates ?? [];
   const kind = reply?.kind ?? 'login';
@@ -130,7 +131,6 @@ async function render() {
         onPick: () => browser.runtime.sendMessage({ type: MSG.GENERATE, sessionId }),
       }),
     );
-    list.querySelector('button')?.focus();
     return;
   }
 
@@ -166,8 +166,34 @@ async function render() {
     );
   }
 
-  // Keyboard first: the menu opens under a field someone is typing in.
-  list.querySelector('button')?.focus();
+}
+
+// ---- keyboard ---------------------------------------------------------------
+//
+// The menu opens under a field someone is typing in, so it does not take the
+// caret — focusing a row here used to, and the next keystroke went into a
+// document with nothing to type in. The content script keeps the field focused
+// and relays the keys that mean something to a menu; `highlight` is what the
+// focus ring used to be, drawn rather than held.
+
+let highlight = -1;
+
+const rows = () => [...document.querySelectorAll('#list button.row')];
+
+function move(by) {
+  const all = rows();
+  if (!all.length) return;
+  all[highlight]?.classList.remove('on');
+  // Wraps, and starts at the top on the first press down whichever way the
+  // list is entered.
+  highlight = highlight < 0 ? (by > 0 ? 0 : all.length - 1) : (highlight + by + all.length) % all.length;
+  const el = all[highlight];
+  el.classList.add('on');
+  el.scrollIntoView({ block: 'nearest' });
+}
+
+function activate() {
+  rows()[highlight]?.click();
 }
 
 document.addEventListener('keydown', (e) => {
@@ -188,6 +214,21 @@ window.addEventListener('message', (event) => {
   if (event.source !== window.parent) return;
 
   const data = event.data;
+
+  // Steering, from the content script that is holding the field's focus for
+  // us. Gated on the session id, which the page has no way to learn — it is
+  // posted to this cross-origin window and never written anywhere the page can
+  // read — so a message without it is not from our content script. That gate
+  // is what keeps this from becoming the synthesised "click" the whole iframe
+  // arrangement exists to rule out; the content script refuses to relay an
+  // untrusted key event in the first place.
+  if (data?.bencpass === 'key' && sessionId && data.sessionId === sessionId) {
+    if (data.key === 'ArrowDown') move(1);
+    else if (data.key === 'ArrowUp') move(-1);
+    else if (data.key === 'Enter') activate();
+    return;
+  }
+
   if (!data || data.bencpass !== 'session') return;
 
   const id = String(data.sessionId ?? '').slice(0, 64);

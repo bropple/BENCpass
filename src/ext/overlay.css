@@ -12,7 +12,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 button.row { display: block; width: 100%; text-align: left; background: none;
              border: 0; border-bottom: 1px solid var(--border); padding: 7px 10px;
              color: inherit; font: inherit; cursor: pointer; }
-button.row:hover, button.row:focus { background: var(--panel); outline: none; }
+/* `.on` is the keyboard highlight. The field keeps the caret while this menu
+   is open, so there is no focus ring to rely on — this is drawn instead. */
+button.row:hover, button.row:focus, button.row.on { background: var(--panel); outline: none; }
+button.row.on { box-shadow: inset 2px 0 0 var(--accent); }
 .title { display: block; }
 .sub { display: block; color: var(--dim); font-size: 12px; }
 .gen { color: var(--accent); }

@@ -50,6 +50,8 @@
   let activeGroup = null; // the form the open menu belongs to
   let anchorEl = null;
   let menuKind = 'login'; // which menu anchorEl was opened as
+  let menuSession = null; // the open menu's session id, for forwarding keys
+  let menuEntered = false; // has the user arrowed into the menu yet?
   let rescanTimer = null;
 
   // ---- finding fields ------------------------------------------------------
@@ -411,8 +413,76 @@
     frame.style.top = `${window.scrollY + box.bottom + 2}px`;
     frame.style.left = `${window.scrollX + Math.max(4, box.left)}px`;
 
+    // The menu does NOT take focus, and the field keeps its caret. It opens
+    // under a box someone is typing in, and a panel that steals the caret on
+    // the click that opened it means the next keystroke goes nowhere — which
+    // is what happened here: click a password field, keep typing, and the
+    // characters land in an iframe that has no text box in it.
+    //
+    // Keyboard access is what the focus() was for, and it survives by being
+    // forwarded instead: the arrows, Enter and Escape are relayed to the menu
+    // while the field stays focused, the way a native autocomplete behaves.
+    menuSession = reply.sessionId;
+    menuEntered = false;
     setTimeout(() => document.addEventListener('mousedown', onOutside, true), 0);
+    document.addEventListener('keydown', onMenuKey, true);
   }
+
+  /**
+   * Steer the open menu from the field the caret is still in.
+   *
+   * Only keys that mean something to a menu are taken; everything else reaches
+   * the field untouched, so typing goes on working with the menu up.
+   *
+   * `isTrusted` is the security property here, not a tidiness check. Page
+   * script can dispatch a KeyboardEvent at its own input box, and this listener
+   * would see it — so without the test, a page could synthesise ArrowDown and
+   * Enter and have the menu choose an entry on its behalf, which is precisely
+   * the clickjack that framing the menu on our own origin exists to prevent. A
+   * synthetic event carries isTrusted false and nothing else distinguishes it.
+   * The session id goes along for the frame's benefit: the page cannot read it
+   * (it is posted to a cross-origin contentWindow, never put in the URL), so a
+   * message without it did not come from here.
+   */
+  function onMenuKey(e) {
+    const frame = document.getElementById(OVERLAY_ID);
+    if (!frame || !menuSession) return;
+    if (!e.isTrusted) return;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu();
+      anchorEl?.focus();
+      return;
+    }
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      menuEntered = true;
+      send(frame, e.key);
+      return;
+    }
+
+    if (e.key === 'Enter' && menuEntered) {
+      // Only once the user has arrowed into the list. Enter on a field they
+      // never moved out of belongs to the form, and swallowing it would break
+      // signing in with the keyboard on every site that has a menu open.
+      e.preventDefault();
+      e.stopPropagation();
+      send(frame, 'Enter');
+      return;
+    }
+
+    if (e.key === 'Tab') closeMenu();
+  }
+
+  const send = (frame, key) =>
+    frame.contentWindow?.postMessage(
+      { bencpass: 'key', sessionId: menuSession, key },
+      new URL(browser.runtime.getURL('')).origin,
+    );
 
   function onOutside(e) {
     // A mousedown inside the iframe never reaches this document, so this only
@@ -425,6 +495,9 @@
   function closeMenu() {
     document.getElementById(OVERLAY_ID)?.remove();
     document.removeEventListener('mousedown', onOutside, true);
+    document.removeEventListener('keydown', onMenuKey, true);
+    menuSession = null;
+    menuEntered = false;
   }
 
   // ---- filling -------------------------------------------------------------
